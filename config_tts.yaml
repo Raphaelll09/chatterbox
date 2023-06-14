@@ -1,0 +1,149 @@
+GUI_config:
+  online_phon_input: False
+  main_panel:
+    name_window: "TTS"
+    add_audio_infos: True
+    width: 800
+    #width: 1000
+    height: 440
+  add_keyboard: False
+  keyboard_options:
+    name_window: "Keyboard"
+    keys: "Emmanuelle"
+    font_size: 24
+    width: 800
+    height: 440
+
+default_start_punctuation: "."
+default_end_punctuation: "."
+use_denoiser: True
+use_smoothing: True
+
+tts_models:
+  - label: "Multi Speaker"
+    load_script: "load_fastspeech2"
+    syn_script: "syn_fastspeech2"
+    gui_script: "gui_fastspeech2"
+    folder: "FastSpeech2"
+    checkpoint_file: "600000"
+    output_location: "output/audio"
+    gst_token_list: [
+        "COLERE",
+        "DESOLE",
+        "DETERMINE",
+        "ENTHOUSIASTE",
+        "ESPIEGLE",
+        "ETONNE",
+        "EVIDENCE",
+        "INCREDULE",
+        "NEUTRE",
+        "PENSIF",
+        "RECONFORTANT",
+        "SUPPLIANT",
+        "NARRATION",
+    ]
+    gui_control_bias: False
+    gui_style_control: False
+    default_args:
+      text_cleaners: ["basic_cleaners"]
+      preprocess_config: "config/M_AILABS/preprocess_new.yaml"
+      model_config: "config/M_AILABS/model_Theradia_new.yaml"
+      train_config: "config/M_AILABS/train_Theradia_new.yaml"
+      vocoder: None
+      speaker_id: 2
+      mode: "single"
+      teacher_forcing: False
+      pitch_control: 0.0
+      energy_control: 0.0
+      duration_control: 1.3
+      duration_control_bias: 1.0
+      pitch_control_bias: 0.0
+      f1_control_bias: 0.0
+      f2_control_bias: 0.0
+      f3_control_bias: 0.0
+      spectral_tilt_control_bias: 0.0
+      energy_control_bias: 0.0
+      relative_pos_control_bias: 0.0
+      pfitzinger_control_bias: 0.0
+      cog_control_bias: 0.0
+      sb1k_control_bias: 0.0
+      pause_control_bias: 0.0
+      liaison_control_bias: 0.0
+      silence_control_bias: False
+      gst_token_index: 12
+  - label: "Expressive"
+    load_script: "load_fastspeech2"
+    syn_script: "syn_fastspeech2"
+    gui_script: "gui_fastspeech2"
+    folder: "FastSpeech2"
+    checkpoint_file: "150000"
+    output_location: "output/audio"
+    gst_token_list: [
+        "COLERE",
+        "DESOLE",
+        "DETERMINE",
+        "ENTHOUSIASTE",
+        "ESPIEGLE",
+        "ETONNE",
+        "EVIDENCE",
+        "INCREDULE",
+        "NEUTRE",
+        "PENSIF",
+        "RECONFORTANT",
+        "SUPPLIANT",
+        "NARRATION",
+    ]
+    gui_control_bias: False
+    gui_style_control: True
+    default_args:
+      text_cleaners: ["basic_cleaners"]
+      preprocess_config: "config/AD_Theradia_KPI/preprocess.yaml"
+      model_config: "config/AD_Theradia_KPI/model_LST_byWord.yaml"
+      train_config: "config/AD_Theradia_KPI/train_LST_byWord.yaml"
+      vocoder: None
+      speaker_id: 0
+      mode: "single"
+      teacher_forcing: False
+      pitch_control: 0.0
+      energy_control: 0.0
+      duration_control: 1.0
+      duration_control_bias: 1.0
+      pitch_control_bias: 0.0
+      f1_control_bias: 0.0
+      f2_control_bias: 0.0
+      f3_control_bias: 0.0
+      spectral_tilt_control_bias: 0.0
+      energy_control_bias: 0.0
+      relative_pos_control_bias: 0.0
+      pfitzinger_control_bias: 0.0
+      cog_control_bias: 0.0
+      sb1k_control_bias: 0.0
+      pause_control_bias: 0.0
+      liaison_control_bias: 0.0
+      silence_control_bias: False
+      gst_token_index: 12
+
+vocoder_models:
+  - label: "Hifi-GAN V2 FR 570000"
+    load_script: "load_hifigan"
+    syn_script: "syn_hifigan"
+    folder: "hifi-gan-master"
+    checkpoint_file: "FR_V2/g_00570000"
+    config_path: "FR_V2/config.json"
+    output_location: "./"
+
+  - label: "Waveglow NEB"
+    load_script: "load_waveglow"
+    syn_script: "syn_waveglow"
+    folder: "Waveglow"
+    checkpoint_file: "waveglow_NEB.pt"
+    output_location: "./"
+    default_args:
+      filelist_path: "fastspeech2.txt"
+      sigma: 0.6
+      sampling_rate: 22050
+      is_fp16: False
+      denoiser_strengh: 0.0
+      speed_factor: 1.0
+      gain: 0.0
+      negative_gain: 0.0

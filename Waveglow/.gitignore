@@ -1,0 +1,5 @@
+*.txt
+*.wav
+*.pt
+*.WAVEGLOW
+__pycache__
