@@ -1,0 +1,96 @@
+µ|micro
+©|{k o p i r a i t}	
+c-à-d|{c e^ t a d i r}
+€|euros
+\&|{e}
+(\.\.\.|…)|~
+\%|{p u r s a~}
+(n|N)°|{n y m e r o}
+(?<=\W)k[\.\-]?o(?=\W)|{k a o}
+(?<=\W)RDV(?=\W)|rendez-vous
+(?<=\W)4x4(?=\W)|{k a t k a t r}
+(?<=\W)stp(?=\W)|s'il te plait
+(?<=\W)svp(?=\W)|s'il vous plait
+(?<=\W)jpg(?=\W)|{z^ i p e^ g}
+(?<=\W)bcp(?=\W)|beaucoup
+(?<=\W)Mr\.(?=\W)|monsieur
+(?<=\W)Mlle\.(?=\W)|mademoiselle
+(?<=\W)Mgr(?=\W)|Monseigneur
+(?:(?<=\d\s)m2|(?<=\d)m2)(?=\W)|{m e^ t r} {k a r e}
+(?:(?<=\d\s)m3|(?<=\d)m3)(?=\W)|{m e^ t r} {k y b}
+(?:(?<=\d\s)m|(?<=\d)m)(?=\W)|{m e^ t r}
+(?:(?<=\d\s)km2|(?<=\d)km2)(?=\W)|{k i l o m e^ t r} {k a r e}
+(?:(?<=\d\s)km3|(?<=\d)km3)(?=\W)|{k i l o m e^ t r} {k y b}
+(?:(?<=\d\s)km\/h|(?<=\d)km\/h)(?=\W)|{k i l o m e^ t r x^ r}
+(?:(?<=\d\s)km|(?<=\d)km)(?=\W)|{k i l o m e^ t r}
+(?:(?<=\d\s)(l|L)|(?<=\d)(l|L))(?=\W)|{l i t r}
+(?:(?<=\d\s)Mo|(?<=\d)Mo)(?=\W)|mégaoctets
+(?:(?<=\d\s)min|(?<=\d)min)(?=\W)|minutes
+\/0?1\/(?=(\d{4}|\d{2}))|janvier
+\/0?2\/(?=(\d{4}|\d{2}))|février
+\/0?3\/(?=(\d{4}|\d{2}))|mars
+\/0?4\/(?=(\d{4}|\d{2}))|avril
+\/0?5\/(?=(\d{4}|\d{2}))|mai
+\/0?6\/(?=(\d{4}|\d{2}))|juin
+\/0?7\/(?=(\d{4}|\d{2}))|juillet
+\/0?8\/(?=(\d{4}|\d{2}))|aout
+\/0?9\/(?=(\d{4}|\d{2}))|septembre
+\/0?10\/(?=(\d{4}|\d{2}))|octobre
+\/0?11\/(?=(\d{4}|\d{2}))|novembre
+\/0?12\/(?=(\d{4}|\d{2}))|décembre
+(?<=\d)\s*j(?!['\d\w])|Nom(JOUR)
+(?<=\d)\s*n(?!['\d\w])|Nom(NUIT)
+(?<=\d)\s*\*(?!['q\d\w])|{e t w a l}
+(?<=\d)(?=\d{9}\W)|milliards
+\W0{9}\W|
+(?<=\d)(?=\d{6}\W)|millions
+\W0{6}\W|
+1(?=\d{3}\W)|mille
+(?<=\d)(?=\d{3}\W)|mille
+\W0{3}\W|
+1(?=\d{2}\W)|cent
+0(?=\d{2}\W)|
+(?<=\d)(?=\d{2}\W)|cent
+\W0{2}\W|
+10(?=\W)|dix
+11(?=\W)|onze
+12(?=\W)|douze
+13(?=\W)|treize
+14(?=\W)|quatorze
+15(?=\W)|quinze
+16(?=\W)|seize
+21(?=\W)|vingt-et-un
+31(?=\W)|trente-et-un
+41(?=\W)|quarante-et-un
+51(?=\W)|cinquante-et-un
+61(?=\W)|soixante-et-un
+71(?=\W)|soixante-et-onze
+72(?=\W)|soixante-douze
+73(?=\W)|soixante-treize
+74(?=\W)|soixante-quatorze
+75(?=\W)|soixante-quinze
+76(?=\W)|soixante-seize
+91(?=\W)|quatre-vingt-onze
+92(?=\W)|quatre-vingt-douze
+93(?=\W)|quatre-vingt-treize
+94(?=\W)|quatre-vingt-quatorze
+95(?=\W)|quatre-vingt-quinze
+96(?=\W)|quatre-vingt-seize
+20?(?=\d\W)|vingt
+30?(?=\d\W)|trente
+40?(?=\d\W)|quarante
+50?(?=\d\W)|cinquante
+60?(?=\d\W)|soixante
+70?(?=\d\W)|soixante-dix
+80?(?=\d\W)|quatre-vingt
+90?(?=\d\W)|quatre-vingt-dix
+0|
+1|un
+2|deux
+3|trois
+4|quatre
+5|cinq
+6|six
+7|sept
+8|huit
+9|neuf

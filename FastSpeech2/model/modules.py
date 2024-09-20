@@ -42,6 +42,34 @@ def get_sinusoid_encoding_table(n_position, d_hid, padding_idx=None):
 
     return torch.FloatTensor(sinusoid_table)
 
+class StyleTagEncoder(nn.Module):
+    def __init__(self, model_config):
+        super(StyleTagEncoder, self).__init__()
+        
+        # Load Fully connected layer dimensions
+        self.input_bert_size = model_config['styleTag_encoder']['input_bert_size']
+        self.adaptation_fc_layer = model_config['styleTag_encoder']['adaptation_fc_layer']
+        # self.output_size = model_config['transformer']['encoder_hidden']
+        self.output_size = model_config['gst']['gru_hidden']
+        
+        # Define fully connected layers
+        layers = []
+        prev_size = self.input_bert_size
+        for size in self.adaptation_fc_layer:
+            layers.append(nn.Linear(in_features=prev_size, out_features=size, bias=False))
+            layers.append(nn.ReLU())
+            prev_size = size
+        
+        # Add a linear layer to match the encoder_hidden size
+        layers.append(nn.Linear(in_features=prev_size, out_features=self.output_size, bias=False))
+        
+        self.fc_layers = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        # Pass input through fully connected layers
+        x = self.fc_layers(x)
+        return x
+
 class ReferenceEncoder(nn.Module):
     '''
     inputs --- [N, Ty/r, n_mels*r]  mels
@@ -77,33 +105,82 @@ class ReferenceEncoder(nn.Module):
 
     def forward(self, inputs, input_lengths=None):
         out = inputs.view(inputs.size(0), 1, -1, self.n_mel_channels)
-        for conv, bn in zip(self.convs, self.bns):
-            out = conv(out)
-            out = bn(out)
-            out = F.relu(out)
 
-        out = out.transpose(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
-        N, T = out.size(0), out.size(1)
-        out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
+        if input_lengths is not None and max(input_lengths) > 0:
+            for conv, bn in zip(self.convs, self.bns):
+                out = conv(out)
+                out = bn(out)
+                out = F.relu(out)
 
-        # ------- Memory effectivness (not tested) ----------
-        if input_lengths is not None:
-            input_lengths = torch.ceil(input_lengths.float() / 2 ** len(self.convs))
-            input_lengths = input_lengths.cpu().numpy().astype(int)            
-            out = nn.utils.rnn.pack_padded_sequence(
-                        out, input_lengths, batch_first=True, enforce_sorted=False)
-        # ------- END ----------
-                        
-        self.gru.flatten_parameters() # initialy commented
+            out = out.transpose(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
+            N, T = out.size(0), out.size(1)
+            out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
 
-        _, out = self.gru(out)
-        return out.squeeze(0)
+            # ------- Memory effectivness (not tested) ----------
+            if input_lengths is not None:
+                input_lengths = torch.ceil(input_lengths.float() / 2 ** len(self.convs))
+
+                zero_length_indexes = (input_lengths == 0).nonzero(as_tuple=True)[0].cpu() # no effect if empty list
+                nonzero_length_indexes = [v for v in range(N) if v not in zero_length_indexes]
+                input_lengths = input_lengths.cpu().numpy().astype(int)
+
+                # Ignore 0 length sequences
+                input_lengths = input_lengths[nonzero_length_indexes]
+                out = out[nonzero_length_indexes, :, :]
+
+                out = nn.utils.rnn.pack_padded_sequence(
+                            out, input_lengths, batch_first=True, enforce_sorted=False)
+            # ------- END ----------
+                            
+            self.gru.flatten_parameters() # initialy commented
+
+            _, out = self.gru(out)
+
+            # Insert padding for 0 length sequences
+            return_out = torch.zeros([1, N, self.ref_enc_gru_size]).to(device)
+            if input_lengths is not None:
+                return_out[:, nonzero_length_indexes, :] = out
+        else:
+            N = out.size(0)
+            return_out = torch.zeros([1, N, self.ref_enc_gru_size]).to(device)
+
+        return return_out.squeeze(0)
 
     def calculate_channels(self, L, kernel_size, stride, pad, n_convs):
         for _ in range(n_convs):
             L = (L - kernel_size + 2 * pad) // stride + 1
         return L
+
+class ReferenceEncoderVisual(ReferenceEncoder, nn.Module):
+    """ Visual Reference Encoder | Same architecture as Audio Reference Encoder, but different hyperparameters """
+
+    def __init__(self, preprocess_config, model_config):
+
+        super(ReferenceEncoder, self).__init__()
         
+        K = len(model_config["visual_reference_encoder"]["conv_filters"])
+        filters = [1] + model_config["visual_reference_encoder"]["conv_filters"]
+
+        convs = [nn.Conv2d(in_channels=filters[i],
+                           out_channels=filters[i + 1],
+                           kernel_size=model_config["visual_reference_encoder"]["ref_enc_size"],
+                           stride=model_config["visual_reference_encoder"]["ref_enc_strides"],
+                           padding=model_config["visual_reference_encoder"]["ref_enc_pad"]) for i in range(K)]
+        self.convs = nn.ModuleList(convs)
+        self.bns = nn.ModuleList([nn.BatchNorm2d(num_features=model_config["visual_reference_encoder"]["conv_filters"][i]) for i in range(K)])
+
+        out_channels = self.calculate_channels(
+                preprocess_config["preprocessing"]["au"]["n_units"], 
+                model_config["visual_reference_encoder"]["ref_enc_size"][0], model_config["visual_reference_encoder"]["ref_enc_strides"][0], 
+                model_config["visual_reference_encoder"]["ref_enc_pad"][0], K)
+                
+        self.gru = nn.GRU(input_size=model_config["visual_reference_encoder"]["conv_filters"][-1] * out_channels,
+                          hidden_size=model_config["visual_reference_encoder"]["gru_hidden"],
+                          batch_first=True)
+                          
+        self.n_mel_channels = preprocess_config["preprocessing"]["au"]["n_units"]
+        self.ref_enc_gru_size = model_config["visual_reference_encoder"]["gru_hidden"]
+
 class STL(nn.Module):
     '''
     inputs --- [N, E//2]
@@ -119,7 +196,7 @@ class STL(nn.Module):
         # self.attention = MultiHeadAttention(query_dim=d_q, key_dim=d_k, num_units=hp.E, num_heads=hp.num_heads)
         self.attention = MultiHeadCrossAttention(
             query_dim=d_q, key_dim=d_k, num_units=model_config["gst"]["token_size"],
-            num_heads=model_config["gst"]["attn_head"])
+            num_heads=model_config["gst"]["attn_head"], backprop_scores=False)
             
         init.normal_(self.embed, mean=0, std=0.5)
 
@@ -131,10 +208,10 @@ class STL(nn.Module):
             N = target_scores.size(0)
             query = None
             
-        keys = F.tanh(self.embed).unsqueeze(0).expand(N, -1, -1)  # [N, token_num, E // num_heads]
-        style_embed, attention_scores, unnormalized_attention_scores = self.attention(query, keys, target_scores)
+        keys = torch.tanh(self.embed).unsqueeze(0).expand(N, -1, -1)  # [N, token_num, E // num_heads]
+        style_embed, attention_scores, unnormalized_attention_scores, gst_tokens_values = self.attention(query, keys, target_scores)
 
-        return style_embed, attention_scores, unnormalized_attention_scores
+        return style_embed, attention_scores, unnormalized_attention_scores, self.embed, gst_tokens_values
 
 class MultiHeadCrossAttention(nn.Module):
     '''
@@ -144,7 +221,7 @@ class MultiHeadCrossAttention(nn.Module):
     output:
         out --- [N, T_q, num_units]
     '''
-    def __init__(self, query_dim, key_dim, num_units, num_heads):
+    def __init__(self, query_dim, key_dim, num_units, num_heads, backprop_scores):
         super().__init__()
         self.num_units = num_units
         self.num_heads = num_heads
@@ -153,6 +230,8 @@ class MultiHeadCrossAttention(nn.Module):
         self.W_query = nn.Linear(in_features=query_dim, out_features=num_units, bias=False)
         self.W_key = nn.Linear(in_features=key_dim, out_features=num_units, bias=False)
         self.W_value = nn.Linear(in_features=key_dim, out_features=num_units, bias=False)
+
+        self.backprop_scores = backprop_scores
 
     def forward(self, query, key, target_scores=None):
         split_size = self.num_units // self.num_heads
@@ -171,7 +250,11 @@ class MultiHeadCrossAttention(nn.Module):
             unnormalized_scores = torch.matmul(querys, keys.transpose(2, 3))  # [h, N, T_q, T_k]
             #scores = torch.matmul(querys, keys.transpose(2, 3))  # [h, N, T_q, T_k]
 
-            scores = unnormalized_scores.detach().clone()
+            if self.backprop_scores:
+                scores = unnormalized_scores.clone()
+            else:
+                scores = unnormalized_scores.detach().clone()
+
             scores = scores / (self.key_dim ** 0.5)
             scores = F.softmax(scores, dim=3)
 
@@ -180,31 +263,44 @@ class MultiHeadCrossAttention(nn.Module):
             unnormalized_scores = None
             scores = target_scores.unsqueeze(0).unsqueeze(2)
 
-        #print(values)
-        #print(values.shape)
         # out = score * V
         out = torch.matmul(scores, values)  # [h, N, T_q, num_units/h]
         out = torch.cat(torch.split(out, 1, dim=0), dim=3).squeeze(0)  # [N, T_q, num_units]
         
         # scores reshape (when multiple heads, scores concatenate along dim 2, then transpose for cross entropy
         scores = torch.cat(torch.split(scores, 1, dim=0), dim=3).squeeze(0).transpose(1, 2)  # [N, T_k*h=num_units, T_q]
-        
-        return out, scores, unnormalized_scores
-        
+
+        return out, scores, unnormalized_scores, values
+
 class GST(nn.Module):
     def __init__(self, preprocess_config, model_config):
         super().__init__()
         self.encoder = ReferenceEncoder(preprocess_config, model_config)
         self.stl = STL(model_config)
 
-    def forward(self, inputs, input_lengths=None, target_scores=None):
+        self.compute_visual_prediction = model_config["visual_prediction"]["compute_visual_prediction"]
+        self.compute_visual_reference_embbedding = model_config["visual_prediction"]["compute_visual_reference_embbedding"]
+        if self.compute_visual_prediction and self.compute_visual_reference_embbedding:
+            self.encoder_visual = ReferenceEncoderVisual(preprocess_config, model_config)
+
+    def inference_from_ref_embedding(self, ref_embeddings):
+        style_embed, attention_scores, _, _, _ = self.stl(ref_embeddings, target_scores=None)
+
+        return style_embed, attention_scores
+
+    def forward(self, inputs, input_lengths=None, inputs_visual=None, input_visual_lengths=None, target_scores=None):
         if target_scores is not None:
             enc_out = None
         else:
             enc_out = self.encoder(inputs, input_lengths=input_lengths)
-        style_embed, attention_scores, unnormalized_attention_scores = self.stl(enc_out, target_scores)
 
-        return style_embed, attention_scores, unnormalized_attention_scores
+            if self.compute_visual_prediction and self.compute_visual_reference_embbedding:
+                enc_out_visual = self.encoder_visual(inputs_visual, input_lengths=input_visual_lengths)
+                enc_out = enc_out + enc_out_visual
+
+        style_embed, attention_scores, unnormalized_attention_scores, gst_tokens, gst_tokens_values = self.stl(enc_out, target_scores)
+
+        return style_embed, attention_scores, unnormalized_attention_scores, enc_out, gst_tokens, gst_tokens_values
         
 class LST(nn.Module):
     def __init__(self, model_config):
@@ -239,7 +335,7 @@ class LST(nn.Module):
         d_k = model_config["lst"]["token_size"] // model_config["lst"]["attn_head"]
         self.attention = MultiHeadCrossAttention(
             query_dim=self.d_q, key_dim=d_k, num_units=model_config["lst"]["token_size"],
-            num_heads=model_config["lst"]["attn_head"])
+            num_heads=model_config["lst"]["attn_head"], backprop_scores=True)
             
         init.normal_(self.embed, mean=0, std=0.5)
 
@@ -247,8 +343,6 @@ class LST(nn.Module):
         self._all_pct_indexes = text_to_sequence(_all_pct)
 
     def forward(self, inputs, positional_indexes):
-        # local_style_emb, attention_scores = self.stl(enc_out, target_scores)
-        
         N = inputs.size(0)
         max_len = inputs.shape[1]
         # query = inputs.unsqueeze(1)  # [N, L, E]
@@ -274,9 +368,11 @@ class LST(nn.Module):
                 inputs_cross_attention = inputs + pos_enc_by_scale
             else:
                 inputs_cross_attention = torch.cat((inputs, pos_enc_by_scale), 2)
+        else:
+            inputs_cross_attention = inputs
         
-        keys = F.tanh(self.embed).unsqueeze(0).expand(N, -1, -1)  # [N, token_num, E // num_heads]
-        style_embed, attention_scores, _ = self.attention(inputs_cross_attention, keys)
+        keys = torch.tanh(self.embed).unsqueeze(0).expand(N, -1, -1)  # [N, token_num, E // num_heads]
+        style_embed, attention_scores, _, _ = self.attention(inputs_cross_attention, keys)
 
         return style_embed, attention_scores
 
@@ -310,7 +406,9 @@ class LST(nn.Module):
             boundaries = torch.cat((boundaries, torch.tensor([previous_pct_index+1]).to(device)))
             
             for i_interval in range(0, boundaries.shape[0]-1):
-                output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:] = torch.mean(output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:], 0)
+                # output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:] = torch.mean(output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:], 0)
+                output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:] = torch.sum(output_by_word[i_utt][boundaries[i_interval]:boundaries[i_interval+1]][:], 0)
+
                 positional_indexes_by_utt[boundaries[i_interval]:boundaries[i_interval+1]] = i_interval
 
             positional_indexes_by_utt[boundaries[-1]:] = i_interval+1
@@ -328,6 +426,7 @@ class VarianceAdaptor(nn.Module):
         self.pitch_predictor = VariancePredictor(model_config)
         self.energy_predictor = VariancePredictor(model_config)
 
+        # Audio Variance Adaptor Config
         self.pitch_feature_level = preprocess_config["preprocessing"]["pitch"][
             "feature"
         ]
@@ -361,10 +460,25 @@ class VarianceAdaptor(nn.Module):
             # stats_by_speaker = json.load(f)
             stats = json.load(f)
             pitch_min, pitch_max = stats["pitch"][:2]
-            self.pitch_mean, self.pitch_std = stats["pitch"][2:4]
+            # self.pitch_mean, self.pitch_std = stats["pitch"][2:4]
             energy_min, energy_max = stats["energy"][:2]
-            self.energy_mean, self.energy_std = stats["energy"][2:4]
+            # self.energy_mean, self.energy_std = stats["energy"][2:4]
 
+            
+            # Load Visual params
+            lips_aperture_min, lips_aperture_max = stats["lips_aperture"][:2]
+            # self.lips_aperture_mean, self.lips_aperture_std = stats["lips_aperture"][2:4]
+            lips_spreading_min, lips_spreading_max = stats["lips_spreading"][:2]
+            # self.lips_spreading_mean, self.lips_spreading_std = stats["lips_spreading"][2:4]
+        with open(
+            os.path.join(preprocess_config["path"]["preprocessed_path"], "stats_by_speaker.json")
+        ) as f:
+            self.stats_by_speaker = json.load(f)
+        with open(
+            os.path.join(preprocess_config["path"]["preprocessed_path"], "stats_lips_by_speaker.json")
+        ) as f:
+            self.stats_lips_by_speaker = json.load(f)
+    
         if pitch_quantization == "log":
             self.pitch_bins = nn.Parameter(
                 torch.exp(
@@ -400,18 +514,84 @@ class VarianceAdaptor(nn.Module):
         self.use_variance_predictor = model_config["use_variance_predictor"]
         self.use_variance_embeddings = model_config["use_variance_embeddings"]
 
+        # Visual Variance Adaptor Config
+        self.lips_aperture_feature_level = preprocess_config["preprocessing"]["lips_aperture"][
+            "feature"
+        ]
+        self.lips_spreading_feature_level = preprocess_config["preprocessing"]["lips_spreading"][
+            "feature"
+        ]
+        self.lips_aperture_normalization = preprocess_config["preprocessing"]["lips_aperture"][
+            "normalization"
+        ]
+        self.lips_spreading_normalization = preprocess_config["preprocessing"]["lips_spreading"][
+            "normalization"
+        ]
+        assert self.lips_aperture_feature_level in ["phoneme_level", "frame_level"]
+        assert self.lips_spreading_feature_level in ["phoneme_level", "frame_level"]
+
+        lips_aperture_quantization = model_config["variance_embedding_visual"]["lips_aperture_quantization"]
+        lips_spreading_quantization = model_config["variance_embedding_visual"]["lips_spreading_quantization"]
+        n_bins_visual = model_config["variance_embedding_visual"]["n_bins"]
+        assert lips_aperture_quantization in ["linear", "log"]
+        assert lips_spreading_quantization in ["linear", "log"]
+
+        self.use_variance_predictor_visual = model_config["use_variance_predictor_visual"]
+        self.use_variance_embeddings_visual = model_config["use_variance_embeddings_visual"]
+
+        if self.use_variance_predictor_visual["lips_aperture"]:
+            self.lips_aperture_predictor = VariancePredictor(model_config)
+
+            if lips_aperture_quantization == "log":
+                self.lips_aperture_bins = nn.Parameter(
+                    torch.exp(
+                        torch.linspace(np.log(lips_aperture_min), np.log(lips_aperture_max), n_bins_visual - 1)
+                    ),
+                    requires_grad=False,
+                )
+            else:
+                self.lips_aperture_bins = nn.Parameter(
+                    torch.linspace(lips_aperture_min, lips_aperture_max, n_bins_visual - 1),
+                    requires_grad=False,
+                )
+
+            self.lips_aperture_embedding = nn.Embedding(
+                n_bins_visual, model_config["transformer"]["encoder_hidden"]
+            )
+
+        if self.use_variance_predictor_visual["lips_spreading"]:    
+            self.lips_spreading_predictor = VariancePredictor(model_config)
+
+            if lips_spreading_quantization == "log":
+                self.lips_spreading_bins = nn.Parameter(
+                    torch.exp(
+                        torch.linspace(np.log(lips_spreading_min), np.log(lips_spreading_max), n_bins_visual - 1)
+                    ),
+                    requires_grad=False,
+                )
+            else:
+                self.lips_spreading_bins = nn.Parameter(
+                    torch.linspace(lips_spreading_min, lips_spreading_max, n_bins_visual - 1),
+                    requires_grad=False,
+                )
+
+            self.lips_spreading_embedding = nn.Embedding(
+                n_bins_visual, model_config["transformer"]["encoder_hidden"]
+            )
+
         self.cleaners = preprocess_config["preprocessing"]["text"]["text_cleaners"]
         self.maximum_phoneme_duration = model_config["maximum_phoneme_duration"]
-
-        self.pause_bias_vector = model_config["bias_vector"]["pause"]
-        self.liaison_bias_vector = model_config["bias_vector"]["liaison"]
         
         self.embedding_bias = EmbeddingBias(model_config)
         self.save_embeddings_by_layer = model_config["save_embeddings_by_layer"]
 
         self.detach_energy_prediction = model_config["variance_predictor"]["detach_energy_prediction"]
 
-    def get_pitch_embedding(self, x, target, mask, control):
+        self.inter_utterance_punctuation = model_config["inter_utterance_punctuation"]
+
+        self.audio_to_visual_sampling_rate = preprocess_config["preprocessing"]["au"]["sampling_rate"]/(preprocess_config["preprocessing"]["audio"]["sampling_rate"]/preprocess_config["preprocessing"]["stft"]["hop_length"])
+
+    def get_pitch_embedding(self, x, target, mask, control, speakers):
         prediction = self.pitch_predictor(x, mask)
         if target is not None:
             embedding = self.pitch_embedding(torch.bucketize(target, self.pitch_bins))
@@ -420,7 +600,11 @@ class VarianceAdaptor(nn.Module):
             if self.pitch_normalization:
                 # prediction = prediction * (control + (control-1)*self.pitch_mean/(self.pitch_std*prediction))
                 # prediction = prediction + control/self.pitch_std
-                prediction = prediction + control/3.5701
+                # prediction = prediction + control/5.6007
+
+                # z-scores are normalized by speakers
+                pitch_std_by_speaker = self.stats_by_speaker[list(self.stats_by_speaker.keys())[speakers]]["pitch"][3]
+                prediction = prediction + control/pitch_std_by_speaker
             else:
                 # prediction = prediction * control
                 prediction = prediction + control
@@ -429,11 +613,11 @@ class VarianceAdaptor(nn.Module):
                 torch.bucketize(prediction, self.pitch_bins)
             )
             
-            batch_size = prediction.size(dim=0)
+            # batch_size = prediction.size(dim=0)
 
         return prediction, embedding
 
-    def get_energy_embedding(self, x, target, mask, control):
+    def get_energy_embedding(self, x, target, mask, control, speakers):
         prediction = self.energy_predictor(x, mask)
         if target is not None:
             embedding = self.energy_embedding(torch.bucketize(target, self.energy_bins))
@@ -442,7 +626,10 @@ class VarianceAdaptor(nn.Module):
             if self.energy_normalization:
                 # prediction = prediction * (control + (control-1)*self.energy_mean/(self.energy_std*prediction))
                 # prediction = prediction + control/self.energy_std
-                prediction = prediction + control/8.4094
+                # prediction = prediction + control/7.4242
+
+                energy_std_by_speaker = self.stats_by_speaker[list(self.stats_by_speaker.keys())[speakers]]["energy"][3]
+                prediction = prediction + control/energy_std_by_speaker
             else:
                 # prediction = prediction * control
                 prediction = prediction + control
@@ -450,13 +637,78 @@ class VarianceAdaptor(nn.Module):
                 torch.bucketize(prediction, self.energy_bins)
             )
         return prediction, embedding
+    
+    def get_lips_aperture_embedding(self, x, target, mask, control, speakers):
+        prediction = self.lips_aperture_predictor(x, mask)
+        if target is not None:
+            embedding = self.lips_aperture_embedding(torch.bucketize(target, self.lips_aperture_bins))
+        else:
+            if self.lips_aperture_normalization:
+                # z-scores are normalized by speakers
+                try:
+                    lips_aperture_std_by_speaker = self.stats_lips_by_speaker[list(self.stats_by_speaker.keys())[speakers]]["lips_aperture"][3]
+                except:
+                    lips_aperture_std_by_speaker = self.stats_lips_by_speaker["AD"]["lips_aperture"][3]
+
+                prediction = prediction + control/lips_aperture_std_by_speaker
+            else:
+                prediction = prediction + control
+
+            embedding = self.lips_aperture_embedding(
+                torch.bucketize(prediction, self.lips_aperture_bins)
+            )
+
+        return prediction, embedding
+    
+    def get_lips_spreading_embedding(self, x, target, mask, control, speakers):
+        prediction = self.lips_spreading_predictor(x, mask)
+        if target is not None:
+            embedding = self.lips_spreading_embedding(torch.bucketize(target, self.lips_spreading_bins))
+        else:
+            if self.lips_spreading_normalization:
+                # z-scores are normalized by speakers
+                try: 
+                    lips_spreading_std_by_speaker = self.stats_lips_by_speaker[list(self.stats_by_speaker.keys())[speakers]]["lips_spreading"][3]
+                except:
+                    lips_spreading_std_by_speaker = self.stats_lips_by_speaker["AD"]["lips_spreading"][3]
+
+                prediction = prediction + control/lips_spreading_std_by_speaker
+            else:
+                prediction = prediction + control
+
+            embedding = self.lips_spreading_embedding(
+                torch.bucketize(prediction, self.lips_spreading_bins)
+            )
+
+        return prediction, embedding
+    
+    def compensate_rounding_duration(self, raw_duration):
+        predicted_duration_compensated = raw_duration.clone()
+
+        for utt_in_batch in range(raw_duration.size()[0]):
+            residual = 0.0
+            for index_phon in range(raw_duration.size()[1]):
+                dur_phon = raw_duration[utt_in_batch][index_phon]
+                dur_phon_rounded = torch.round(dur_phon + residual)
+                residual += dur_phon - dur_phon_rounded
+                predicted_duration_compensated[utt_in_batch][index_phon] = dur_phon_rounded
+
+        # Add residual to compensate for round
+        duration_rounded = torch.clamp(
+            predicted_duration_compensated,
+            min=0,
+        )
+
+        # à modifier avec torch.cumsum
+        
+        return duration_rounded
 
     def forward(
         self,
         x,
         src_mask,
         mel_mask=None,
-        max_len=None,
+        max_mel_len=None,
         pitch_target=None,
         energy_target=None,
         duration_target=None,
@@ -464,45 +716,59 @@ class VarianceAdaptor(nn.Module):
         e_control=0.0,
         d_control=1.0,
         control_bias_array=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        texts=None,
+        speakers=None,
+        au_mask=None,
+        max_au_len=None,
+        lips_aperture_target=None,
+        lips_spreading_target=None,
+        la_control=0.0,
+        ls_control=0.0,
     ):
+        apply_control_bias = control_bias_array != [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
         log_duration_prediction = self.duration_predictor(x, src_mask)
 
-        x_au = x.clone() # for visual prediction
+        x_au = x.clone() # for visual prediction, "clone" duplicates the tensor and saves the gradient
 
+        # ---------- Compute explicit predictors at phoneme-level ----------------
+
+        # AUDIO: Pitch
         if self.pitch_feature_level == "phoneme_level":
             if self.use_variance_predictor["pitch"]:
                 pitch_prediction, pitch_embedding = self.get_pitch_embedding(
-                    x, pitch_target, src_mask, p_control
+                    x, pitch_target, src_mask, p_control, speakers
                 )
                 if self.use_variance_embeddings["pitch"] and not self.detach_energy_prediction:
                     x = x + pitch_embedding
             else:
                 pitch_prediction = None
                 
-            if not self.training and not self.detach_energy_prediction:
+            if not self.detach_energy_prediction and apply_control_bias:
                 # Add Embedding Bias layer 8
                 x = self.embedding_bias.layer_control(x, control_bias_array, 8)
 
-        if self.save_embeddings_by_layer and not self.training:
+        if self.save_embeddings_by_layer:
             output_by_layer = x.unsqueeze(0)
         else:
             output_by_layer = None
 
+         # AUDIO: Energy
         if self.energy_feature_level == "phoneme_level":
             if self.use_variance_predictor["energy"]:
                 energy_prediction, energy_embedding = self.get_energy_embedding(
-                    x, energy_target, src_mask, e_control
+                    x, energy_target, src_mask, e_control, speakers
                 )
                 if self.use_variance_embeddings["energy"] and not self.detach_energy_prediction:
                     x = x + energy_embedding
             else:
                 energy_prediction = None
                 
-            if not self.training and not self.detach_energy_prediction:
+            if not self.detach_energy_prediction and apply_control_bias:
                 # Add Embedding Bias layer 9
                 x = self.embedding_bias.layer_control(x, control_bias_array, 9)
-                
+
+        # Handle Cascaded Prediction
         if self.detach_energy_prediction:
             if self.pitch_feature_level == "phoneme_level" and self.use_variance_embeddings["pitch"]:
                 x = x + pitch_embedding
@@ -513,60 +779,109 @@ class VarianceAdaptor(nn.Module):
         if self.save_embeddings_by_layer and not self.training:
             output_by_layer = torch.cat((output_by_layer, x.unsqueeze(0)), 0)
 
+        # VISUAL: Lips Aperture
+        if self.lips_aperture_feature_level == "phoneme_level":
+            if self.use_variance_predictor_visual["lips_aperture"]:
+                lips_aperture_prediction, lips_aperture_embedding = self.get_lips_aperture_embedding(
+                    x_au, lips_aperture_target, src_mask, la_control, speakers
+                )
+            else:
+                lips_aperture_prediction = None
+        
+        # VISUAL: Lips Spreading
+        if self.lips_spreading_feature_level == "phoneme_level":
+            if self.use_variance_predictor_visual["lips_spreading"]:
+                lips_spreading_prediction, lips_spreading_embedding = self.get_lips_spreading_embedding(
+                    x_au, lips_spreading_target, src_mask, ls_control, speakers
+                )
+            else:
+                lips_spreading_prediction = None
+
+        # Add both embeddings after prediction
+        if self.lips_aperture_feature_level == "phoneme_level" and self.use_variance_embeddings_visual["lips_aperture"]:
+            x_au = x_au + lips_aperture_embedding
+
+        if self.lips_spreading_feature_level == "phoneme_level" and self.use_variance_embeddings_visual["lips_spreading"]:
+            x_au = x_au + lips_spreading_embedding
+
+        # ---------- Length Regulator ----------------
         if duration_target is not None:
             if self.maximum_phoneme_duration["limit"]: # impose max phon duration
                 duration_threshold = self.maximum_phoneme_duration["threshold"]
                 duration_target[duration_target>duration_threshold] = duration_threshold
 
-            x, mel_len = self.length_regulator(x, duration_target, max_len)
-            x_au, _ = self.length_regulator(x_au, duration_target, max_len)
+            duration_target_au = self.compensate_rounding_duration(torch.mul(duration_target, self.audio_to_visual_sampling_rate))
+
+            x, mel_len = self.length_regulator(x, duration_target, max_mel_len)
+            x_au, au_len = self.length_regulator(x_au, duration_target_au, max_au_len)
             duration_rounded = duration_target
         else:
-            # duration_rounded = torch.clamp(
-            #     (torch.round(torch.exp(log_duration_prediction) - 1) * d_control),
-            #     min=0,
-            # )
-
             predicted_duration = (torch.exp(log_duration_prediction) - 1) * d_control
-            predicted_duration_compensated = predicted_duration
+            duration_rounded = self.compensate_rounding_duration(predicted_duration)
 
-            for utt_in_batch in range(x.size()[0]):
-                residual = 0.0
-                for index_phon in range(x.size()[1]):
-                    dur_phon = predicted_duration[utt_in_batch][index_phon]
-                    dur_phon_rounded = torch.round(dur_phon + residual)
-                    residual += dur_phon - dur_phon_rounded
-                    predicted_duration_compensated[utt_in_batch][index_phon] = dur_phon_rounded
+            # Enforce durations of inter-utterance punctuation
+            if self.inter_utterance_punctuation["enforce_duration"]:
+                for pct in list(self.inter_utterance_punctuation["duration_by_pct"].keys()):
+                    pct_index = text_to_sequence(pct)[0]
+                    for i_batch, text in enumerate(texts):
+                        if text[0] == pct_index:
+                            duration_rounded[i_batch][0] = max(0, self.inter_utterance_punctuation["duration_by_pct"][pct]-11)
 
-            # Add residual to compensate for round
-            duration_rounded = torch.clamp(
-                predicted_duration_compensated,
-                min=0,
-            )
+            duration_rounded_au = self.compensate_rounding_duration(torch.mul(duration_rounded, self.audio_to_visual_sampling_rate))
 
-            x, mel_len = self.length_regulator(x, duration_rounded, max_len)
-            x_au, _ = self.length_regulator(x_au, duration_rounded, max_len)
+            x, mel_len = self.length_regulator(x, duration_rounded, max_mel_len)
             mel_mask = get_mask_from_lengths(mel_len)
 
+            x_au, au_len = self.length_regulator(x_au, duration_rounded_au, max_au_len)
+            au_mask = get_mask_from_lengths(au_len)
+
+        # ---------- Compute explicit predictors at frame-level ----------------
+        # AUDIO: Pitch
         if self.pitch_feature_level == "frame_level":
             if self.use_variance_predictor["pitch"]:
                 pitch_prediction, pitch_embedding = self.get_pitch_embedding(
-                    x, pitch_target, mel_mask, p_control
+                    x, pitch_target, mel_mask, p_control, speakers
                 )
                 if self.use_variance_embeddings["pitch"]:
                     x = x + pitch_embedding
             else:
                 pitch_prediction = None
 
+        # AUDIO: Energy
         if self.energy_feature_level == "frame_level":
             if self.use_variance_predictor["energy"]:
                 energy_prediction, energy_embedding = self.get_energy_embedding(
-                    x, energy_target, mel_mask, e_control
+                    x, energy_target, mel_mask, e_control, speakers
                 )
                 if self.use_variance_embeddings["energy"]:
                     x = x + energy_embedding
             else:
                 energy_prediction = None
+
+        # VISUAL: lips_aperture
+        if self.lips_aperture_feature_level == "frame_level":
+            if self.use_variance_predictor_visual["lips_aperture"]:
+                lips_aperture_prediction, lips_aperture_embedding = self.get_lips_aperture_embedding(
+                    x_au, lips_aperture_target, au_mask, la_control, speakers
+                )
+            else:
+                lips_aperture_prediction = None
+            
+        # VISUAL: lips_spreading
+        if self.lips_spreading_feature_level == "frame_level":
+            if self.use_variance_predictor_visual["lips_spreading"]:
+                lips_spreading_prediction, lips_spreading_embedding = self.get_lips_spreading_embedding(
+                    x_au, lips_spreading_target, au_mask, ls_control, speakers
+                )
+            else:
+                lips_spreading_prediction = None
+
+        # VISUAL: Add frame-level embeddings
+        if self.lips_aperture_feature_level == "frame_level" and self.use_variance_embeddings_visual["lips_aperture"]:
+            x_au = x_au + lips_aperture_embedding
+
+        if self.lips_spreading_feature_level == "frame_level" and self.use_variance_embeddings_visual["lips_spreading"]:
+            x_au = x_au + lips_spreading_embedding
 
         return (
             x,
@@ -577,6 +892,10 @@ class VarianceAdaptor(nn.Module):
             duration_rounded,
             mel_len,
             mel_mask,
+            lips_aperture_prediction,
+            lips_spreading_prediction,
+            au_len,
+            au_mask,
             output_by_layer,
             self.pitch_embedding,
             self.pitch_bins,
@@ -599,6 +918,7 @@ class LengthRegulator(nn.Module):
 
         if max_len is not None:
             output = pad(output, max_len)
+            mel_len = [min(single_mel_len, max_len) for single_mel_len in mel_len] # Remove last frame in case of rounding error
         else:
             output = pad(output)
 

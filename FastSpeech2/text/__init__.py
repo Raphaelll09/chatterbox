@@ -117,8 +117,8 @@ def _find_pattern_indexes_in_batch(list_patterns, texts):
 def _should_keep_symbol(s):
     if s not in symbols:
         print("The Character: '{}' is not in the symbols list".format(s.encode('utf8', 'replace')))
-        log(">> Symbol error")
-        warnings.warn("The Character is not in the symbols list")
-        log("The Character: '{}' is not in the symbols list".format(s.encode('utf8', 'replace'))) 
+        # log(">> Symbol error")
+        # warnings.warn("The Character is not in the symbols list")
+        # log("The Character: '{}' is not in the symbols list".format(s.encode('utf8', 'replace'))) 
     return s in _symbol_to_id and s != '_' 
     # return s in _symbol_to_id and s != "_" and s != "~"

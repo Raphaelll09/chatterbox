@@ -52,7 +52,12 @@ def create_keyboard(key_board_options, entry):
                 # Special Case: keys plays functions with specific entries (entries need to be in the global scope)
                 key_function = getattr(keyboards, key[1])
                 key_args = key[2]
-                args = [globals()[key_arg] for key_arg in key_args]
+                args = []
+                for key_arg in key_args:
+                    if isinstance(key_arg, int):
+                        args.append(key_arg)
+                    else:
+                        args.append(globals()[key_arg])
                 current_button = tk.Button(
                     master=window_keyboard, 
                     text=key_label,
@@ -77,6 +82,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global main_panel_config
     global TTS_CONFIG
     global window
+    global lbl_gst_infos
     
     TTS_CONFIG = tts_config
     gui_config = tts_config['GUI_config']
@@ -151,7 +157,16 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         lbl_audio_infos_denoiser_duration.grid(row=11, column=1, columnspan=max_buttons+1)
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text="Durée Totale Synthèse : 0.000s | 0% de la durée audio")
         lbl_audio_infos_synthesis_duration.grid(row=12, column=1, columnspan=max_buttons+1)
-    
+
+    # Add audio infos
+    if main_panel_config["add_GST_infos"]:
+        lbl_gst_infos = {}
+        label_gst_title = tk.Label(master=window, text="\nGST weights\n")
+        label_gst_title.grid(row=14, column=1, columnspan=max_buttons+1)
+        for index_gst_token, gst_token in enumerate([*tts_config['tts_models'][0]['gst_token_list']]):
+            lbl_gst_infos[gst_token] = tk.Label(master=window, text="{}: 0.00".format(gst_token))
+            lbl_gst_infos[gst_token].grid(row=15+index_gst_token, column=1, columnspan=max_buttons+1)
+
     # Add replay button
     btn_replay_audio = tk.Button(
         master=window, 
@@ -173,6 +188,12 @@ def update_audio_infos(audio_duration, tts_inference_duration, vocoder_inference
         lbl_audio_infos_vocoder_duration["text"] = "Durée Vocodeur : {:.3f}s | {:.0f}% de la durée audio".format(vocoder_inference_duration, 100*vocoder_inference_duration/audio_duration)
         lbl_audio_infos_denoiser_duration["text"] = "Durée Denoiser : {:.3f}s | {:.0f}% de la durée audio".format(denoiser_inference_duration, 100*denoiser_inference_duration/audio_duration)
         lbl_audio_infos_synthesis_duration["text"] = "Durée Totale Synthèse : {:.3f}s | {:.0f}% de la durée audio".format(total_inference_duration, 100*total_inference_duration/audio_duration)
+
+def update_GST_infos(GST_weights):
+    if main_panel_config["add_GST_infos"]:
+        for lbl_gst_info, token_weight in zip(lbl_gst_infos.items(), GST_weights):
+            (token_name, label_gst) = lbl_gst_info
+            label_gst["text"] = "{}: {:.2f}".format(token_name, token_weight[0])
 
 def label_insert(label, insert):
     current_text = label.cget("text")
@@ -205,6 +226,8 @@ def get_gui_controls():
     pause_control_bias = pause_bias_slider.get()
     liaison_control_bias = liaison_bias_slider.get()
     gst_token_index = gst_token_selection.get()
+    style_intensity_control = style_intensity_slider.get()
+    styleTag_control = ent_styleTag_input.get()
 
     result = [
         speaker_id, 
@@ -217,8 +240,10 @@ def get_gui_controls():
         pause_control_bias,
         liaison_control_bias,
         gst_token_index,
+        style_intensity_control,
+        styleTag_control,
     ]
-    # print(result)
+
     return result
 
 def gui_fastspeech2(tts_config):
@@ -232,6 +257,8 @@ def gui_fastspeech2(tts_config):
     global pause_bias_slider
     global liaison_bias_slider
     global gst_token_selection
+    global style_intensity_slider
+    global ent_styleTag_input
     global canvas
 
     sub_row_index = 0
@@ -243,7 +270,7 @@ def gui_fastspeech2(tts_config):
 
     # Create Options Frame with Scrollbar
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
-    frame.grid(row=3, column=1, columnspan=2, sticky='nw')
+    frame.grid(row=3, column=0, columnspan=4, sticky='nw')
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)
     frame.grid_propagate(False)
@@ -268,8 +295,8 @@ def gui_fastspeech2(tts_config):
     lbl_speaker_selection = tk.Label(master=frame_options, text="Speaker :").grid(row=sub_row_index, column=0)
     index_speaker = 0
     for speaker in speaker_list:
-        tak_radio_button_speaker = tk.Radiobutton(master=frame_options, text=speaker, variable=speaker_selection, value=index_speaker, command=None)
-        tak_radio_button_speaker.grid(row=sub_row_index, column=1+index_speaker)
+        tk_radio_button_speaker = tk.Radiobutton(master=frame_options, text=speaker, variable=speaker_selection, value=index_speaker, command=None)
+        tk_radio_button_speaker.grid(row=sub_row_index, column=1+index_speaker)
         index_speaker += 1
     sub_row_index += 1
     
@@ -277,27 +304,41 @@ def gui_fastspeech2(tts_config):
     gst_token_selection = tk.IntVar(frame)
     gst_token_selection.set(default_args['gst_token_index'])
 
+    # Free StyleTag input field
+    if tts_config['gui_styleTag_control']:
+        lbl_styleTag_input = tk.Label(master=frame_options, text="StyleTag :").grid(row=sub_row_index, column=0)
+        ent_styleTag_input = tk.Entry(master=frame_options, width=50)
+        ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=7)
+        sub_row_index += 1
+
     # GST token radio buttons
     if tts_config['gui_style_control']:
-        lbl_gst_token_selection = tk.Label(master=frame_options, text="Intention :").grid(row=sub_row_index, column=0)
+        lbl_gst_token_selection = tk.Label(master=frame_options, text="Style :").grid(row=sub_row_index, column=0)
     
         index_gst_token = 0
-        for gst_token in tts_config['gst_token_list']:
-            tak_radio_button_gst_token = tk.Radiobutton(master=frame_options, text=gst_token, variable=gst_token_selection, value=index_gst_token, command=None)
-            # tak_radio_button_gst_token.grid(row=sub_row_index, column=1+index_gst_token)
-            tak_radio_button_gst_token.grid(row=sub_row_index, column=1)
+        for gst_token in [*tts_config['gst_token_list']]:
+            # print(gst_token)
+            tk_radio_button_gst_token = tk.Radiobutton(master=frame_options, text=gst_token, variable=gst_token_selection, value=index_gst_token, command=None)
+            tk_radio_button_gst_token.grid(row=sub_row_index, column=1)
             index_gst_token += 1
             sub_row_index += 1
 
+    # Style Intensity Slider
+    style_intensity_slider = tk.Scale(frame_options, from_=0, to=1, orient=tk.HORIZONTAL, resolution=0.05)
+    lbl_style_intensity = tk.Label(master=frame_options, text="Style Intensity:").grid(row=sub_row_index, column=0)
+    style_intensity_slider.grid(row=sub_row_index, column=1)
+    style_intensity_slider.set(default_args['style_intensity'])
+    sub_row_index += 1
+
     # Pitch Slider
-    pitch_slider = tk.Scale(frame_options, from_=-6, to=6, orient=tk.HORIZONTAL, resolution=0.5)
-    lbl_pitch_selection = tk.Label(master=frame_options, text="Pitch (demi-tons):").grid(row=sub_row_index, column=0)
+    pitch_slider = tk.Scale(frame_options, from_=-15, to=15, orient=tk.HORIZONTAL, resolution=1)
+    lbl_pitch_selection = tk.Label(master=frame_options, text="Pitch (semitones):").grid(row=sub_row_index, column=0)
     pitch_slider.grid(row=sub_row_index, column=1)
     pitch_slider.set(default_args['pitch_control'])
     sub_row_index += 1
 
     # Energy Slider
-    energy_slider = tk.Scale(frame_options, from_=-5, to=5, orient=tk.HORIZONTAL, resolution=1)
+    energy_slider = tk.Scale(frame_options, from_=-20, to=20, orient=tk.HORIZONTAL, resolution=1)
     lbl_energy_selection = tk.Label(master=frame_options, text="Energy (dB):").grid(row=sub_row_index, column=0)
     energy_slider.grid(row=sub_row_index, column=1)
     energy_slider.set(default_args['energy_control'])
@@ -336,7 +377,7 @@ def gui_fastspeech2(tts_config):
     sub_row_index += 1
 
     if tts_config['gui_control_bias']:
-        lbl_speed_selection = tk.Label(master=frame_options, text="Pitch Bias (demi-tons):").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text="Pitch Bias (semitones):").grid(row=sub_row_index, column=0)
         pitch_bias_slider.grid(row=sub_row_index, column=1)
 
         lbl_speed_selection = tk.Label(master=frame_options, text="Energy Bias (dB):").grid(row=sub_row_index, column=0)
@@ -353,7 +394,7 @@ def gui_fastspeech2(tts_config):
 
     # Add scrollbar
     frame_options.update_idletasks()
-    width_canvas = 470
+    width_canvas = 600
     height_canvas = 155
     frame.config(width=width_canvas + vsb.winfo_width(), height=height_canvas)
     canvas.config(scrollregion=canvas.bbox("all"))

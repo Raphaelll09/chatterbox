@@ -24,6 +24,8 @@ sys.path.insert(1, "./Waveglow")
 def load_fastspeech2(tts_model, device):
     global TTS_MODEL
     global CONFIGS
+    global FLAUBERT_MODEL
+    global FLAUBERT_TOKENIZER
     
     # Read Config
     model_folder = tts_model["folder"]
@@ -45,7 +47,7 @@ def load_fastspeech2(tts_model, device):
 
     # Load model
     args = argparse.Namespace(restore_step=model_ckpt)
-    TTS_MODEL = get_model(args, CONFIGS, device, train=False)
+    TTS_MODEL, FLAUBERT_MODEL, FLAUBERT_TOKENIZER = get_model(args, CONFIGS, device, train=False, use_bert=model_config["styleTag_encoder"]["use_styleTag_encoder"])
     print("TTS {}/{} loaded".format(model_folder, model_ckpt))
     
 def load_hifigan(vocoder_model, device):

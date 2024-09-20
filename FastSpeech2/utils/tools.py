@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 
-def to_device(data, device):
+def to_device(data, device, use_styleTag_encoder=False):
     if len(data) == 16:
         (
             ids,
@@ -66,6 +66,19 @@ def to_device(data, device):
             au_lens,
             max_au_lens,
         )
+
+    if len(data) == 9:
+        (ids, raw_texts, speakers, texts, src_lens, max_src_len, phon_align, emotion_labels, styleTag_embs) = data
+
+        speakers = torch.from_numpy(speakers).long().to(device)
+        texts = torch.from_numpy(texts).long().to(device)
+        src_lens = torch.from_numpy(src_lens).to(device)
+        emotion_labels = torch.from_numpy(emotion_labels).float().to(device)
+
+        if use_styleTag_encoder and styleTag_embs is not None:
+            styleTag_embs = torch.from_numpy(styleTag_embs).float().to(device)
+
+        return (ids, raw_texts, speakers, texts, src_lens, max_src_len, phon_align, emotion_labels, styleTag_embs)
 
     if len(data) == 8:
         (ids, raw_texts, speakers, texts, src_lens, max_src_len, phon_align, emotion_labels) = data

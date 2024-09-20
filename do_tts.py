@@ -34,7 +34,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--default_tts",
         type=int,
-        default=1,
+        default=0,
         help="Use first TTS as default",
     )
     parser.add_argument(

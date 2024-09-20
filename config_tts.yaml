@@ -1,12 +1,13 @@
 GUI_config:
-  online_phon_input: False
+  online_phon_input: True
   main_panel:
     name_window: "TTS"
     add_audio_infos: True
-    width: 800
-    #width: 1000
-    height: 440
-  add_keyboard: False
+    add_GST_infos: True
+    # width: 800
+    width: 1000
+    height: 800
+  add_keyboard: True
   keyboard_options:
     name_window: "Keyboard"
     keys: "Emmanuelle"
@@ -17,96 +18,56 @@ GUI_config:
 default_start_punctuation: "."
 default_end_punctuation: "."
 use_denoiser: True
-use_smoothing: True
+visual_smoothing:
+  activate: True
+  cutoff: 5
+subtitles:
+  create_file: True
+  duration_by_frame: 
+    sampling_rate: 22050
+    hop_length: 256
+  max_nbr_char: 60
 
 tts_models:
-  - label: "Multi Speaker"
+  - label: "Multi Speaker/Style"
     load_script: "load_fastspeech2"
     syn_script: "syn_fastspeech2"
     gui_script: "gui_fastspeech2"
     folder: "FastSpeech2"
-    checkpoint_file: "600000"
+    checkpoint_file: "390000"
     output_location: "output/audio"
-    gst_token_list: [
-        "COLERE",
-        "DESOLE",
-        "DETERMINE",
-        "ENTHOUSIASTE",
-        "ESPIEGLE",
-        "ETONNE",
-        "EVIDENCE",
-        "INCREDULE",
-        "NEUTRE",
-        "PENSIF",
-        "RECONFORTANT",
-        "SUPPLIANT",
-        "NARRATION",
-    ]
-    gui_control_bias: False
-    gui_style_control: False
-    default_args:
-      text_cleaners: ["basic_cleaners"]
-      preprocess_config: "config/M_AILABS/preprocess_new.yaml"
-      model_config: "config/M_AILABS/model_Theradia_new.yaml"
-      train_config: "config/M_AILABS/train_Theradia_new.yaml"
-      vocoder: None
-      speaker_id: 2
-      mode: "single"
-      teacher_forcing: False
-      pitch_control: 0.0
-      energy_control: 0.0
-      duration_control: 1.3
-      duration_control_bias: 1.0
-      pitch_control_bias: 0.0
-      f1_control_bias: 0.0
-      f2_control_bias: 0.0
-      f3_control_bias: 0.0
-      spectral_tilt_control_bias: 0.0
-      energy_control_bias: 0.0
-      relative_pos_control_bias: 0.0
-      pfitzinger_control_bias: 0.0
-      cog_control_bias: 0.0
-      sb1k_control_bias: 0.0
-      pause_control_bias: 0.0
-      liaison_control_bias: 0.0
-      silence_control_bias: False
-      gst_token_index: 12
-  - label: "Expressive"
-    load_script: "load_fastspeech2"
-    syn_script: "syn_fastspeech2"
-    gui_script: "gui_fastspeech2"
-    folder: "FastSpeech2"
-    checkpoint_file: "150000"
-    output_location: "output/audio"
-    gst_token_list: [
-        "COLERE",
-        "DESOLE",
-        "DETERMINE",
-        "ENTHOUSIASTE",
-        "ESPIEGLE",
-        "ETONNE",
-        "EVIDENCE",
-        "INCREDULE",
-        "NEUTRE",
-        "PENSIF",
-        "RECONFORTANT",
-        "SUPPLIANT",
-        "NARRATION",
-    ]
+    gst_token_list: {
+        "COLERE": 1.0,
+        "DESOLE": 1.0,
+        "DETERMINE": 1.0,
+        "ENTHOUSIASTE": 1.0,
+        "ESPIEGLE": 1.0,
+        "ETONNE": 1.0,
+        "EVIDENCE": 1.0,
+        "INCREDULE": 1.0,
+        "NEUTRE": 1.0,
+        "PENSIF": 1.0,
+        "RECONFORTANT": 1.0,
+        "SUPPLIANT": 1.0,
+        "TOKEN13": 1.0,
+        "TOKEN14": 1.0,
+        "TOKEN15": 1.0,
+        "TOKEN16": 1.0,
+    }
     gui_control_bias: False
     gui_style_control: True
+    gui_styleTag_control: True
     default_args:
       text_cleaners: ["basic_cleaners"]
-      preprocess_config: "config/AD_Theradia_KPI/preprocess.yaml"
-      model_config: "config/AD_Theradia_KPI/model_LST_byWord.yaml"
-      train_config: "config/AD_Theradia_KPI/train_LST_byWord.yaml"
+      preprocess_config: "config/ALL_corpus/preprocess.yaml"
+      model_config: "config/ALL_corpus/model.yaml"
+      train_config: "config/ALL_corpus/train.yaml"
       vocoder: None
-      speaker_id: 0
+      speaker_id: 4
       mode: "single"
-      teacher_forcing: False
       pitch_control: 0.0
       energy_control: 0.0
-      duration_control: 1.0
+      duration_control: 1.1
       duration_control_bias: 1.0
       pitch_control_bias: 0.0
       f1_control_bias: 0.0
@@ -121,7 +82,9 @@ tts_models:
       pause_control_bias: 0.0
       liaison_control_bias: 0.0
       silence_control_bias: False
-      gst_token_index: 12
+      gst_token_index: 8
+      style_intensity: 1.0
+      enforce_linking_duration: True
 
 vocoder_models:
   - label: "Hifi-GAN V2 FR 570000"

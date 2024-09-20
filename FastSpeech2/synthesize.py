@@ -12,11 +12,9 @@ from g2p_en import G2p
 from pypinyin import pinyin, Style
 
 from utils.model import get_model, get_vocoder
-from utils.tools import to_device, synth_samples, expand, plot_mel
-from dataset import TextDataset, Dataset
+from utils.tools import to_device, synth_samples
+from dataset import TextDataset
 from text import text_to_sequence, out_symbols
-
-from matplotlib import pyplot as plt
 
 from scipy.io import loadmat
 from scipy.io import savemat
@@ -132,12 +130,11 @@ def process_per_batch(
     train_config, 
     extension_data,
     mel_dim,
-    teacher_forcing,
     control_bias_array,
     categorical_control_bias_array,
     mode_batch=False,
 ):
-    batch = to_device(batch, device)
+    batch = to_device(batch, device, use_styleTag_encoder=model_config["styleTag_encoder"]["use_styleTag_encoder"])
 
     with torch.no_grad():
         # Forward
@@ -149,6 +146,7 @@ def process_per_batch(
             control_bias_array=control_bias_array,
             categorical_control_bias_array=categorical_control_bias_array,
             inference_gst_token_vector=batch[7],
+            styleTag_embedding=batch[8],
         )
 
         if output_wav:
@@ -178,48 +176,13 @@ def process_per_batch(
                 mel_prediction = output[1][i, :mel_len].detach().transpose(0, 1).cpu().data.numpy().transpose()
                 # print(mel_prediction)
 
-                if teacher_forcing:
-                    mel_target = batch[6][i, :mel_len].detach().transpose(0, 1).cpu().data.numpy().transpose()
-                    pitch_target = batch[9][i, :src_len].detach().cpu().data.numpy().transpose()
-                    energy_target = batch[10][i, :src_len].detach().cpu().data.numpy().transpose()
-                    duration_target = batch[11][i, :src_len].detach().cpu().data.numpy().transpose()
-
-                    # print(mel_target)
-                    # Copy of the spectrum in a file
-                    fp = open('{}/{}_reconstruction.{}'.format(output_syn_path, basename, extension_data), 'wb')
-                    fp.write(np.asarray((mel_len, mel_dim), dtype=np.int32))
-                    fp.write(mel_target.copy(order='C'))
-                    fp.close()
-                    print('{}/{}_reconstruction.{} created'.format(output_syn_path, basename, extension_data), flush=True)
-
-                    # save pitch_target in .mat format
-                    mdic = {"pitch_prediction_mat": pitch_target}
-                    nm_pitch = '{}/{}_pitch_target.mat'.format(output_syn_path, basename)
-                    savemat(nm_pitch, mdic)
-
-                    # save energy_target in .mat format
-                    mdic = {"energy_prediction_mat": energy_target}
-                    nm_energy = '{}/{}_energy_target.mat'.format(output_syn_path, basename)
-                    savemat(nm_energy, mdic)
-
-                    # save duration_target in .mat format
-                    mdic = {"duration_mat": duration_target}
-                    nm_duration = '{}/{}_duration_target.mat'.format(output_syn_path, basename)
-                    savemat(nm_duration, mdic)
-
-                # mel_prediction = output[1][i, :mel_len].cpu().data.numpy().reshape(mel_dim,-1).transpose()
-                # print(len(mel_prediction))
-                # print(len(mel_prediction[0]))
-                # print(type(mel_prediction[0, 0]))
-                # print(src_len)
-                # print(mel_len)
-
                 # Copy of the spectrum in a file
                 if model_config["save_predictions"]["mel"]:
                     fp = open('{}/{}.{}'.format(output_syn_path, basename, extension_data), 'wb')
                     fp.write(np.asarray((mel_len, mel_dim), dtype=np.int32))
                     fp.write(mel_prediction.copy(order='C'))
                     fp.close()
+
                 print('{}/{}.{} created'.format(output_syn_path, basename, extension_data), flush=True)
 
                 mel_prediction = output[1][i, :mel_len].detach().transpose(0, 1)
@@ -265,17 +228,6 @@ def process_per_batch(
                     nm_emb = '{}/{}_dec_emb_by_layer.mat'.format(output_syn_path, basename)
                     savemat(nm_emb, mdic)
                     
-                    if False:
-                        # save postnet embeddings in .mat format
-                        mdic = {"postnet_output_by_layer_mat": postnet_output_by_layer}
-                        nm_emb = '{}/{}_postnet_emb_by_layer.mat'.format(output_syn_path, basename)
-                        savemat(nm_emb, mdic)
-                        
-                        # save mel before and after postnet in .mat format
-                        mdic = {"mel_output_by_layer_mat": mel_output_by_layer}
-                        nm_emb = '{}/{}_mel_by_layer.mat'.format(output_syn_path, basename)
-                        savemat(nm_emb, mdic)
-
                 if model_config["use_variance_predictor"]["pitch"] and model_config["save_predictions"]["pitch"]:
                     # save pitch prediction in .mat format
                     pitch_prediction = output[2][i, :src_len].detach().cpu().numpy().transpose()
@@ -293,10 +245,7 @@ def process_per_batch(
                     savemat(nm_energy, mdic)
 
                 if model_config["compute_phon_prediction"] and model_config["save_predictions"]["phon"]:
-                    if teacher_forcing:
-                        phon_targets = batch[12][i, :src_len].detach().cpu().data.numpy().transpose()
-                    else:
-                        phon_targets = batch[6][i, :src_len].transpose()
+                    phon_targets = batch[6][i, :src_len].transpose()
 
                     phon_prediction = output[13][i, :, :src_len].detach().cpu().numpy()
                     ind_pred = phon_prediction.argmax(axis=0)
@@ -314,29 +263,41 @@ def process_per_batch(
                     savemat(nm_phon_pred, mdic)
 
                 if model_config["gst"]["use_gst"] and model_config["save_predictions"]["gst"]:
-                    emotion_prediction = output[18][i, :].detach().cpu().numpy()
+                    emotion_prediction = output[20][i, :].detach().cpu().numpy()
 
                     mdic = {"gst_prediction_mat": emotion_prediction}
                     nm_emotion = '{}/{}_gst.mat'.format(output_syn_path, basename)
                     savemat(nm_emotion, mdic)
 
                 if model_config["lst"]["use_lst"] and model_config["save_predictions"]["lst"]:
-                    emotion_prediction = output[20][i, :].detach().cpu().numpy()
+                    emotion_prediction = output[22][i, :].detach().cpu().numpy()
                     
                     mdic = {"lst_prediction_mat": emotion_prediction}
                     nm_emotion = '{}/{}_lst.mat'.format(output_syn_path, basename)
                     savemat(nm_emotion, mdic)
+
+                if model_config["styleTag_encoder"]["use_styleTag_encoder"] and model_config["save_predictions"]["styleTag_gst_weight"]:
+                    if output[28] is not None:
+                        styleTag_gst_weight = output[28][i, :].detach().cpu().numpy()
+                    else:
+                        styleTag_gst_weight = output[20][i, :].detach().cpu().numpy()
+
+                    mdic = {"styleTag_gst_weight": styleTag_gst_weight}
+                    nm_styleTag_gst_weight = '{}/{}_styleTag_gst_weight.mat'.format(output_syn_path, basename)
+                    savemat(nm_styleTag_gst_weight, mdic)
                     
                 if model_config["visual_prediction"]["compute_visual_prediction"] and model_config["save_predictions"]["au"]:
-                    # au_len = output[17][i].item()
-                    au_len = mel_len
+                    au_len = output[19][i].item()
+                    # au_len = mel_len
                     au_prediction = output[15][i, :au_len].detach().transpose(0, 1).cpu().data.numpy().transpose()
 
                     # Copy of the action units in a file
                     extension_au = model_config["visual_prediction"]["extension"]
                     au_dim = preprocess_config["preprocessing"]["au"]["n_units"]
-                    num = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
-                    den = preprocess_config["preprocessing"]["stft"]["hop_length"]
+                    # num = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
+                    # den = preprocess_config["preprocessing"]["stft"]["hop_length"]
+                    num = preprocess_config["preprocessing"]["au"]["sampling_rate"]
+                    den = 1
 
                     fp = open('{}/{}.{}'.format(output_syn_path, basename, extension_au), 'wb')
                     fp.write(np.asarray((au_len, au_dim, num, den), dtype=np.int32))
@@ -345,80 +306,44 @@ def process_per_batch(
                     print('{}/{}.{} created'.format(output_syn_path, basename, extension_au), flush=True)
                     
                     if model_config["save_embeddings_by_layer"]:
-                            visual_dec_output_by_layer = output_by_layer[4][:, i, :au_len].detach().cpu().numpy().transpose()
-                            visual_postnet_output_by_layer = output_by_layer[5][:, i, :au_len].detach().cpu().numpy().transpose()
-                            au_output_by_layer = output_by_layer[6][:, i, :au_len].detach().cpu().numpy().transpose()
+                        visual_dec_output_by_layer = output_by_layer[4][:, i, :au_len].detach().cpu().numpy().transpose()
+                        visual_postnet_output_by_layer = output_by_layer[5][:, i, :au_len].detach().cpu().numpy().transpose()
+                        au_output_by_layer = output_by_layer[6][:, i, :au_len].detach().cpu().numpy().transpose()
 
-                            # save dec embeddings in .mat format
-                            mdic = {"visual_dec_output_by_layer_mat": visual_dec_output_by_layer}
-                            nm_emb = '{}/{}_visual_dec_emb_by_layer.mat'.format(output_syn_path, basename)
-                            savemat(nm_emb, mdic)
-                            
-                            # save postnet embeddings in .mat format
-                            mdic = {"visual_postnet_output_by_layer_mat": visual_postnet_output_by_layer}
-                            nm_emb = '{}/{}_visual_postnet_emb_by_layer.mat'.format(output_syn_path, basename)
-                            savemat(nm_emb, mdic)
-                            
-                            # save mel before and after postnet in .mat format
-                            mdic = {"au_output_by_layer_mat": au_output_by_layer}
-                            nm_emb = '{}/{}_au_output_by_layer.mat'.format(output_syn_path, basename)
-                            savemat(nm_emb, mdic)
+                        # save dec embeddings in .mat format
+                        mdic = {"visual_dec_output_by_layer_mat": visual_dec_output_by_layer}
+                        nm_emb = '{}/{}_visual_dec_emb_by_layer.mat'.format(output_syn_path, basename)
+                        savemat(nm_emb, mdic)
+                        
+                        # save postnet embeddings in .mat format
+                        mdic = {"visual_postnet_output_by_layer_mat": visual_postnet_output_by_layer}
+                        nm_emb = '{}/{}_visual_postnet_emb_by_layer.mat'.format(output_syn_path, basename)
+                        savemat(nm_emb, mdic)
+                        
+                        # save mel before and after postnet in .mat format
+                        mdic = {"au_output_by_layer_mat": au_output_by_layer}
+                        nm_emb = '{}/{}_au_output_by_layer.mat'.format(output_syn_path, basename)
+                        savemat(nm_emb, mdic)
 
-                    if teacher_forcing:
-                        # print(output[15][i, :au_len])
-                        # print(batch[13][i, :au_len])
-                        au_len = output[17][i].item()
-                        au_target = batch[13][i, :au_len].detach().transpose(0, 1).cpu().data.numpy().transpose()
-                        fp = open('{}/{}_reconstruction.{}'.format(output_syn_path, basename, extension_au), 'wb')
-                        fp.write(np.asarray((au_len, au_dim, num, den), dtype=np.int32))
-                        fp.write(au_target.copy(order='C'))
-                        fp.close()
-                        print('{}/{}_reconstruction.{} created'.format(output_syn_path, basename, extension_au), flush=True)
+                if model_config["styleTag_encoder"]["use_styleTag_encoder"] and model_config["save_predictions"]["styleTag"]:
+                    attention_scores_styleTag = output[28][i, :].detach().cpu().numpy()
 
+                    mdic = {"gst_attention_scores_styleTag.mat": attention_scores_styleTag}
+                    nm_styleTag = '{}/{}_gst_styleTag.mat'.format(output_syn_path, basename)
+                    savemat(nm_styleTag, mdic)
 
                 if False:
-                    if preprocess_config["preprocessing"]["pitch"]["feature"] == "phoneme_level":
-                        pitch = output[2][i, :src_len].detach().cpu().numpy()
-                        pitch = expand(pitch, duration)
-                    else:
-                        pitch = output[2][i, :mel_len].detach().cpu().numpy()
-                    if preprocess_config["preprocessing"]["energy"]["feature"] == "phoneme_level":
-                        energy = output[3][i, :src_len].detach().cpu().numpy()
-                        energy = expand(energy, duration)
-                    else:
-                        energy = output[3][i, :mel_len].detach().cpu().numpy()
+                    gst_tokens = output[21].detach().cpu().numpy()
+                    mdic = {"gst_tokens": gst_tokens}
+                    nm_gst_tokens = '{}/gst_tokens.mat'.format(output_syn_path, basename)
+                    savemat(nm_gst_tokens, mdic)
 
-                    with open(
-                        os.path.join(preprocess_config["path"]["preprocessed_path"], "stats.json")
-                    ) as f:
-                        stats = json.load(f)
-                        stats = stats["pitch"] + stats["energy"][:2]
+                    gst_tokens_values = output[22][0, 0, :, :].detach().cpu().numpy()
+                    mdic = {"gst_tokens_values": gst_tokens_values}
+                    nm_gst_tokens_values = '{}/gst_tokens_values.mat'.format(output_syn_path, basename)
+                    savemat(nm_gst_tokens_values, mdic)
 
-                    fig = plot_mel(
-                        [
-                            (mel_prediction.cpu().numpy(), pitch, energy),
-                        ],
-                        stats,
-                        ["Synthetized Spectrogram"],
-                    )
-                    plt.savefig('output/spectro/{}.png'.format(basename))
-                    plt.close()
-
-            # Only once at the end
-            if False:
-                pitch_embeddings = output[11].weight.detach().cpu().numpy()
-                # save duration in .mat format
-                mdic = {"pitch_mat": pitch_embeddings}
-                nm_pitch_mat = '{}/embeddings_pitch_mat.mat'.format(output_syn_path)
-                savemat(nm_pitch_mat, mdic)
-
-                pitch_bins = output[12].detach().cpu().numpy()
-                # save duration in .mat format
-                mdic = {"pitch_bins": pitch_bins}
-                nm_pitch_bins_mat = '{}/pitch_bins_mat.mat'.format(output_syn_path)
-                savemat(nm_pitch_bins_mat, mdic)
-
-def synthesize(model, step, configs, vocoder, batchs, control_values, teacher_forcing, control_bias_array, categorical_control_bias_array, silence_control_bias=False, mode_batch=False):
+def synthesize(model, step, configs, vocoder, batchs, control_values, control_bias_array, categorical_control_bias_array, silence_control_bias=False, mode_batch=False):
     preprocess_config, model_config, train_config = configs
     pitch_control, energy_control, duration_control = control_values
 
@@ -427,47 +352,24 @@ def synthesize(model, step, configs, vocoder, batchs, control_values, teacher_fo
     extension_data = model_config["vocoder"]["model"]
     mel_dim = preprocess_config["preprocessing"]["mel"]["n_mel_channels"]
 
-    if teacher_forcing:
-        for sub_batchs in batchs:
-            for batch in sub_batchs:
-                process_per_batch(
-                    batch, 
-                    model, 
-                    pitch_control, 
-                    energy_control, 
-                    duration_control, 
-                    output_wav, 
-                    vocoder, 
-                    model_config, 
-                    preprocess_config, 
-                    train_config, 
-                    extension_data,
-                    mel_dim,
-                    teacher_forcing,
-                    control_bias_array,
-                    categorical_control_bias_array,
-                    mode_batch,
-                )
-    else:
-        for batch in batchs:
-            process_per_batch(
-                batch, 
-                model, 
-                pitch_control, 
-                energy_control, 
-                duration_control, 
-                output_wav, 
-                vocoder, 
-                model_config, 
-                preprocess_config, 
-                train_config, 
-                extension_data,
-                mel_dim,
-                teacher_forcing,
-                control_bias_array,
-                categorical_control_bias_array,
-                mode_batch,
-            )
+    for batch in batchs:
+        process_per_batch(
+            batch, 
+            model, 
+            pitch_control, 
+            energy_control, 
+            duration_control, 
+            output_wav, 
+            vocoder, 
+            model_config, 
+            preprocess_config, 
+            train_config, 
+            extension_data,
+            mel_dim,
+            control_bias_array,
+            categorical_control_bias_array,
+            mode_batch,
+        )
 
 
 if __name__ == "__main__":
@@ -529,12 +431,6 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="control the speed of the whole utterance, larger value for slower speaking rate",
-    )
-    parser.add_argument(
-        "--teacher_forcing",
-        required=False,
-        action='store_true',
-        help="output spectrogram computed with teacher_forcing",
     )
     parser.add_argument(
         "--duration_control_bias",
@@ -650,7 +546,7 @@ if __name__ == "__main__":
     if args.mode == "batch":
         mode_batch = True
         assert args.source is not None and args.text is None
-    if args.mode == "single":
+    elif args.mode == "single":
         mode_batch = False
         assert args.source is None and args.text is not None
 
@@ -706,8 +602,17 @@ if __name__ == "__main__":
     # Output of the model
     output_wav = train_config["output"]["wav"]
 
+    styleTag_encoder_config = model_config["styleTag_encoder"]
+
     # Get model
-    model = get_model(args, configs, device, train=False, mode_batch=mode_batch)
+    model, flaubert, flaubert_tokenizer = get_model(
+        args, 
+        configs, 
+        device, 
+        train=False, 
+        mode_batch=mode_batch, 
+        use_bert=(model_config["bert"]["use_bert"] or styleTag_encoder_config["use_styleTag_encoder"])
+    )
 
     if output_wav:
         # Load vocoder
@@ -716,31 +621,15 @@ if __name__ == "__main__":
         vocoder = None
 
     # Preprocess texts
-    if args.teacher_forcing == True:
-        if args.mode == "batch":
-            # Get dataset
-            dataset = Dataset(
-                # 'val_phon.txt', preprocess_config, train_config, sort=False, drop_last=False
-                train_config["path"]["val_csv_path"], preprocess_config, train_config, sort=False, drop_last=False
-            )
-            batchs = DataLoader(
-                dataset,
-                batch_size=8,
-                collate_fn=dataset.collate_fn,
-            )
-        else:
-            print("Need to specify a batch to run teacher-forcing")
-    else:
-        if args.mode == "batch":
-            # Get dataset
-            dataset = TextDataset(args.source, preprocess_config, mode_batch=mode_batch)
-            batchs = DataLoader(
-                dataset,
-                batch_size=8,
-                collate_fn=dataset.collate_fn,
-            )
-
-    if args.mode == "single":
+    if args.mode == "batch":
+        # Get dataset
+        dataset = TextDataset(args.source, preprocess_config, mode_batch=mode_batch, use_bert=model_config["bert"]["use_bert"], flaubert=flaubert, flaubert_tokenizer=flaubert_tokenizer, styleTag_encoder_config=styleTag_encoder_config)
+        batchs = DataLoader(
+            dataset,
+            batch_size=1,
+            collate_fn=dataset.collate_fn,
+        )
+    elif args.mode == "single":
         ids = raw_texts = [args.text[:100]]
         speakers = np.array([args.speaker_id])
         if preprocess_config["preprocessing"]["text"]["language"] == "en":
@@ -764,7 +653,6 @@ if __name__ == "__main__":
         vocoder, 
         batchs, 
         control_values, 
-        args.teacher_forcing, 
         control_bias_array,
         categorical_control_bias_array,
         mode_batch=mode_batch,

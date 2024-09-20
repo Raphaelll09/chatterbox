@@ -2,12 +2,16 @@
 __pycache__/
 *.AU
 *.wav
+*.zip
+*.vtt
+audio_file_duration_alignment.json
 
 # Ignore dataset, models and training script in FastSpeech2
 FastSpeech2/__pycache__/
 FastSpeech2/config/
 FastSpeech2/output/
 FastSpeech2/preprocessed_data/
+FastSpeech2/save_preprocessed_data/
 FastSpeech2/*.mat
 
 # Ignore models in Hifi-GAN
@@ -18,3 +22,6 @@ hifi-gan-master/FR_V2/
 Waveglow/__pycache__/
 Waveglow/waveglow_NEB.pt
 Waveglow/*.txt
+
+# Ignore models in FlauBERT
+flaubert/flaubert_large_cased/pytorch_model.bin

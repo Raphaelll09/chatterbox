@@ -1,223 +1,53 @@
 import json
 import math
 import os
+import torch
 
 import numpy as np
 from torch.utils.data import Dataset
 
 from text import text_to_sequence, _out_symbol_to_id
-from utils.tools import pad_1D, pad_2D, pad_2D_copy_length
+from utils.tools import pad_1D
 
+def load_free_styleTags_embedding(free_styleTags, flaubert_model, flaubert_tokenizer, decrease_weight_with_order=True, default_styleTag_emb_size=1024):
+    annotations = free_styleTags.split(';')
+    individual_embeddings = []
+    for annotation in annotations:
+        words = annotation.split(',')
+        for i, word in enumerate(words):
+            print(word)
 
-class Dataset(Dataset):
-    def __init__(
-        self, filename, preprocess_config, train_config, sort=False, drop_last=False
-    ):
-        self.dataset_name = preprocess_config["dataset"]
-        self.preprocessed_path = preprocess_config["path"]["preprocessed_path"]
-        self.cleaners = preprocess_config["preprocessing"]["text"]["text_cleaners"]
-        self.batch_size = train_config["optimizer"]["batch_size"]
+            # Decrease magnitude of embedding with order in the list
+            if decrease_weight_with_order:
+                decreasing_weight = math.exp(-0.1*i)
+            else:
+                decreasing_weight = 1
 
-        self.au_size = preprocess_config["preprocessing"]["au"]["n_units"]
+            word_embedding = load_FlauBERT_embedding_from_styleTag(word.lower(), flaubert_model, flaubert_tokenizer)
+            individual_embeddings.append(decreasing_weight * word_embedding)
+    
+    if individual_embeddings:
+        free_styleTags_embedding = np.mean(individual_embeddings, axis=0)
+    else:
+        free_styleTags_embedding = np.zeros(default_styleTag_emb_size)
 
-        self.basename, self.speaker, self.text, self.raw_text, self.phon_align = self.process_meta(
-            filename
-        )
-        # print(self.phon_align)
-        with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
-            self.speaker_map = json.load(f)
-        self.sort = sort
-        self.drop_last = drop_last
+    return free_styleTags_embedding
 
-    def __len__(self):
-        return len(self.text)
+def load_FlauBERT_embedding_from_styleTag(styleTag, flaubert_model, flaubert_tokenizer):
+    tokens = flaubert_tokenizer.tokenize(styleTag)
+    token_ids = flaubert_tokenizer.encode(tokens) # same as flaubert_tokenizer.encode(styleTag)
+    with torch.no_grad():
+        last_layer = flaubert_model(torch.tensor([token_ids]))[0][0, 1:-1, :].detach().numpy()
+    # Sum token embeddings into word embedding
+    styleTag_embedding = np.sum(last_layer, axis=0)
 
-    def __getitem__(self, idx):
-        basename = self.basename[idx]
-        speaker = self.speaker[idx]
-        speaker_id = self.speaker_map[speaker]
-        raw_text = self.raw_text[idx]
-        phone = np.array(text_to_sequence(self.text[idx], self.cleaners))
-
-        if self.phon_align[idx]:
-            phon_align = np.array([_out_symbol_to_id.get(s,-1) for s in self.phon_align[idx].split()])
-        else:
-            phon_align = -1*np.ones(len(phone))
-
-        mel_path = os.path.join(
-            self.preprocessed_path,
-            "mel",
-            "{}-mel-{}.npy".format(speaker, basename),
-        )
-        mel = np.load(mel_path)
-        pitch_path = os.path.join(
-            self.preprocessed_path,
-            "pitch",
-            "{}-pitch-{}.npy".format(speaker, basename),
-        )
-        pitch = np.load(pitch_path)
-        energy_path = os.path.join(
-            self.preprocessed_path,
-            "energy",
-            "{}-energy-{}.npy".format(speaker, basename),
-        )
-        energy = np.load(energy_path)
-        duration_path = os.path.join(
-            self.preprocessed_path,
-            "duration",
-            "{}-duration-{}.npy".format(speaker, basename),
-        )
-        duration = np.load(duration_path)
-
-        au_path = os.path.join(
-            self.preprocessed_path,
-            "au",
-            "{}-au-{}.npy".format(speaker, basename),
-        )
-        if os.path.exists(au_path):
-            au = np.load(au_path)
-            # print('toto')
-            # print(au.shape)
-            # print(mel.shape)
-
-            # resize au if needed (same size as mel)
-            if au.shape[0] > mel.shape[0]:
-                au = au[:mel.shape[0], :]
-            elif au.shape[0] < mel.shape[0]:
-                for _ in range(mel.shape[0] - au.shape[0]):
-                    au = np.concatenate((au, [au[-1, :]]), axis=0)
-
-            # print(au.shape)
-            # print(mel.shape)
-
-        else:
-            au = np.empty((0, self.au_size))
-
-        # print(au)
-
-        sample = {
-            "id": basename,
-            "speaker": speaker_id,
-            "text": phone,
-            "raw_text": raw_text,
-            "mel": mel,
-            "pitch": pitch,
-            "energy": energy,
-            "duration": duration,
-            "phon_align": phon_align,
-            "au": au,
-        }
-        # print(sample)
-
-        return sample
-
-    def process_meta(self, filename):
-        with open(
-            os.path.join(self.preprocessed_path, filename), "r", encoding="utf-8"
-        ) as f:
-            name = []
-            speaker = []
-            text = []
-            raw_text = []
-            phon_align = []
-            for line in f.readlines():
-                nbr_columns = line.strip("\n").count('|') + 1
-                if nbr_columns == 4:
-                    n, s, t, r = line.strip("\n").split("|")
-                    a = []
-                elif nbr_columns == 5:
-                    n, s, t, r, a = line.strip("\n").split("|")
-                name.append(n)
-                speaker.append(s)
-                text.append(t)
-                raw_text.append(r)
-                phon_align.append(a)
-            return name, speaker, text, raw_text, phon_align
-
-    def reprocess(self, data, idxs):
-        ids = [data[idx]["id"] for idx in idxs]
-        speakers = [data[idx]["speaker"] for idx in idxs]
-        texts = [data[idx]["text"] for idx in idxs]
-        raw_texts = [data[idx]["raw_text"] for idx in idxs]
-        mels = [data[idx]["mel"] for idx in idxs]
-        pitches = [data[idx]["pitch"] for idx in idxs]
-        energies = [data[idx]["energy"] for idx in idxs]
-        durations = [data[idx]["duration"] for idx in idxs]
-        phon_aligns = [data[idx]["phon_align"] for idx in idxs]
-        aus = [data[idx]["au"] for idx in idxs]
-
-        text_lens = np.array([text.shape[0] for text in texts])
-        mel_lens = np.array([mel.shape[0] for mel in mels])
-        au_lens = np.array([au.shape[0] for au in aus])
-
-        speakers = np.array(speakers)
-        texts = pad_1D(texts)
-        mels = pad_2D(mels)
-        pitches = pad_1D(pitches)
-        energies = pad_1D(energies)
-        durations = pad_1D(durations)
-        phon_aligns = pad_1D(phon_aligns, -1)
-        # print('avant')
-        # print(len(aus))
-        # print(len(aus[0]))
-        aus = pad_2D_copy_length(aus, mels)
-        # aus = pad_2D(aus)
-        # print('apres')
-        # print(len(aus))
-        # print(len(aus[0]))
-        # print(len(mels[0]))
-        # print('lens au')
-        # print(au_lens)
-        # print('lens mel')
-        # print(mel_lens)
-        # print(aus)
-
-        return (
-            ids,
-            raw_texts,
-            speakers,
-            texts,
-            text_lens,
-            max(text_lens),
-            mels,
-            mel_lens,
-            max(mel_lens),
-            pitches,
-            energies,
-            durations,
-            phon_aligns,
-            aus,
-            au_lens,
-            max(au_lens),
-        )
-
-    def collate_fn(self, data):
-        data_size = len(data)
-
-        if self.sort:
-            len_arr = np.array([d["text"].shape[0] for d in data])
-            idx_arr = np.argsort(-len_arr)
-        else:
-            idx_arr = np.arange(data_size)
-
-        tail = idx_arr[len(idx_arr) - (len(idx_arr) % self.batch_size) :]
-        idx_arr = idx_arr[: len(idx_arr) - (len(idx_arr) % self.batch_size)]
-        idx_arr = idx_arr.reshape((-1, self.batch_size)).tolist()
-        if not self.drop_last and len(tail) > 0:
-            idx_arr += [tail.tolist()]
-
-        output = list()
-        for idx in idx_arr:
-            output.append(self.reprocess(data, idx))
-
-        return output
-
+    return styleTag_embedding
 
 class TextDataset(Dataset):
-    def __init__(self, filepath, preprocess_config, mode_batch=False):
+    def __init__(self, filepath, preprocess_config, mode_batch=False, use_bert=False, flaubert=None, flaubert_tokenizer=None, styleTag_encoder_config=None):
         self.cleaners = preprocess_config["preprocessing"]["text"]["text_cleaners"]
 
-        self.basename, self.speaker, self.text, self.raw_text, self.phon_align, self.emotion_label = self.process_meta(
+        self.basename, self.speaker, self.text, self.raw_text, self.phon_align, self.emotion_label, self.style_tag = self.process_meta(
             filepath
         )
 
@@ -233,6 +63,20 @@ class TextDataset(Dataset):
         ) as f:
             self.speaker_map = json.load(f)
 
+        self.use_bert = use_bert
+        self.flaubert = flaubert
+        self.flaubert_tokenizer = flaubert_tokenizer
+
+        if styleTag_encoder_config is not None:
+            self.use_styleTag_encoder = styleTag_encoder_config["use_styleTag_encoder"]
+            self.styleTag_input_dim = styleTag_encoder_config["input_bert_size"]
+        else:
+            self.use_styleTag_encoder = False
+            self.styleTag_input_dim = 0
+
+        self.nbr_gst_tokens = preprocess_config["preprocessing"]["nbr_gst_tokens"]
+        self.styleTag_size = preprocess_config["preprocessing"]["styleTag_size"]
+
     def __len__(self):
         return len(self.text)
 
@@ -247,13 +91,18 @@ class TextDataset(Dataset):
             phon_align = np.array([_out_symbol_to_id.get(s,-1) for s in self.phon_align[idx].split()])
         else:
             phon_align = -1*np.ones(len(phone))
+
+        if self.use_styleTag_encoder:
+            styleTag_embedding = load_free_styleTags_embedding(self.style_tag[idx], self.flaubert, self.flaubert_tokenizer, default_styleTag_emb_size=self.styleTag_size)
+        else:
+            styleTag_embedding = None
             
         if self.emotion_label[idx]:
             emotion_label = int(self.emotion_label[idx])
         else:
-            emotion_label = 13
+            emotion_label = self.nbr_gst_tokens-1
 
-        return (basename, speaker_id, phone, raw_text, phon_align, emotion_label)
+        return (basename, speaker_id, phone, raw_text, phon_align, emotion_label, styleTag_embedding)
 
     def process_meta(self, filename):
         with open(filename, "r", encoding="utf-8") as f:
@@ -263,24 +112,34 @@ class TextDataset(Dataset):
             raw_text = []
             phon_align = []
             emotion_label = []
+            style_tag = []
             for line in f.readlines():
                 nbr_columns = line.strip("\n").count('|') + 1
                 if nbr_columns == 4:
                     n, s, t, r = line.strip("\n").split("|")
                     a = []
                     e = []
+                    s_t = []
                 elif nbr_columns == 5:
                     e = []
+                    s_t = []
                     n, s, t, r, a = line.strip("\n").split("|")
                 elif nbr_columns == 6:
-                    n, s, t, r, a, e = line.strip("\n").split("|")
+                    n, s, t, r, a, style = line.strip("\n").split("|")
+                    if style.isdigit():
+                        e = style
+                        s_t = []
+                    else:
+                        s_t = style
+                        e = []
                 name.append(n)
                 speaker.append(s)
                 text.append(t)
                 raw_text.append(r)
                 phon_align.append(a)
                 emotion_label.append(e)
-            return name, speaker, text, raw_text, phon_align, emotion_label
+                style_tag.append(s_t)
+            return name, speaker, text, raw_text, phon_align, emotion_label, style_tag
 
     def collate_fn(self, data):
         ids = [d[0] for d in data]
@@ -290,27 +149,30 @@ class TextDataset(Dataset):
         text_lens = np.array([text.shape[0] for text in texts])
         phon_aligns = [d[4] for d in data]
         
-        nbr_tokens = 14
         emotion_labels = []
         for d in data:
-            emotion_weights = np.zeros(nbr_tokens)
+            emotion_weights = np.zeros(self.nbr_gst_tokens)
             emotion_weights[d[5]] = 1
             emotion_labels.append(emotion_weights)
+
+        if self.use_styleTag_encoder:
+            styleTag_embs = np.array([d[7] for d in data])
+        else:
+            styleTag_embs = None
 
         texts = pad_1D(texts)
         phon_aligns = pad_1D(phon_aligns, -1)
         # emotion_labels = np.expand_dims(np.array(emotion_labels), axis=1)
         emotion_labels = np.array(emotion_labels)
 
-        return ids, raw_texts, speakers, texts, text_lens, max(text_lens), phon_aligns, emotion_labels
-
+        return ids, raw_texts, speakers, texts, text_lens, max(text_lens), phon_aligns, emotion_labels, styleTag_embs
 
 if __name__ == "__main__":
     # Test
     import torch
     import yaml
     from torch.utils.data import DataLoader
-    from utils.utils import to_device
+    from utils.tools import to_device
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     preprocess_config = yaml.load(

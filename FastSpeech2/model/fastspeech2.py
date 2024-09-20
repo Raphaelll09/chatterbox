@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from transformer import Encoder, Decoder, PostNet, DecoderVisual
-from .modules import VarianceAdaptor, LinearNorm, EmbeddingBias, EmbeddingBiasCategorical, GST, LST
+from .modules import VarianceAdaptor, LinearNorm, EmbeddingBias, EmbeddingBiasCategorical, GST, LST, StyleTagEncoder
 from utils.tools import get_mask_from_lengths
 from scipy.io import loadmat
 
@@ -43,20 +43,21 @@ class FastSpeech2(nn.Module):
 
         # Action Units prediction
         if self.compute_visual_prediction:
+            self.n_au_channels = preprocess_config["preprocessing"]["au"]["n_units"]
             if self.separate_visual_decoder:
                 self.decoder_visual = DecoderVisual(model_config)
                 self.au_linear = nn.Linear(
                     model_config["visual_decoder"]["decoder_hidden"],
-                    preprocess_config["preprocessing"]["au"]["n_units"],
+                    self.n_au_channels,
                 )
             else:
                 self.au_linear = nn.Linear(
                     model_config["transformer"]["decoder_hidden"],
-                    preprocess_config["preprocessing"]["au"]["n_units"],
+                    self.n_au_channels,
                 )
 
             if self.visual_postnet:
-                self.postnet_visual = PostNet(n_mel_channels=preprocess_config["preprocessing"]["au"]["n_units"])
+                self.postnet_visual = PostNet(n_mel_channels=self.n_au_channels)
 
         self.speaker_emb = None
         if model_config["multi_speaker"]:
@@ -76,8 +77,6 @@ class FastSpeech2(nn.Module):
                 n_speaker,
                 model_config["transformer"]["encoder_hidden"],
             )
-        
-        self.save_embeddings_by_layer = model_config["save_embeddings_by_layer"]
 
         self.embedding_bias = EmbeddingBias(model_config)
         self.embedding_bias_categorical = EmbeddingBiasCategorical(model_config)
@@ -91,6 +90,49 @@ class FastSpeech2(nn.Module):
             self.lst = LST(model_config)
             self.add_gst = model_config["lst"]["add_gst"]
             self.lst_scale = model_config["lst"]["scale"]
+
+        self.use_styleTag_encoder = model_config["styleTag_encoder"]["use_styleTag_encoder"]
+        if self.use_styleTag_encoder:
+            self.styleTag_encoder = StyleTagEncoder(model_config)
+
+        self.save_embeddings_by_layer = model_config["save_embeddings_by_layer"]
+
+        self.nbr_gst_tokens = model_config["gst"]["n_style_token"]
+        if self.nbr_gst_tokens == 13:
+            self.list_attitudes = [
+                "COLERE",
+                "DESOLE",
+                "DETERMINE",
+                "ENTHOUSIASTE",
+                "ESPIEGLE",
+                "ETONNE",
+                "EVIDENCE",
+                "INCREDULE",
+                "NEUTRE",
+                "PENSIF",
+                "RECONFORTANT",
+                "SUPPLIANT",
+                "NARRATION",
+            ]
+        elif self.nbr_gst_tokens == 16:
+            self.list_attitudes = [
+                "COLERE",
+                "DESOLE",
+                "DETERMINE",
+                "ENTHOUSIASTE",
+                "ESPIEGLE",
+                "ETONNE",
+                "EVIDENCE",
+                "INCREDULE",
+                "NEUTRE",
+                "PENSIF",
+                "RECONFORTANT",
+                "SUPPLIANT",
+                "TOKEN13",
+                "TOKEN14",
+                "TOKEN15",
+                "TOKEN16",
+            ]
 
     def forward(
         self,
@@ -108,13 +150,20 @@ class FastSpeech2(nn.Module):
         au_targets=None,
         au_lens=None,
         max_au_len=None,
+        lips_aperture_targets=None,
+        lips_spreading_targets=None,
         emotion_vector=None,
+        styleTags=None,
+        bert_embs=None,
         inference_gst_token_vector=None,
         p_control=0.0,
         e_control=0.0,
         d_control=1.0,
+        la_control=0.0,
+        ls_control=0.0,
         control_bias_array=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         categorical_control_bias_array=[0.0, 0.0],
+        styleTag_embedding=None,
     ):
 
         src_masks = get_mask_from_lengths(src_lens, max_src_len)
@@ -124,23 +173,51 @@ class FastSpeech2(nn.Module):
             else None
         )
         au_masks = (
-            get_mask_from_lengths(au_lens, max_mel_len)
+            get_mask_from_lengths(au_lens, max_au_len)
             if au_lens is not None
             else None
         )
+
+        if self.use_styleTag_encoder and styleTag_embedding is not None:
+            styleTag_embeddings = self.styleTag_encoder(styleTag_embedding)
+        else:
+            styleTag_embeddings = None
 
         output, enc_output_by_layer = self.encoder(texts, src_masks, control_bias_array=control_bias_array, categorical_control_bias_array=categorical_control_bias_array)
         
         # GST
         if self.use_gst:
-            style_embedding, gst_token_attention_scores, unnormalized_gst_token_attention_scores = self.gst(mels, mel_lens, inference_gst_token_vector)
-            #print(style_embedding.shape)
-            #print(gst_token_attention_scores.shape)
-            #print(output.shape)
-            
-            style_emb_output = style_embedding.expand(
-                -1, max_src_len, -1
-            )
+            if styleTag_embeddings is not None:
+                styleTag_embeddings_after_GST, attention_scores_styleTag = self.gst.inference_from_ref_embedding(styleTag_embeddings)
+
+                style_emb_output = styleTag_embeddings_after_GST.expand(
+                    -1, max_src_len, -1
+                )
+
+                style_embeddings = None
+                gst_token_attention_scores = None
+                unnormalized_gst_token_attention_scores = None
+                gst_tokens = None
+                gst_tokens_values = None
+
+                # print("---- GST Distribution ----")
+                # for score_attitude, attitude in zip(np.array(attention_scores_styleTag)[0, :, 0], self.list_attitudes):
+                #     formatted_score_attitude = "{:.2f}".format(score_attitude)
+                #     print(f"{attitude}: {formatted_score_attitude}")
+            else:
+                style_embeddings, gst_token_attention_scores, unnormalized_gst_token_attention_scores, _, gst_tokens, gst_tokens_values = self.gst(mels, mel_lens, au_targets, au_lens, inference_gst_token_vector)
+
+                style_emb_output = style_embeddings.expand(
+                    -1, max_src_len, -1
+                )
+
+                styleTag_embeddings_after_GST = None
+                attention_scores_styleTag = None
+
+                # print("---- GST Distribution ----")
+                # for score_attitude, attitude in zip(np.array(gst_token_attention_scores)[0, :, 0], self.list_attitudes):
+                #     formatted_score_attitude = "{:.2f}".format(score_attitude)
+                #     print(f"{attitude}: {formatted_score_attitude}")
 
             if self.use_lst and self.add_gst:
                 output = output + style_emb_output
@@ -149,21 +226,25 @@ class FastSpeech2(nn.Module):
         else:
             gst_token_attention_scores = None
             unnormalized_gst_token_attention_scores = None
+            gst_tokens = None
+            gst_tokens_values = None
+            attention_scores_styleTag = None
 
         if self.speaker_emb is not None:
             output = output + self.speaker_emb(speakers).unsqueeze(1).expand(
                 -1, max_src_len, -1
             )
-            if self.save_embeddings_by_layer and not self.training:
+            if self.save_embeddings_by_layer:
                 enc_output_by_layer = torch.cat((enc_output_by_layer, output.unsqueeze(0)), 0)
         else:
-            if self.save_embeddings_by_layer and not self.training:
+            if self.save_embeddings_by_layer:
                 enc_output_by_layer = torch.cat((enc_output_by_layer, enc_output_by_layer[-1, :, :, :].unsqueeze(0)), 0)
-            
-        if not self.training:
+        
+        if control_bias_array != [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]:
             # Add Embedding Bias layer 7
             output = self.embedding_bias.layer_control(output, control_bias_array, 7)
 
+        if categorical_control_bias_array != [0.0, 0.0]:
             # Add Categorical Embedding Bias layer 7
             output = self.embedding_bias_categorical.layer_control_on_patterns(output, categorical_control_bias_array, 7, texts)
 
@@ -202,6 +283,10 @@ class FastSpeech2(nn.Module):
             d_rounded,
             mel_lens,
             mel_masks,
+            lips_aperture_predictions,
+            lips_spreading_predictions,
+            au_lens,
+            au_masks,
             output_by_layer_variance_adaptor,
             pitch_embeddings,
             pitch_bins,
@@ -217,9 +302,17 @@ class FastSpeech2(nn.Module):
             e_control,
             d_control,
             control_bias_array,
+            texts,
+            speakers,
+            au_masks,
+            max_au_len,
+            lips_aperture_targets,
+            lips_spreading_targets,
+            la_control,
+            ls_control,
         )
 
-        if self.save_embeddings_by_layer and not self.training:
+        if self.save_embeddings_by_layer:
             enc_output_by_layer = torch.cat((enc_output_by_layer, output_by_layer_variance_adaptor), 0)
         
         output, mel_masks, dec_output_by_layer = self.decoder(output, mel_masks)
@@ -227,12 +320,12 @@ class FastSpeech2(nn.Module):
         # Action Units prediction
         if self.compute_visual_prediction:
             if self.separate_visual_decoder:
-                output_au, au_masks, visual_dec_output_by_layer = self.decoder_visual(output_au, mel_masks)
+                output_au, au_masks, visual_dec_output_by_layer = self.decoder_visual(output_au, au_masks)
                 output_au = self.au_linear(output_au)
             else:
                 output_au = self.au_linear(output)
 
-            if self.save_embeddings_by_layer and not self.training:    
+            if self.save_embeddings_by_layer:    
                 au_output_by_layer = output_au.unsqueeze(0)
             else:
                 au_output_by_layer = None
@@ -241,12 +334,12 @@ class FastSpeech2(nn.Module):
                 postnet_output_au, postnet_output_by_layer_au = self.postnet_visual(output_au)
                 postnet_output_au = postnet_output_au + output_au
 
-                if self.save_embeddings_by_layer and not self.training:
+                if self.save_embeddings_by_layer:
                     au_output_by_layer = torch.cat((au_output_by_layer, postnet_output_au.unsqueeze(0)), 0)
             else:
                 postnet_output_au = None
                 postnet_output_by_layer_au = None
-                if self.save_embeddings_by_layer and not self.training:
+                if self.save_embeddings_by_layer:
                     au_output_by_layer = torch.cat((au_output_by_layer, au_output_by_layer[-1, :, :, :].unsqueeze(0)), 0)
         else:
             output_au = None
@@ -257,7 +350,7 @@ class FastSpeech2(nn.Module):
             au_masks = None
 
         output = self.mel_linear(output)
-        if self.save_embeddings_by_layer and not self.training:
+        if self.save_embeddings_by_layer:
             mel_output_by_layer = output.unsqueeze(0)
         else:
             mel_output_by_layer = None
@@ -265,7 +358,7 @@ class FastSpeech2(nn.Module):
         postnet_output, postnet_output_by_layer = self.postnet(output)
         postnet_output = postnet_output + output
 
-        if self.save_embeddings_by_layer and not self.training:
+        if self.save_embeddings_by_layer:
             mel_output_by_layer = torch.cat((mel_output_by_layer, postnet_output.unsqueeze(0)), 0)
 
         return (
@@ -285,9 +378,17 @@ class FastSpeech2(nn.Module):
             phon_outputs,
             output_au,
             postnet_output_au,
+            lips_aperture_predictions,
+            lips_spreading_predictions,
             au_masks,
             au_lens,
             gst_token_attention_scores,
             unnormalized_gst_token_attention_scores,
             lst_token_attention_scores,
+            gst_tokens,
+            gst_tokens_values,
+            style_embeddings,
+            styleTag_embeddings,
+            styleTag_embeddings_after_GST,
+            attention_scores_styleTag
         )

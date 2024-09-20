@@ -6,9 +6,26 @@ import numpy as np
 
 from model import FastSpeech2, ScheduledOptim
 
+from transformers import FlaubertModel, FlaubertTokenizer
 
-def get_model(args, configs, device, train=False, mode_batch=False):
+def get_model(args, configs, device, train=False, mode_batch=False, use_bert=False):
     (preprocess_config, model_config, train_config) = configs
+
+    if use_bert:
+        # Load FlauBERT pre-trained model
+        modelname = './flaubert/flaubert_large_cased'
+
+        print("Loading of FlauBERT")
+        # Load pretrained model and tokenizer
+        flaubert, log = FlaubertModel.from_pretrained(modelname, output_loading_info=True)
+        flaubert_tokenizer = FlaubertTokenizer.from_pretrained(modelname, do_lowercase=True)
+        print("FlauBERT loaded")
+
+        flaubert.requires_grad_ = False
+        flaubert_tokenizer.requires_grad_ = False
+    else:
+        flaubert = None
+        flaubert_tokenizer = None
 
     model = FastSpeech2(preprocess_config, model_config, mode_batch).to(device)
     if args.restore_step:
@@ -36,8 +53,7 @@ def get_model(args, configs, device, train=False, mode_batch=False):
     model.eval()
     # model.train()
     model.requires_grad_ = False
-    return model
-
+    return model, flaubert, flaubert_tokenizer
 
 def get_param_num(model):
     num_param = sum(param.numel() for param in model.parameters())

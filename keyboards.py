@@ -14,16 +14,16 @@ keys = {
             ("F", "f"), ("S", "s"), ("CH", "s^"), ("U", "y"), ("OU", "u"), ("▶", "play_and_clear", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard"]), ("C", "clear", ["ent_text_input", "entry_text_keyboard"])
         ],
         [
-            ("V", "v"), ("Z", "z"), ("J", "z^"), ("I", "i"), ("O", "o"), ("/", "suppr", ["ent_text_input", "entry_text_keyboard"])
+            ("V", "v"), ("Z", "z"), ("J", "z^"), ("I", "i"), ("O", "o"), ("/", "suppr", ["ent_text_input", "entry_text_keyboard"]), (":D", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 3])
         ],
         [
-            ("P", "p"), ("T", "t"), ("K", "k"), ("Y", "j"), ("EU", "x^"), ("ON", "o~")
+            ("P", "p"), ("T", "t"), ("K", "k"), ("Y", "j"), ("EU", "x^"), ("ON", "o~"), (":p", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 4])
         ],
         [
-            ("B", "b"), ("D", "d"), ("G", "g"), ("R", "r"), ("É", "e"), ("IN", "e~")
+            ("B", "b"), ("D", "d"), ("G", "g"), ("R", "r"), ("É", "e"), ("IN", "e~"), (":(", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 1])
         ],
         [
-            ("M", "m"), ("N", "n"), ("L", "l"), (",", "}, {"), ("A", "a"), ("AN", "a~")
+            ("M", "m"), ("N", "n"), ("L", "l"), (",", "}, {"), ("A", "a"), ("AN", "a~"), (":O", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 5])
         ],
     ]
 }
@@ -33,8 +33,14 @@ def play_and_clear(args):
     tts_global_conf=args[0]
     # ~ audio_utils.syn_audio(is_gui, tts_global_conf)
     audio_utils.syn_audio(is_gui, tts_global_conf, gui_control=gui_utils.get_gui_controls())
-    # ~ args[1].delete(0, 'end')
-    # ~ args[2]["text"] = ""
+    args[1].delete(0, 'end')
+
+    clear(args[1:3])
+
+def play_and_clear_with_style(args):
+    args[3].set(args[4])
+    play_and_clear(args[0:3])
+    args[3].set(8)
     
 def clear(args):
     args[0].delete(0, 'end')
