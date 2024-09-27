@@ -1,9 +1,9 @@
 # Ignore entries in TTS interface repo
 __pycache__/
 *.AU
-*.wav
 *.zip
 *.vtt
+audio_file.wav
 audio_file_duration_alignment.json
 
 # Ignore dataset, models and training script in FastSpeech2
@@ -25,3 +25,6 @@ Waveglow/*.txt
 
 # Ignore models in FlauBERT
 flaubert/flaubert_large_cased/pytorch_model.bin
+
+# Ignore Virtual Env
+python3.11.1_embedded_tts/

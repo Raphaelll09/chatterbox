@@ -11,6 +11,8 @@ GUI_config:
   keyboard_options:
     name_window: "Keyboard"
     keys: "Emmanuelle"
+    show_entry: False
+    play_phone: True
     font_size: 24
     width: 800
     height: 440

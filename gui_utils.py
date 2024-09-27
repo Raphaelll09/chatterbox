@@ -9,8 +9,18 @@ Created on Thu Jul 21 14:29:50 2022
 import os
 import json
 import yaml
+import platform
 import tkinter as tk
 import tkinter.font as font
+
+# Get the current OS
+current_os = platform.system() 
+# Optionally, you can print the OS
+if current_os == "Windows":
+    import simpleaudio as sa
+else:
+    from pydub import AudioSegment
+    from pydub.playback import play
 
 import loading_modules
 import tts_utils
@@ -28,8 +38,11 @@ def create_keyboard(key_board_options, entry):
     window_keyboard.title(key_board_options["name_window"])
     window_keyboard.geometry("{}x{}".format(key_board_options["width"], key_board_options["height"]))
 
-    # ~ lbl_text_keyboard = tk.Label(master=window_keyboard, text="", width=45, anchor='w')
-    entry_text_keyboard = tk.Entry(master=window_keyboard, width=44, state='readonly')
+    # Check if the entry text box should be shown
+    if key_board_options.get("show_entry", True):
+        entry_text_keyboard = tk.Entry(master=window_keyboard, width=44, state='readonly')
+    else:
+        entry_text_keyboard = None  # Set to None if hidden
     
     max_width_keyboard = 0
 
@@ -46,7 +59,10 @@ def create_keyboard(key_board_options, entry):
                     master=window_keyboard, 
                     text=key_label,
                     font=myFont,
-                    command= lambda current_phon=key_phon, current_label=key_label: [entry.insert("end", "{} ".format(current_phon)), entry_readonly_insert(entry_text_keyboard, current_label)]
+                    command= lambda current_phon=key_phon, current_label=key_label: [
+                        entry.insert("end", "{} ".format(current_phon)), 
+                        entry_readonly_insert(entry_text_keyboard, current_label, key_board_options) if entry_text_keyboard else play_prerecorded_phone(current_label, key_board_options)
+                    ]
                 )
             else:
                 # Special Case: keys plays functions with specific entries (entries need to be in the global scope)
@@ -66,9 +82,11 @@ def create_keyboard(key_board_options, entry):
                 )
             current_button.grid(row=i_line+1, column=i_key, sticky=tk.NSEW)
 
-    entry_text_keyboard['font'] = myFont
-    entry_text_keyboard.grid(row=0, column=0, columnspan = max_width_keyboard+1, sticky=tk.W)
-    entry_text_keyboard.grid_propagate(False)
+    # Conditionally display the entry widget if the option is enabled
+    if entry_text_keyboard:
+        entry_text_keyboard['font'] = myFont
+        entry_text_keyboard.grid(row=0, column=0, columnspan = max_width_keyboard+1, sticky=tk.W)
+        entry_text_keyboard.grid_propagate(False)
     return window_keyboard
 
 def create_gui(tts_config, device, default_tts, default_vocoder):
@@ -199,11 +217,28 @@ def label_insert(label, insert):
     current_text = label.cget("text")
     label["text"] = "{} {} ".format(current_text, insert)
 
-def entry_readonly_insert(entry, insert):
+def entry_readonly_insert(entry, insert, key_board_options):
     entry['state'] = 'normal'
     entry.insert("end", "{} ".format(insert))
     entry.xview_moveto(1)
     entry['state'] = 'readonly'
+
+    # Play sound
+    play_prerecorded_phone(insert, key_board_options)
+
+def play_prerecorded_phone(phone, keyboard_config):
+    if keyboard_config["play_phone"]:
+        # Play the preloaded audio file
+        audio_file_path = os.path.join("audio_keyboards", keyboard_config["keys"], f"{phone}.wav")
+        # Get the current OS
+        current_os = platform.system() 
+        # Optionally, you can print the OS
+        if current_os == "Windows":
+            wave_obj = sa.WaveObject.from_wave_file(audio_file_path)
+            play_obj = wave_obj.play()
+        else:
+            audio = AudioSegment.from_wav(audio_file_path)
+            play(audio)
     
 def select_model_from_list(id_button, list_buttons):
     # Reset background of all buttons

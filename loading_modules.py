@@ -73,7 +73,7 @@ def load_hifigan(vocoder_model, device):
     VOCODER_PATH = os.path.join(model_folder, model_ckpt)
     
     # Load model
-    VOCODER_MODEL = torch.load(VOCODER_PATH, map_location=device)
+    VOCODER_MODEL = torch.load(VOCODER_PATH, map_location=device, weights_only=False)
     GENERATOR = Generator(H).to(device)
     GENERATOR.load_state_dict(VOCODER_MODEL['generator'])
     GENERATOR.eval()
@@ -90,7 +90,7 @@ def load_waveglow(vocoder_model, device):
     
     # Parameter Waveglow
     VOCODER_PATH = os.path.join(model_folder, model_ckpt)
-    VOCODER_MODEL = torch.load(VOCODER_PATH, map_location=device)['model']
+    VOCODER_MODEL = torch.load(VOCODER_PATH, map_location=device, weights_only=False)['model']
     VOCODER_MODEL = VOCODER_MODEL.remove_weightnorm(VOCODER_MODEL)
     VOCODER_MODEL.eval()
     print("Vocoder {}/{} loaded".format(model_folder, model_ckpt))

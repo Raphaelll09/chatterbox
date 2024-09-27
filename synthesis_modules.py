@@ -126,6 +126,9 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
     # Handling StyleTag
     if styleTag_from_text is not None:
         styleTag = styleTag_from_text
+    else:
+        styleTag = "NEUTRE"
+
     styleTag_emb = preprocess_styleTag(styleTag, use_styleTag_encoder=configs[1]["styleTag_encoder"]["use_styleTag_encoder"])
 
     if args["silence_control_bias"]:

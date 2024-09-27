@@ -68,5 +68,5 @@ if __name__ == "__main__":
         vocoder_loading_script(default_vocoder, device)
         
         while True:
-            txt_input = input("Input Text: ")
+            txt_input = input("Input Text (Ctrl+C to exit): ")
             audio_utils.syn_audio(False, tts_config, txt_input)

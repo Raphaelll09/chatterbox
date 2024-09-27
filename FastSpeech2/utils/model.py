@@ -38,8 +38,8 @@ def get_model(args, configs, device, train=False, mode_batch=False, use_bert=Fal
             config_train_path,
             "{}.pth.tar".format(args.restore_step),
         )
-        ckpt = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(ckpt["model"])
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"], strict=False) # avoid error when not loading the BERT for styleTag
 
     if train:
         scheduled_optim = ScheduledOptim(

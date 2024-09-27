@@ -6,6 +6,25 @@ Cette interface permet de générer des synthèses en temps réel en combinant u
 
 L'installation a été testée dans les environnements python 3.8 et 3.10. Le document compressé contient déjà les modèles pré-entrainés. Le fichier de configuration est adapté à ces modèles.
 
+## Créer un environnement virtuel
+
+Créer l'environnement
+
+```
+python.exe -m venv python3.11.1_embedded_tts
+```
+
+Activer l'environnement
+```
+python3.11.1_embedded_tts\Scripts\activate
+```
+
+Mettre à jour pip et les dépendances de base
+```
+python.exe -m pip install --upgrade pip
+pip install --upgrade setuptools
+```
+
 ## Dependencies
 Le fichier requirements.txt permet d'installer les packages nécessaires.
 ```
@@ -20,7 +39,7 @@ pip3 install python3-tk
 ## Modèles pré-entrainés et configuration
 Pour utiliser les modèles pré-entrainés FastSpeech2, FlauBERT, HiFi-GAN et Waveglow, téléchargez les depuis les liens Google Drive suivants :
 - [FastSpeech2](https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing) : Téléchargez et dézippez les trois archives (config, output et preprocessed_data) dans le dossier FastSpeech2
-- [FlauBERT](https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing) : Téléchargez le modèle et placez le dans flaubert/flaubert_large_case
+- [FlauBERT](https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing) : Téléchargez et dézipper le modèle et les fichiers de configuration dans flaubert/flaubert_large_case
 - [HiFi-GAN](https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing) : Téléchargez et dézippez l'archive FR_V2 dans hifi-gan-master
 - [Waveglow](https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing) : Téléchargez le modèle et placez le dans Waveglow
 

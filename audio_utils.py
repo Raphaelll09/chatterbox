@@ -10,6 +10,15 @@ import time
 import codecs
 import math
 import json
+import shutil
+# import tempfile
+import platform
+
+# Get the current OS
+current_os = platform.system() 
+# Optionally, you can print the OS
+if current_os == "Windows":
+    import simpleaudio as sa
 
 import noisereduce as nr
 import numpy as np
@@ -201,8 +210,8 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     # Patch for .AU
     path_au = os.path.join(tts_config['tts_models'][TTS_INDEX]["folder"], tts_config['tts_models'][TTS_INDEX]["output_location"], "audio_file.AU")
     if os.path.exists(path_au):
-        cmd = "cp {} ./".format(path_au)
-        os.system(cmd)
+        # Copy file in a platform-independent way
+        shutil.copy(path_au, "./")  # Copy to current directory
     
     # Update audio infos
     AUDIO_EXAMPLE = AudioSegment.from_wav("{}.wav".format(location_wav_file))
@@ -224,13 +233,34 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
         print("Denoise duration: {:.3f}s | {:.0f}% of audio".format(end_denoise-start_denoise, 100*(end_denoise-start_denoise)/audio_duration))
     
     # Play Audio
-    play(AUDIO_EXAMPLE)
+    # play(AUDIO_EXAMPLE)
+    play_audio()
     
 def play_audio():
     """play generated audio
     """
     # Play Audio
-    play(AUDIO_EXAMPLE)
+    # Get the current OS
+    current_os = platform.system() 
+    # Optionally, you can print the OS
+    if current_os == "Windows": # memory issue on Windows
+        # Extract raw audio data from the AudioSegment
+        audio_data = AUDIO_EXAMPLE.raw_data
+        
+        # Set up the wave parameters needed for simpleaudio
+        num_channels = AUDIO_EXAMPLE.channels
+        bytes_per_sample = AUDIO_EXAMPLE.sample_width
+        sample_rate = AUDIO_EXAMPLE.frame_rate
+
+        # Create a WaveObject using the raw data and the audio parameters
+        wave_obj = sa.WaveObject(audio_data, num_channels, bytes_per_sample, sample_rate)
+        
+        # Play the audio
+        play_obj = wave_obj.play()
+        play_obj.wait_done()
+        play_obj.stop()
+    else:
+        play(AUDIO_EXAMPLE)
 
 def butter_lowpass_filter(data, cutoff, fs, order):
     nyq = 0.5 * fs  # Nyquist Frequency
