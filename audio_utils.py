@@ -43,6 +43,9 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     VOCODER_INDEX = getattr(tts_utils, "VOCODER_INDEX")
     
     if use_gui:
+        canvas_circle, canvas_circle_figure = gui_utils.get_canvas_circle()
+        gui_utils.update_circle_color("yellow", canvas_circle, canvas_circle_figure)
+
         ent_text_input = getattr(gui_utils, "ent_text_input")
         text_to_syn = ent_text_input.get()
     else:
@@ -221,6 +224,7 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     denoiser_inference_duration = end_denoise-start_denoise
     
     if use_gui:
+        gui_utils.update_circle_color("green", canvas_circle, canvas_circle_figure)
         gui_utils.update_audio_infos(audio_duration, tts_inference_duration, vocoder_inference_duration, denoiser_inference_duration)
         
         path_gst_weights = os.path.join(tts_config['tts_models'][TTS_INDEX]["folder"], tts_config['tts_models'][TTS_INDEX]["output_location"], "audio_file_styleTag_gst_weight.mat")
@@ -235,6 +239,7 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     # Play Audio
     # play(AUDIO_EXAMPLE)
     play_audio()
+    gui_utils.update_circle_color("gray", canvas_circle, canvas_circle_figure)
     
 def play_audio():
     """play generated audio

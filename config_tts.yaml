@@ -3,19 +3,27 @@ GUI_config:
   main_panel:
     name_window: "TTS"
     add_audio_infos: True
-    add_GST_infos: True
+    add_GST_infos: False
+    add_play_button: False
     # width: 800
-    width: 1000
+    width: 440
     height: 800
+    input_width: 30
+    control_width: 440
+    control_height: 400
   add_keyboard: True
+  detach_keyboard: False
   keyboard_options:
     name_window: "Keyboard"
     keys: "Emmanuelle"
     show_entry: False
-    play_phone: True
-    font_size: 24
-    width: 800
-    height: 440
+    play_phone: False
+    font_size: 12
+    width: 350
+    height: 250
+    key_margin_x: 5  # Horizontal padding between keys
+    key_margin_y: 5  # Vertical padding between keys
+    max_button_width: 3 # Maximum button width (affects how wide the keyboard can get)
 
 default_start_punctuation: "."
 default_end_punctuation: "."
@@ -58,7 +66,7 @@ tts_models:
     }
     gui_control_bias: False
     gui_style_control: True
-    gui_styleTag_control: True
+    gui_styleTag_control: False
     default_args:
       text_cleaners: ["basic_cleaners"]
       preprocess_config: "config/ALL_corpus/preprocess.yaml"
@@ -97,18 +105,18 @@ vocoder_models:
     config_path: "FR_V2/config.json"
     output_location: "./"
 
-  - label: "Waveglow NEB"
-    load_script: "load_waveglow"
-    syn_script: "syn_waveglow"
-    folder: "Waveglow"
-    checkpoint_file: "waveglow_NEB.pt"
-    output_location: "./"
-    default_args:
-      filelist_path: "fastspeech2.txt"
-      sigma: 0.6
-      sampling_rate: 22050
-      is_fp16: False
-      denoiser_strengh: 0.0
-      speed_factor: 1.0
-      gain: 0.0
-      negative_gain: 0.0
+  # - label: "Waveglow NEB"
+  #   load_script: "load_waveglow"
+  #   syn_script: "syn_waveglow"
+  #   folder: "Waveglow"
+  #   checkpoint_file: "waveglow_NEB.pt"
+  #   output_location: "./"
+  #   default_args:
+  #     filelist_path: "fastspeech2.txt"
+  #     sigma: 0.6
+  #     sampling_rate: 22050
+  #     is_fp16: False
+  #     denoiser_strengh: 0.0
+  #     speed_factor: 1.0
+  #     gain: 0.0
+  #     negative_gain: 0.0
