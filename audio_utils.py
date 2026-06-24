@@ -15,10 +15,15 @@ import shutil
 import platform
 
 # Get the current OS
-current_os = platform.system() 
+current_os = platform.system()
 # Optionally, you can print the OS
 if current_os == "Windows":
-    import simpleaudio as sa
+    try:
+        import simpleaudio as sa
+        _HAS_SIMPLEAUDIO = True
+    except ImportError:
+        import sounddevice as sd
+        _HAS_SIMPLEAUDIO = False
 
 import noisereduce as nr
 import numpy as np
@@ -42,6 +47,7 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     TTS_INDEX = getattr(tts_utils, "TTS_INDEX")
     VOCODER_INDEX = getattr(tts_utils, "VOCODER_INDEX")
     
+    canvas_circle, canvas_circle_figure = None, None
     if use_gui:
         canvas_circle, canvas_circle_figure = gui_utils.get_canvas_circle()
         gui_utils.update_circle_color("yellow", canvas_circle, canvas_circle_figure)
@@ -193,6 +199,31 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
         )
         wavfile.write("{}.wav".format(location_wav_file), rate, reduced_noise)
 
+    # ------------------------------------------------------------------ #
+    # Optional post-processing: peak normalisation + soft limiter          #
+    # Configured via config_tts.yaml postprocess section or CLI flags.     #
+    # ------------------------------------------------------------------ #
+    _pp_cfg = tts_config.get("postprocess", {})
+    if _pp_cfg.get("enabled", False):
+        import audio_postprocess as _app
+        _pp_rate, _pp_data = wavfile.read("{}.wav".format(location_wav_file))
+        _pp_out, _pp_report = _app.normalize_and_limit(
+            _pp_data,
+            _pp_rate,
+            target_crest_db=float(_pp_cfg.get("target_crest_db", 14.0)),
+            target_peak_dbfs=float(_pp_cfg.get("target_peak_dbfs", -1.0)),
+        )
+        wavfile.write("{}.wav".format(location_wav_file), _pp_rate, _pp_out)
+        _app.print_report(_pp_report)
+
+    if _pp_cfg.get("analyze", False):
+        import audio_postprocess as _app
+        _app.report_wav(
+            "{}.wav".format(location_wav_file),
+            save_json=True,
+            save_figure=True,
+        )
+
     if tts_config["visual_smoothing"]["activate"]:
         shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count = 4, dtype = np.int32))
         au_len = shape_au[0]
@@ -251,19 +282,26 @@ def play_audio():
     if current_os == "Windows": # memory issue on Windows
         # Extract raw audio data from the AudioSegment
         audio_data = AUDIO_EXAMPLE.raw_data
-        
-        # Set up the wave parameters needed for simpleaudio
+
+        # Set up the wave parameters needed for audio playback
         num_channels = AUDIO_EXAMPLE.channels
         bytes_per_sample = AUDIO_EXAMPLE.sample_width
         sample_rate = AUDIO_EXAMPLE.frame_rate
 
-        # Create a WaveObject using the raw data and the audio parameters
-        wave_obj = sa.WaveObject(audio_data, num_channels, bytes_per_sample, sample_rate)
-        
-        # Play the audio
-        play_obj = wave_obj.play()
-        play_obj.wait_done()
-        play_obj.stop()
+        if _HAS_SIMPLEAUDIO:
+            wave_obj = sa.WaveObject(audio_data, num_channels, bytes_per_sample, sample_rate)
+            play_obj = wave_obj.play()
+            play_obj.wait_done()
+            play_obj.stop()
+        else:
+            import numpy as np
+            dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
+            dtype = dtype_map.get(bytes_per_sample, np.int16)
+            audio_np = np.frombuffer(audio_data, dtype=dtype)
+            if num_channels > 1:
+                audio_np = audio_np.reshape(-1, num_channels)
+            sd.play(audio_np, samplerate=sample_rate)
+            sd.wait()
     else:
         play(AUDIO_EXAMPLE)
 

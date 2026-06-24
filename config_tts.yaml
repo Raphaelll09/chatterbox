@@ -1,5 +1,5 @@
 GUI_config:
-  online_phon_input: True
+  online_phon_input: False
   main_panel:
     name_window: "TTS"
     add_audio_infos: True
@@ -16,7 +16,7 @@ GUI_config:
   keyboard_options:
     name_window: "Keyboard"
     keys: "Emmanuelle"
-    show_entry: False
+    show_entry: True
     play_phone: False
     font_size: 12
     width: 350
@@ -24,6 +24,14 @@ GUI_config:
     key_margin_x: 5  # Horizontal padding between keys
     key_margin_y: 5  # Vertical padding between keys
     max_button_width: 3 # Maximum button width (affects how wide the keyboard can get)
+
+# Post-processing: peak normalisation + feedforward soft limiter.
+# Override at runtime with --postprocess / --no-postprocess --target-crest-db N --target-peak-dbfs N
+postprocess:
+  enabled: false          # safe default — preserves original behaviour
+  target_crest_db: 14.0   # target active crest factor (dB); 14 dB ≈ typical broadcast speech
+  target_peak_dbfs: -1.0  # final peak level (dBFS)
+  analyze: false          # if true, also write .report.json and .report.png per synthesis
 
 default_start_punctuation: "."
 default_end_punctuation: "."

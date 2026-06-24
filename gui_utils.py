@@ -14,10 +14,16 @@ import tkinter as tk
 import tkinter.font as font
 
 # Get the current OS
-current_os = platform.system() 
+current_os = platform.system()
 # Optionally, you can print the OS
 if current_os == "Windows":
-    import simpleaudio as sa
+    try:
+        import simpleaudio as sa
+        _HAS_SIMPLEAUDIO = True
+    except ImportError:
+        import sounddevice as sd
+        import soundfile as sf
+        _HAS_SIMPLEAUDIO = False
 else:
     from pydub import AudioSegment
     from pydub.playback import play
@@ -268,8 +274,13 @@ def play_prerecorded_phone(phone, keyboard_config):
         current_os = platform.system() 
         # Optionally, you can print the OS
         if current_os == "Windows":
-            wave_obj = sa.WaveObject.from_wave_file(audio_file_path)
-            play_obj = wave_obj.play()
+            if _HAS_SIMPLEAUDIO:
+                wave_obj = sa.WaveObject.from_wave_file(audio_file_path)
+                wave_obj.play()
+            else:
+                data, samplerate = sf.read(audio_file_path)
+                sd.play(data, samplerate)
+                sd.wait()
         else:
             audio = AudioSegment.from_wav(audio_file_path)
             play(audio)
