@@ -43,11 +43,62 @@ if __name__ == "__main__":
         default=0,
         help="Use first Vocoder as default",
     )
+    parser.add_argument(
+        "--postprocess",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable audio post-processing (peak normalisation + soft limiter). "
+             "Overrides config_tts.yaml postprocess.enabled.",
+    )
+    parser.add_argument(
+        "--target-crest-db",
+        type=float,
+        default=None,
+        metavar="DB",
+        help="Target active crest factor in dB (default: 14.0). Requires --postprocess.",
+    )
+    parser.add_argument(
+        "--target-peak-dbfs",
+        type=float,
+        default=None,
+        metavar="DBFS",
+        help="Target output peak in dBFS (default: -1.0). Requires --postprocess.",
+    )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        default=False,
+        help="Print a crest-factor / loudness report for each synthesised .wav.",
+    )
+    parser.add_argument(
+        "--report-wav",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Analyse an existing .wav file and exit (no synthesis).",
+    )
     args = parser.parse_args()
-    
+
+    # --report-wav: standalone analysis, no synthesis required
+    if args.report_wav is not None:
+        import audio_postprocess as _app
+        _app.report_wav(args.report_wav, save_json=True, save_figure=True)
+        raise SystemExit(0)
+
     tts_config = yaml.load(
         open(args.config, "r"), Loader=yaml.FullLoader
     )
+
+    # Merge CLI post-processing flags into tts_config
+    pp = tts_config.setdefault("postprocess", {})
+    if args.postprocess is not None:
+        pp["enabled"] = args.postprocess
+    if args.target_crest_db is not None:
+        pp["target_crest_db"] = args.target_crest_db
+    if args.target_peak_dbfs is not None:
+        pp["target_peak_dbfs"] = args.target_peak_dbfs
+    if args.analyze:
+        pp["analyze"] = True
     
     if args.gui:
         gui_config = tts_config['GUI_config']
