@@ -75,6 +75,10 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
     args = tts_config["default_args"].copy()
     nbr_gst_tokens = len([*tts_config["gst_token_list"]])
 
+    # Default: empty styleTag → preprocess_styleTag returns None → model uses
+    # inference_gst_token_vector (the GUI-selected emotion token).
+    styleTag = ""
+
     if not (gui_control is None):
         args['speaker_id'] = gui_control[0]
         args['pitch_control'] = gui_control[1]
@@ -123,11 +127,11 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
     # Get preloaded parameters
     configs = getattr(loading_modules, "CONFIGS")
 
-    # Handling StyleTag
+    # Handling StyleTag: text tag takes priority; otherwise keep styleTag as-is.
+    # When styleTag is "" (default or gui_styleTag_control=False), preprocess_styleTag
+    # returns None and the model uses inference_gst_token_vector (GST emotion tokens).
     if styleTag_from_text is not None:
         styleTag = styleTag_from_text
-    else:
-        styleTag = "NEUTRE"
 
     styleTag_emb = preprocess_styleTag(styleTag, use_styleTag_encoder=configs[1]["styleTag_encoder"]["use_styleTag_encoder"])
 
