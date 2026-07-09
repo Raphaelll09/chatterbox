@@ -32,7 +32,7 @@ contents — see the deprecation note at the top of each old file). Neither old 
 3. From the Pi, clone the repo and run the provisioning script:
    ```
    git clone <repo-url> ~/chatterbox
-   cd ~/chatterbox/embedded_tts
+   cd ~/chatterbox
    ./scripts/setup_pi.sh
    ```
 4. `scripts/setup_pi.sh` is idempotent — safe to re-run if a step fails (e.g. a flaky weight

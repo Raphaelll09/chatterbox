@@ -68,7 +68,7 @@ locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, don't ass
   wrong PyPI package — despite an earlier version of this doc saying the opposite,
   `minimal_requirements.txt` is actually the lean, working set (now `requirements-dev.txt`).
 - Pretrained weights are **not in git** — download manually from the Google Drive links in
-  `embedded_tts/README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
+  `README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
   `FR_V2/g_00570000`. `scripts/setup_pi.sh` automates this on a fresh Pi 5.
 - Linux GUI needs `apt-get install python-tk` / `pip3 install python3-tk` in addition to the
   runtime requirements (already in `apt-packages-pi.txt` for the Pi).
@@ -86,6 +86,18 @@ locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, don't ass
 - **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
   per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/context/ARCHITECTURE.md`
   "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
+
+## Testing
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/            # all tests
+.venv/Scripts/python.exe -m pytest tests/test_audio_postprocess.py -k test_no_clipping  # single test
+```
+
+On this checkout, bare `python`/`python3` resolve to the Windows Store stub, not the project
+venv — invoke via `.venv/Scripts/python.exe` (Windows) or activate the venv first. Tests need no
+pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profiling.py`/
+`test_benchmark.py` cover pure-parsing/call-ordering logic with synthesis monkeypatched.
 
 ## Conventions
 

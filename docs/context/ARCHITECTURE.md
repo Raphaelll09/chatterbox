@@ -5,27 +5,28 @@ automatically — read on demand.
 
 ## Repository layout
 
-The real project lives in `embedded_tts/` — treat that as the working root for running scripts,
-tests, and installing dependencies. It bundles three vendored model repos, each with its own
-README/LICENSE, wired together by a thin orchestration layer at the top of `embedded_tts/`:
+The repo root (where `CLAUDE.md` lives) is the working root for running scripts, tests, and
+installing dependencies — there is no nested `embedded_tts/` subfolder inside it. It bundles three
+vendored model repos, each with its own README/LICENSE, wired together by a thin orchestration
+layer at the repo root:
 
-- `embedded_tts/FastSpeech2/` — TTS acoustic model (text → mel-spectrogram + visual/AU params).
+- `FastSpeech2/` — TTS acoustic model (text → mel-spectrogram + visual/AU params).
   Vendored FastSpeech2 fork with custom style/GST (Global Style Token) and StyleTag (FlauBERT-based
   free-text emotion) conditioning, plus per-phoneme prosody "control bias" vectors.
-- `embedded_tts/hifi-gan-master/` — vocoder (mel-spectrogram → waveform). Default vocoder is
+- `hifi-gan-master/` — vocoder (mel-spectrogram → waveform). Default vocoder is
   `FR_V2` (French, fine-tuned on multi-speaker FastSpeech2 mel spectrograms).
-- `embedded_tts/Waveglow/` — alternative vocoder, currently disabled in `config_tts.yaml` (commented
+- `Waveglow/` — alternative vocoder, currently disabled in `config_tts.yaml` (commented
   out under `vocoder_models`).
-- `embedded_tts/flaubert/` — pretrained FlauBERT-large model/tokenizer, loaded whenever the active
+- `flaubert/` — pretrained FlauBERT-large model/tokenizer, loaded whenever the active
   TTS model's `styleTag_encoder.use_styleTag_encoder` is `True` (it is, in the shipped
   `ALL_corpus` config), but only actually run per-utterance when a `<STYLE_TAG=...>` free-text tag
   is present in the input.
 
-Pretrained checkpoints are **not** in git — they're downloaded separately per `embedded_tts/README.md`
+Pretrained checkpoints are **not** in git — they're downloaded separately per `README.md`
 (Google Drive links) and unzipped into `FastSpeech2/{config,output,preprocessed_data}`,
 `flaubert/flaubert_large_cased`, `hifi-gan-master/FR_V2`, and `Waveglow/`. Do not expect the app to
-run end-to-end without these. `embedded_tts/scripts/setup_pi.sh` automates this download/unzip step
-on a fresh Raspberry Pi 5 (see `embedded_tts/INSTALL.md`); Waveglow is skipped by that script since
+run end-to-end without these. `scripts/setup_pi.sh` automates this download/unzip step
+on a fresh Raspberry Pi 5 (see `INSTALL.md`); Waveglow is skipped by that script since
 it's not part of the active pipeline (see below).
 
 ## Synthesis pipeline — four stages
@@ -60,7 +61,7 @@ entry's `load_script` (in `loading_modules.py`). Everything below is orchestrate
 
 Models are swapped from disk files, never held resident as multiple simultaneous instances — this
 keeps memory low enough for CPU-only, embedded-style deployment (see "Performances" in
-`embedded_tts/README.md`: inference ≈ 20% of audio duration on CPU with recommended settings).
+`README.md`: inference ≈ 20% of audio duration on CPU with recommended settings).
 
 ## Global-state loading pattern
 
@@ -78,13 +79,13 @@ Input text can carry synthesis controls inline, parsed by
 `synthesis_modules.parse_params_from_text()`:
 - `<SPEAKER=name>` — override the speaker for the whole utterance (or sub-utterance).
 - `<STYLE=NAME>` — select a GST emotion token (e.g. `COLERE`, `ENTHOUSIASTE`, `NARRATION`, ...; full
-  list in `embedded_tts/README.md`).
+  list in `README.md`).
 - `<STYLE_INTENSITY=0.0-1.0>` — blend weight between the selected style and neutral.
 - `<STYLE_TAG=...>` (free text adjectives) — only honored when the model's `styleTag_encoder` is
   enabled; embedded via FlauBERT instead of a fixed GST index (see stage 1 above).
 - `#word#` — adds emphasis on a word.
 - `{s y z i}` — literal phonetic input for a word (phonetic alphabet documented in
-  `embedded_tts/README.md`, linked to a Zenodo reference).
+  `README.md`, linked to a Zenodo reference).
 - `§` — sub-utterance separator: text is split, each part synthesized independently (as a "linking
   utterance" so prosody/duration matches training), then the mel/`.AU` outputs are concatenated in
   `audio_utils.syn_audio()` before vocoding as a single file.
