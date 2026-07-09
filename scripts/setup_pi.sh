@@ -3,7 +3,7 @@
 # Run this DIRECTLY ON THE PI over SSH, from inside the cloned repo, e.g.:
 #   ssh pi@<pi-host>
 #   git clone <repo-url> ~/chatterbox
-#   cd ~/chatterbox/embedded_tts
+#   cd ~/chatterbox
 #   ./scripts/setup_pi.sh
 #
 # Safe to re-run: every step below checks for existing state before acting (idempotent venv
