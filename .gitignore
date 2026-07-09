@@ -6,6 +6,12 @@ __pycache__/
 audio_file.wav
 audio_file_duration_alignment.json
 
+# Ignore profiling subsystem output (per-run data, not source)
+profile/*.csv
+profile/*.jsonl
+profile/sampler.pid
+profiling/__pycache__/
+
 # Ignore dataset, models and training script in FastSpeech2
 FastSpeech2/__pycache__/
 FastSpeech2/config/

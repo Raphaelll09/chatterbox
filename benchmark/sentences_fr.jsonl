@@ -1,0 +1,10 @@
+{"id":"REF","text":"La bise et le soleil se disputaient, chacun assurant qu'il était le plus fort.","tag":"anchor","word_count":14}
+{"id":"A1","text":"Le chat dort.","tag":"short_plain","word_count":3}
+{"id":"A2","text":"Le petit garçon mange une pomme rouge dans le jardin.","tag":"medium_plain","word_count":10}
+{"id":"A3","text":"Ce matin, je suis allé à la boulangerie du coin pour acheter du pain frais et deux croissants.","tag":"long_plain","word_count":18}
+{"id":"B1","text":"Les anciens amis ont attendu leurs enfants aux alentours.","tag":"liaisons","word_count":9}
+{"id":"B2","text":"La Révolution française a éclaté le quatorze juillet mille sept cent quatre-vingt-neuf, près de Paris.","tag":"number_words","word_count":15}
+{"id":"B3","text":"Attends… es-tu vraiment sûr ? Non, c'est impossible !","tag":"prosody_punct","word_count":7}
+{"id":"B4","text":"Monsieur Lenglet prendra le TGV de la SNCF jusqu'à Grenoble.","tag":"proper_acronym","word_count":10}
+{"id":"C1","text":"Le colis pèse trois virgule cinq kilos, coûte vingt-neuf virgule quatre-vingt-dix-neuf euros et arrivera vers quinze heures quarante-cinq.","tag":"stacked_numbers","word_count":18}
+{"id":"C2","text":"Les poules du couvent couvent, tandis que les fils du tisserand tissent.","tag":"homographs_g2p","word_count":12}

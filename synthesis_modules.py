@@ -15,6 +15,7 @@ import json
 import re
 
 import loading_modules
+import profiling
 from scipy.io import loadmat
 from tqdm import tqdm
 
@@ -133,7 +134,9 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
     if styleTag_from_text is not None:
         styleTag = styleTag_from_text
 
-    styleTag_emb = preprocess_styleTag(styleTag, use_styleTag_encoder=configs[1]["styleTag_encoder"]["use_styleTag_encoder"])
+    profiling_rec = profiling.current()
+    with profiling_rec.stage("front_end"):
+        styleTag_emb = preprocess_styleTag(styleTag, use_styleTag_encoder=configs[1]["styleTag_encoder"]["use_styleTag_encoder"])
 
     if args["silence_control_bias"]:
         rounded_silence_proportion = round(18.98 * args["duration_control_bias"] - 12.01) # from GT distribution
@@ -167,6 +170,8 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
 
     batchs = [(id_audio_file, raw_texts, speakers, texts, text_lens, max(text_lens), phon_align, np.array([emotion_weights]), styleTag_emb)]
 
+    profiling_rec.add("phoneme_count", int(text_lens[0]))
+
     # Logs synthesis infos
     speakers_location = os.path.join(configs[0]['path']['preprocessed_path'], "speakers.json")
     with open(speakers_location, "r") as f:
@@ -179,16 +184,17 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
     ))
     print("StyleTag: {}".format(styleTag))
     
-    synthesize(
-        loaded_tts_model, 
-        tts_config["checkpoint_file"], 
-        configs, 
-        args["vocoder"], 
-        batchs, 
-        control_values, 
-        control_bias_array,
-        categorical_control_bias_array,
-    )
+    with profiling_rec.stage("acoustic"):
+        synthesize(
+            loaded_tts_model,
+            tts_config["checkpoint_file"],
+            configs,
+            args["vocoder"],
+            batchs,
+            control_values,
+            control_bias_array,
+            categorical_control_bias_array,
+        )
     
     return os.path.join(model_folder, output_location)
 

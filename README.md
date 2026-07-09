@@ -147,6 +147,61 @@ L'exemple suivant génère un style différent pour chaque sous-énoncé, avec l
 
 Les paramètres "use_denoiser" et "visual_smoothing" dans le fichier "config_tts.yaml" permettent de spécifier l'utilisation d'un post-traitement pour les paramètres audio et visuels respectivement. Ce post-traitement permet de réduire le bruit audio produit par le vocodeur, ainsi que les tressautements de l'avatar. Le paramètre "cutoff" du "visual_smoothing" permet de régler le lissage. Une valeur plus faible (minimun 1) permet de lisser d'avantage au détriment de l'expressivité des mouvements de tête. Une valeur plus grande (maximum 5) laisse passer plus de mouvements. La valeur optimale est 3.
 
+# Profilage
+
+Un sous-système de profilage **optionnel** permet de mesurer le coût CPU/énergie de la synthèse, par phrase et par étage du pipeline (front-end FlauBERT, acoustique FastSpeech2, vocodeur Hifi-GAN, écriture audio). Il est désactivé par défaut (aucun fichier écrit, aucun surcoût) et se déclenche avec l'option `--profile`, la variable d'environnement `CHATTERBOX_PROFILE=1`, ou `profiling.enabled: true` dans `config_tts.yaml` :
+
+```
+python3 do_tts.py --profile
+```
+
+## Design : une seule horloge partagée
+
+Trois composants, tous basés sur `time.monotonic()` pour rester synchronisables :
+
+- **Échantillonneur en tâche de fond** (`profiling/sampler.py`) : tourne dans son propre processus (épinglé à un cœur CPU via `os.sched_setaffinity`, priorité abaissée via `os.nice`), et journalise à 10 Hz dans `profile/per_sample.csv` : utilisation CPU par cœur (`/proc/stat`), fréquence ARM (`scaling_cur_freq`), température (`thermal_zone0`), mémoire utilisée (`/proc/meminfo`), puissance PMIC (`vcgencmd pmic_read_adc`, seule source de puissance disponible en l'absence de capteur de courant externe sur le rail 5V), et l'état de throttling (`vcgencmd get_throttled`, échantillonné à 1 Hz seulement). Nécessite un Raspberry Pi (Linux + sysfs + vcgencmd) ; sur un autre OS il est ignoré avec un avertissement, mais les marqueurs par phrase restent actifs.
+- **Marqueurs dans le pipeline** (`profiling/recorder.py`, insérés dans `audio_utils.py` et `synthesis_modules.py`) : n'enregistrent que des horodatages `time.monotonic()` et quelques métadonnées légères, sans thread ni calcul lourd. Un enregistrement JSON par phrase est ajouté à `profile/per_sentence.jsonl` (id, texte, nombre de caractères/mots/phonèmes, horodatages de chaque étage, durées dérivées, durée audio, RTF).
+- **Script de jointure hors-ligne** (`profiling/join.py`, non critique en temps) : combine `per_sample.csv` et `per_sentence.jsonl` pour produire `profile/per_sentence_results.csv` (énergie intégrée par trapèzes sur la fenêtre de chaque phrase, CPU moyen/pic, température pic, throttling) et `profile/per_stage_results.csv` (la même intégration sur chaque sous-fenêtre d'étage). Se lance avec :
+
+```
+python profiling/join.py
+```
+
+## Calibration PMIC
+
+La puissance lue via `vcgencmd pmic_read_adc` inclut la consommation du profileur lui-même. Pour la recaler sur un wattmètre USB-C externe :
+
+```
+python -m profiling.calibrate --seconds 30
+```
+
+À exécuter à quelques états stables (repos, charge moyenne), en notant la moyenne affichée en face de la lecture du wattmètre externe au même instant. Ajuster une droite `puissance_wattmètre = scale * pmic_power_w + offset` et enregistrer le résultat dans `profile/calibration.json` (`{"scale": ..., "offset": ...}`), appliqué automatiquement par `join.py`. Il est aussi recommandé de mesurer une fois la consommation à vide du profileur (échantillonneur lancé seul, synthèse à l'arrêt) pour connaître son propre surcoût sur la mesure PMIC.
+
+# Benchmark
+
+Un mode routine permet de synthétiser automatiquement un jeu fixe de 10 phrases françaises (`benchmark/sentences_fr.jsonl`), avec le profilage activé, pour comparer la puissance et le RTF selon la longueur et la complexité des phrases. Il réutilise exactement le même appel de synthèse que le mode texte libre (`audio_utils.syn_audio()`) — aucune synthèse dupliquée.
+
+```
+python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FICHIER]
+```
+
+- Sans `--benchmark`, le comportement est **inchangé** : mode texte libre interactif.
+- `--benchmark` déroule REF → A1 → A2 → A3 → B1 → B2 → B3 → B4 → C1 → C2 → REF (REF encadre le jeu au début et à la fin, pour détecter une dérive d'une exécution à l'autre), avec une pause silencieuse fixe de 2 s entre chaque synthèse (pour garder des paliers de repos nets dans `profile/per_sample.csv`, utiles pour découper le signal de puissance et soustraire une ligne de base par phrase). `--benchmark` active automatiquement le profilage (équivalent à `--profile`).
+- `--play` : joue aussi l'audio après chaque synthèse (nécessaire pour une mesure acoustique/ampli). Par défaut, synthèse seule (isole le coût de calcul).
+- `--repeats N` : répète l'ensemble ordonné N fois (statistiques).
+- `--sentences FICHIER` : remplace le jeu de phrases par défaut par un autre fichier JSONL (même format).
+- `--join` : une fois le benchmark terminé et le profileur arrêté, lance `profiling/join.py` pour produire `profile/per_sentence_results.csv` et `profile/per_stage_results.csv`.
+
+## Format de `benchmark/sentences_fr.jsonl`
+
+Un objet JSON par ligne : `id` (identifiant court), `text` (phrase à synthétiser), `tag` (étiquette de complexité, reportée dans l'enregistrement de profilage par phrase), `word_count` (nombre de mots, métadonnée descriptive).
+
+Le jeu est construit pour isoler un facteur à la fois :
+- **A1–A3** font varier la longueur à faible complexité (`short_plain`/`medium_plain`/`long_plain`) ;
+- **B1–B4** font varier un seul facteur de stress à la fois : liaisons (B1), nombres en toutes lettres (B2), prosodie/ponctuation (B3), nom propre + acronyme (B4) ;
+- **C1–C2** cumulent plusieurs facteurs (nombres empilés ; homographes hétérophones nécessitant une bonne conversion grapheme-to-phoneme) ;
+- **REF** ancre le jeu en début et fin d'exécution pour détecter une dérive (échauffement CPU, throttling, ...).
+
 # Performances
 
 Avec les paramètres recommandés (FastSpeech2 + Hifi-GAN V2), la durée d'inférence est d'environ 20% de la durée d'audio sur CPU.

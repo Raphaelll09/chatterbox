@@ -1,0 +1,33 @@
+# System (apt) dependencies needed on Raspberry Pi OS (64-bit) before `pip install -r
+# requirements-pi.txt` will succeed and before the pipeline can run end-to-end.
+# One package per line. Comments (#) and blank lines are stripped by scripts/setup_pi.sh before
+# passing this to `apt install`, so keep this format if you edit it.
+#
+# Checked against actual imports/usage, not a generic list:
+#   - espeak-ng deliberately NOT included: this pipeline does not use a phonemizer. French text is
+#     normalized by embedded_tts's own regex rules (custom_regex_rules.csv / do_normalize_txt.pl,
+#     the latter currently unused/dead code) and phonetic input is user-typed `{s y z i}` literal
+#     phonemes, not auto-generated via espeak. g2p_en/pypinyin are imported at module load time in
+#     FastSpeech2/synthesize.py but only instantiated for English/Mandarin text, never for French.
+
+# venv + headers/toolchain: some pinned wheels above may not have aarch64 wheels for every version
+# and will need to build from source.
+python3-venv
+python3-dev
+build-essential
+
+# BLAS backend for numpy/scipy/torch CPU math.
+libopenblas-dev
+
+# soundfile/librosa (pulled in transitively by noisereduce) need libsndfile at runtime.
+libsndfile1
+
+# pydub's playback path shells out to ffplay on non-Windows (see requirements-pi.txt notes on
+# simpleaudio/sounddevice being Windows-only); ffmpeg also covers any non-wav format conversions.
+ffmpeg
+
+# unzip the pretrained-weight archives downloaded by scripts/setup_pi.sh.
+unzip
+
+# only needed if running with --gui (Tkinter); see embedded_tts/README.md "Avec interface graphique".
+python3-tk

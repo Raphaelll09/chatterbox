@@ -36,10 +36,17 @@ from pydub.playback import play
 import gui_utils
 import tts_utils
 import synthesis_modules
+import profiling
 
-def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
+def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
+              sentence_id=None, complexity_tag=None, play=True):
     """Synthesize text with input text
     Uses global variables set during models loading
+
+    sentence_id/complexity_tag label the profiling per-sentence record (used
+    by benchmark/runner.py; free-text/GUI callers leave them None). play=False
+    skips playback (synthesise-only, used by the benchmark's default mode to
+    isolate compute cost).
     """
     global AUDIO_EXAMPLE
 
@@ -73,6 +80,12 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
         text_to_syn = "{}{}".format(tts_config["default_start_punctuation"], text_to_syn)
     if text_to_syn[-1] not in _punctuation:
         text_to_syn = "{}{}".format(text_to_syn, tts_config["default_end_punctuation"])
+
+    # Profiling: one recorder per top-level input line (shared across any "§"
+    # sub-utterances synthesized below). No-op when profiling is disabled.
+    profiling_rec = profiling.begin_sentence(text_to_syn, complexity_tag=complexity_tag, sentence_id=sentence_id)
+    profiling_rec.set(char_count=len(text_to_syn), word_count=len(text_to_syn.split()))
+    profiling.set_current(profiling_rec)
 
     # TTS generates mel
     start_tts = time.time()
@@ -173,83 +186,94 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     
     # Vocoder generates wav
     start_vocoder = time.time()
-    location_wav_file = synthesis_modules.vocoder(location_mel_file, tts_config['vocoder_models'][VOCODER_INDEX])
+    with profiling_rec.stage("vocoder"):
+        location_wav_file = synthesis_modules.vocoder(location_mel_file, tts_config['vocoder_models'][VOCODER_INDEX])
     end_vocoder = time.time()
 
     # Denoise signal
     start_denoise = time.time()
-    if tts_config["use_denoiser"]:
-        # Denoising
-        rate, data = wavfile.read("{}.wav".format(location_wav_file))
-        # perform noise reduction
-        # reduced_noise = nr.reduce_noise(
-        #     y=data, 
-        #     sr=rate, 
-        #     prop_decrease=0.7, 
-        #     stationary=True, 
-        #     n_fft=512, 
-        #     n_std_thresh_stationary=1.5, 
-        #     chunk_size=600000, 
-        #     # freq_mask_smooth_hz=5000
-        # )
-        reduced_noise = nr.reduce_noise(
-            y=data, 
-            sr=rate, 
-            prop_decrease=1, 
-        )
-        wavfile.write("{}.wav".format(location_wav_file), rate, reduced_noise)
+    with profiling_rec.stage("write"):
+        if tts_config["use_denoiser"]:
+            # Denoising
+            rate, data = wavfile.read("{}.wav".format(location_wav_file))
+            # perform noise reduction
+            # reduced_noise = nr.reduce_noise(
+            #     y=data,
+            #     sr=rate,
+            #     prop_decrease=0.7,
+            #     stationary=True,
+            #     n_fft=512,
+            #     n_std_thresh_stationary=1.5,
+            #     chunk_size=600000,
+            #     # freq_mask_smooth_hz=5000
+            # )
+            reduced_noise = nr.reduce_noise(
+                y=data,
+                sr=rate,
+                prop_decrease=1,
+            )
+            wavfile.write("{}.wav".format(location_wav_file), rate, reduced_noise)
 
-    # ------------------------------------------------------------------ #
-    # Optional post-processing: peak normalisation + soft limiter          #
-    # Configured via config_tts.yaml postprocess section or CLI flags.     #
-    # ------------------------------------------------------------------ #
-    _pp_cfg = tts_config.get("postprocess", {})
-    if _pp_cfg.get("enabled", False):
-        import audio_postprocess as _app
-        _pp_rate, _pp_data = wavfile.read("{}.wav".format(location_wav_file))
-        _pp_out, _pp_report = _app.normalize_and_limit(
-            _pp_data,
-            _pp_rate,
-            target_crest_db=float(_pp_cfg.get("target_crest_db", 14.0)),
-            target_peak_dbfs=float(_pp_cfg.get("target_peak_dbfs", -1.0)),
-        )
-        wavfile.write("{}.wav".format(location_wav_file), _pp_rate, _pp_out)
-        _app.print_report(_pp_report)
+        # ------------------------------------------------------------------ #
+        # Optional post-processing: peak normalisation + soft limiter          #
+        # Configured via config_tts.yaml postprocess section or CLI flags.     #
+        # ------------------------------------------------------------------ #
+        _pp_cfg = tts_config.get("postprocess", {})
+        if _pp_cfg.get("enabled", False):
+            import audio_postprocess as _app
+            _pp_rate, _pp_data = wavfile.read("{}.wav".format(location_wav_file))
+            _pp_out, _pp_report = _app.normalize_and_limit(
+                _pp_data,
+                _pp_rate,
+                target_crest_db=float(_pp_cfg.get("target_crest_db", 14.0)),
+                target_peak_dbfs=float(_pp_cfg.get("target_peak_dbfs", -1.0)),
+            )
+            wavfile.write("{}.wav".format(location_wav_file), _pp_rate, _pp_out)
+            _app.print_report(_pp_report)
 
-    if _pp_cfg.get("analyze", False):
-        import audio_postprocess as _app
-        _app.report_wav(
-            "{}.wav".format(location_wav_file),
-            save_json=True,
-            save_figure=True,
-        )
+        if _pp_cfg.get("analyze", False):
+            import audio_postprocess as _app
+            _app.report_wav(
+                "{}.wav".format(location_wav_file),
+                save_json=True,
+                save_figure=True,
+            )
 
-    if tts_config["visual_smoothing"]["activate"]:
-        shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count = 4, dtype = np.int32))
-        au_len = shape_au[0]
-        au_dim = shape_au[1]
-        au_num = shape_au[2]
-        au_den = shape_au[3]
-        au_data = np.copy(np.memmap(os.path.join(location_mel_file, 'audio_file.AU'),offset=16,dtype=np.float32,shape=(au_len, au_dim)))
-        for i_au in range(6): # 6 first parameters are for the head movements
-            au_data[:, i_au] = butter_lowpass_filter(au_data[:, i_au], tts_config["visual_smoothing"]["cutoff"], au_num/au_den, 1) # cutoff = tts_config["visual_smoothing"]["cutoff"]Hz / order = 1
+        if tts_config["visual_smoothing"]["activate"]:
+            shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count = 4, dtype = np.int32))
+            au_len = shape_au[0]
+            au_dim = shape_au[1]
+            au_num = shape_au[2]
+            au_den = shape_au[3]
+            au_data = np.copy(np.memmap(os.path.join(location_mel_file, 'audio_file.AU'),offset=16,dtype=np.float32,shape=(au_len, au_dim)))
+            for i_au in range(6): # 6 first parameters are for the head movements
+                au_data[:, i_au] = butter_lowpass_filter(au_data[:, i_au], tts_config["visual_smoothing"]["cutoff"], au_num/au_den, 1) # cutoff = tts_config["visual_smoothing"]["cutoff"]Hz / order = 1
 
-        fp = open(os.path.join(location_mel_file, 'audio_file.AU'), 'wb')
-        fp.write(np.asarray((au_len, au_dim, au_num, au_den), dtype=np.int32))
-        fp.write(au_data.copy(order='C'))
-        fp.close()
+            fp = open(os.path.join(location_mel_file, 'audio_file.AU'), 'wb')
+            fp.write(np.asarray((au_len, au_dim, au_num, au_den), dtype=np.int32))
+            fp.write(au_data.copy(order='C'))
+            fp.close()
 
-    end_denoise = time.time()
+        end_denoise = time.time()
 
-    # Patch for .AU
-    path_au = os.path.join(tts_config['tts_models'][TTS_INDEX]["folder"], tts_config['tts_models'][TTS_INDEX]["output_location"], "audio_file.AU")
-    if os.path.exists(path_au):
-        # Copy file in a platform-independent way
-        shutil.copy(path_au, "./")  # Copy to current directory
-    
-    # Update audio infos
-    AUDIO_EXAMPLE = AudioSegment.from_wav("{}.wav".format(location_wav_file))
-    audio_duration = len(AUDIO_EXAMPLE)/1000
+        # Patch for .AU
+        path_au = os.path.join(tts_config['tts_models'][TTS_INDEX]["folder"], tts_config['tts_models'][TTS_INDEX]["output_location"], "audio_file.AU")
+        if os.path.exists(path_au):
+            # Copy file in a platform-independent way
+            shutil.copy(path_au, "./")  # Copy to current directory
+
+        # Update audio infos
+        AUDIO_EXAMPLE = AudioSegment.from_wav("{}.wav".format(location_wav_file))
+        audio_duration = len(AUDIO_EXAMPLE)/1000
+
+    profiling_rec.set(
+        n_samples=int(AUDIO_EXAMPLE.frame_count()),
+        sample_rate=AUDIO_EXAMPLE.frame_rate,
+        audio_duration_s=audio_duration,
+    )
+    profiling_rec.finalize()
+    profiling.set_current(None)
+
     tts_inference_duration = end_tts-start_tts
     vocoder_inference_duration = end_vocoder-start_vocoder
     denoiser_inference_duration = end_denoise-start_denoise
@@ -269,8 +293,10 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None):
     
     # Play Audio
     # play(AUDIO_EXAMPLE)
-    play_audio()
-    gui_utils.update_circle_color("gray", canvas_circle, canvas_circle_figure)
+    if play:
+        play_audio()
+    if use_gui:
+        gui_utils.update_circle_color("gray", canvas_circle, canvas_circle_figure)
     
 def play_audio():
     """play generated audio

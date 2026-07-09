@@ -33,6 +33,18 @@ postprocess:
   target_peak_dbfs: -1.0  # final peak level (dBFS)
   analyze: false          # if true, also write .report.json and .report.png per synthesis
 
+# Optional profiling subsystem: per-sentence timing + background PMIC/CPU/
+# thermal sampling. Override at runtime with --profile or CHATTERBOX_PROFILE=1.
+# See README.md "Profiling" for the output files and calibration procedure.
+profiling:
+  enabled: false        # safe default — zero overhead, no files written
+  output_dir: "profile"
+  sample_hz: 10          # sysfs (CPU/freq/temp/mem) sampling rate
+  pmic_hz: 10            # vcgencmd pmic_read_adc rate; lower (e.g. 5) + interpolation
+                         # if 10 Hz measurably perturbs synthesis timing
+  core: 3                # CPU core the background sampler is pinned to
+  niceness: 10           # background sampler os.nice() offset
+
 default_start_punctuation: "."
 default_end_punctuation: "."
 use_denoiser: True

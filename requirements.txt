@@ -1,3 +1,7 @@
+# DEPRECATED: this file mixes FastSpeech2/Waveglow *training* deps (apex, tensorflow,
+# tensor2tensor, ...) with runtime ones, and `apex==0.9.10dev` resolves to the wrong package on
+# PyPI. Use requirements-dev.txt (PC) or requirements-pi.txt (Raspberry Pi 5) instead — see
+# INSTALL.md. Kept as-is (not deleted) since it documents the original training environment.
 apex==0.9.10dev
 g2p_en==2.1.0
 inflect==5.6.2

@@ -1,3 +1,6 @@
+# DEPRECATED: this is now requirements-dev.txt (PC exploration env) verbatim. Kept here unchanged
+# so anything that referenced this filename by name still resolves; do not edit the two out of
+# sync — edit requirements-dev.txt and mirror here, or just point new tooling at requirements-dev.txt.
 torch==2.4.1
 PyYAML==6.0.2
 numpy==2.0.2
