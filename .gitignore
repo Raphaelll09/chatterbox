@@ -34,3 +34,4 @@ flaubert/flaubert_large_cased/pytorch_model.bin
 
 # Ignore Virtual Env
 python3.11.1_embedded_tts/
+.venv/
