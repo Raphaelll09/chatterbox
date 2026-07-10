@@ -38,3 +38,6 @@ g2p_en==2.1.0
 pypinyin==0.53.0
 sacremoses==0.1.1
 simpleaudio==1.0.4
+openpyxl==3.1.5  # optional: benchmark/export_to_xlsx.py, paste-ready Excel export of the
+                  # profiling join's per_sentence_results.csv. Imported lazily, guarded by
+                  # try/except, so a checkout without it still runs everything else.

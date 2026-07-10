@@ -45,12 +45,20 @@ def load_samples(profile_dir, scale, offset):
             cpu = row.get("cpu_total")
             temp = row.get("temp_c")
             throttled = row.get("throttled")
+            ina_power = row.get("ina_power_w")
+            cpu_power = row.get("cpu_power_w")
+            mem_power = row.get("mem_power_w")
             rows.append({
                 "t_mono": float(row["t_mono"]),
                 "pmic_power_w": (scale * float(pmic) + offset) if pmic not in (None, "") else None,
                 "cpu_total": float(cpu) if cpu not in (None, "") else None,
                 "temp_c": float(temp) if temp not in (None, "") else None,
                 "throttled": int(throttled) if throttled not in (None, "") else None,
+                # INA226 and the per-rail PMIC signals are direct absolute readings
+                # (no external-meter fit needed, unlike the summed PMIC total above).
+                "ina_power_w": float(ina_power) if ina_power not in (None, "") else None,
+                "cpu_power_w": float(cpu_power) if cpu_power not in (None, "") else None,
+                "mem_power_w": float(mem_power) if mem_power not in (None, "") else None,
             })
     rows.sort(key=lambda r: r["t_mono"])
     return rows
@@ -73,9 +81,9 @@ def _window_samples(samples, t_start, t_end):
     return [s for s in samples if t_start <= s["t_mono"] <= t_end]
 
 
-def _integrate_energy_j(window):
-    """Trapezoidal integral of pmic_power_w (W) over t_mono (s) -> Joules."""
-    pts = [(s["t_mono"], s["pmic_power_w"]) for s in window if s["pmic_power_w"] is not None]
+def _integrate_energy_j(window, power_key="pmic_power_w"):
+    """Trapezoidal integral of a power column (W) over t_mono (s) -> Joules."""
+    pts = [(s["t_mono"], s[power_key]) for s in window if s[power_key] is not None]
     if len(pts) < 2:
         return None
     t, p = zip(*sorted(pts))
@@ -86,6 +94,10 @@ def _integrate_energy_j(window):
 def _stat_or_none(values, fn):
     values = [v for v in values if v is not None]
     return fn(values) if values else None
+
+
+def _mean_power_w(window, power_key):
+    return _stat_or_none([s[power_key] for s in window], lambda v: sum(v) / len(v))
 
 
 def _throttled_any(window):
@@ -126,6 +138,17 @@ def build_per_sentence_results(records, samples):
         row["peak_cpu"] = _stat_or_none([s["cpu_total"] for s in window], max)
         row["peak_temp"] = _stat_or_none([s["temp_c"] for s in window], max)
         row["throttled_any"] = _throttled_any(window)
+        amp_energy_j = _integrate_energy_j(window, "ina_power_w")
+        row["amp_energy_j"] = amp_energy_j
+        row["amp_energy_wh"] = (amp_energy_j / 3600.0) if amp_energy_j is not None else None
+        row["amp_mean_w"] = _mean_power_w(window, "ina_power_w")
+        row["amp_peak_w"] = _stat_or_none([s["ina_power_w"] for s in window], max)
+        cpu_energy_j = _integrate_energy_j(window, "cpu_power_w")
+        row["cpu_energy_wh"] = (cpu_energy_j / 3600.0) if cpu_energy_j is not None else None
+        row["cpu_mean_w"] = _mean_power_w(window, "cpu_power_w")
+        mem_energy_j = _integrate_energy_j(window, "mem_power_w")
+        row["mem_energy_wh"] = (mem_energy_j / 3600.0) if mem_energy_j is not None else None
+        row["mem_mean_w"] = _mean_power_w(window, "mem_power_w")
         results.append(row)
     return results
 
@@ -137,6 +160,9 @@ def build_per_stage_results(records, samples):
             t_start, t_end = _stage_window(r, stage)
             window = _window_samples(samples, t_start, t_end)
             energy_j = _integrate_energy_j(window)
+            amp_energy_j = _integrate_energy_j(window, "ina_power_w")
+            cpu_energy_j = _integrate_energy_j(window, "cpu_power_w")
+            mem_energy_j = _integrate_energy_j(window, "mem_power_w")
             duration_ms = (t_end - t_start) * 1000.0 if (t_start is not None and t_end is not None) else None
             results.append({
                 "sentence_id": r["sentence_id"],
@@ -149,6 +175,14 @@ def build_per_stage_results(records, samples):
                 "peak_cpu": _stat_or_none([s["cpu_total"] for s in window], max),
                 "peak_temp": _stat_or_none([s["temp_c"] for s in window], max),
                 "throttled_any": _throttled_any(window),
+                "amp_energy_j": amp_energy_j,
+                "amp_energy_wh": (amp_energy_j / 3600.0) if amp_energy_j is not None else None,
+                "amp_mean_w": _mean_power_w(window, "ina_power_w"),
+                "amp_peak_w": _stat_or_none([s["ina_power_w"] for s in window], max),
+                "cpu_energy_wh": (cpu_energy_j / 3600.0) if cpu_energy_j is not None else None,
+                "cpu_mean_w": _mean_power_w(window, "cpu_power_w"),
+                "mem_energy_wh": (mem_energy_j / 3600.0) if mem_energy_j is not None else None,
+                "mem_mean_w": _mean_power_w(window, "mem_power_w"),
             })
     return results
 

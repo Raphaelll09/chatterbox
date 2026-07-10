@@ -52,10 +52,15 @@ def set_output_dir(path):
     _output_dir = path
 
 
-def start_session(core=3, niceness=10, sample_hz=10, pmic_hz=10):
+def start_session(core=3, niceness=10, sample_hz=10, pmic_hz=10, ina=True):
     """Launch the background sampler as a subprocess. No-op if disabled or
     not on Linux (the sysfs/vcgencmd sources it reads don't exist elsewhere,
-    e.g. on a Windows dev checkout)."""
+    e.g. on a Windows dev checkout).
+
+    ina=True (default) makes the sampler auto-detect the INA226 amp-branch
+    monitor at startup; absence is not an error, it just leaves the
+    ina_bus_v/ina_current_a/ina_power_w columns empty. Pass ina=False to
+    skip the I2C probe entirely."""
     global _sampler_proc
     if not _enabled or _sampler_proc is not None:
         return
@@ -77,6 +82,7 @@ def start_session(core=3, niceness=10, sample_hz=10, pmic_hz=10):
             "--core", str(core),
             "--nice", str(niceness),
             "--pid-file", pid_file,
+            "--ina" if ina else "--no-ina",
         ],
         cwd=_PACKAGE_ROOT,
     )

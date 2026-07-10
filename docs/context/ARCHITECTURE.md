@@ -143,11 +143,34 @@ disabled. Three components share one `time.monotonic()` clock:
   (`python -m profiling.sampler`) via `profiling.start_session()`/`stop_session()` (called from
   `do_tts.py`), pinned to one core (`os.sched_setaffinity`) and de-prioritised (`os.nice`). Reads
   `/proc/stat`, `/sys/.../scaling_cur_freq`, `/sys/class/thermal/thermal_zone0/temp`,
-  `/proc/meminfo`, and `vcgencmd pmic_read_adc`/`get_throttled` (the only power source available —
-  no external current sensor on the Pi's 5V rail). Writes `profile/per_sample.csv`. Linux-only; on
-  other platforms (e.g. this Windows dev checkout) it no-ops with a warning while per-sentence
-  marks still work. Pure-text parsing (`/proc/stat`, PMIC output, throttled bitmask) lives in
-  `profiling/parsing.py`, unit-tested without needing real hardware.
+  `/proc/meminfo`, and `vcgencmd pmic_read_adc`/`get_throttled`. Writes `profile/per_sample.csv`.
+  Linux-only; on other platforms (e.g. this Windows dev checkout) it no-ops with a warning while
+  per-sentence marks still work. Pure-text parsing (`/proc/stat`, PMIC output, throttled bitmask)
+  lives in `profiling/parsing.py`, unit-tested without needing real hardware.
+  - **Per-rail PMIC power** (added 2026-07-10): `pmic_read_adc` exposes a current *and* voltage
+    channel per internally-metered rail, but `EXT5V_V`/`BATT_V` are voltage-only (no current) — so
+    there is no single "input power" reading; `pmic_power_w` sums V×I over an *explicit* rail list
+    (`parsing.PMIC_RAILS`), which is Pi-internal power (excludes regulator losses and anything
+    drawn off the 5V GPIO pins — the external USB-C meter remains ground truth for total power).
+    `profiling.parsing.parse_pmic_rails()` parses one `vcgencmd` call into a `{rail: {A, V}}` dict;
+    `rails_total_power_w()`/`rails_cpu_power_w()` (`VDD_CORE`)/`rails_mem_power_w()`
+    (`DDR_VDD2`+`DDR_VDDQ`+`1V1_SYS`)/`rails_ext5v_v()` all derive from that single parse, so one
+    `vcgencmd pmic_read_adc` call per tick yields all four `per_sample.csv` columns
+    (`pmic_power_w`, `cpu_power_w`, `mem_power_w`, `ext5v_v`). `Sampler._read_pmic_all()` +
+    `_interpolate_and_write()` (generalized from a single scalar to `sampler.PMIC_FIELDS`, a list of
+    4 keys) carry all four through the same slower-than-10Hz-tick interpolation the PMIC total
+    already used.
+  - **INA226 amp-branch monitor** (optional, added 2026-07-10): a separate current/power sensor
+    wired on the Pi's own `i2c-1` bus at address `0x40` (2 mΩ shunt), measuring the 5V branch that
+    feeds the amplifier breadboard — distinct from the PMIC's system-wide reading. Auto-detected at
+    `Sampler.run()` startup (`_init_ina226()`); absent sensor or a failed read never raises, it just
+    leaves `ina_bus_v`/`ina_current_a`/`ina_power_w` empty for that row. One 6-byte I2C block read
+    per tick (registers `0x02`–`0x04` are contiguous: bus voltage, power, current), decoded by pure
+    functions in `profiling/parsing.py` (`decode_ina226_*`, unit-tested without hardware). Gated by
+    `profiling.ina226` in `config_tts.yaml` / `--ina`/`--no-ina` on `do_tts.py` and
+    `profiling/sampler.py`, threaded through `profiling.start_session(ina=...)`. Requires `smbus2`
+    (Pi-only dependency, `requirements-pi.txt`; imported lazily inside `sampler.py` so a PC dev
+    checkout without it is unaffected).
 - `profiling/recorder.py` — `Recorder`/`NullRecorder`, holding one `Recorder` per top-level input
   line. `audio_utils.syn_audio()` creates it (`profiling.begin_sentence()`) and publishes it via
   `profiling.set_current()` (a `contextvars.ContextVar`) so `synthesis_modules.syn_fastspeech2()`
@@ -161,10 +184,46 @@ disabled. Three components share one `time.monotonic()` clock:
   into `profile/per_sentence_results.csv` and `profile/per_stage_results.csv` (trapezoidal energy
   integration per sentence/stage window, mean/peak CPU, peak temp, throttled-any), applying a
   PMIC→external-meter linear calibration from `profile/calibration.json` if present (identity
-  otherwise, produced by `profiling/calibrate.py` — see README "Profilage").
+  otherwise, produced by `profiling/calibrate.py` — see README "Profilage"). `_integrate_energy_j()`
+  takes a `power_key` parameter (default `pmic_power_w`) so the same trapezoidal integration is
+  reused for the INA226 amp-branch reading: each row also gets `amp_energy_j`/`amp_energy_wh`
+  (integrated `ina_power_w`, no calibration applied — it's a direct reading) and
+  `amp_mean_w`/`amp_peak_w`, and again for the per-rail PMIC signals: `cpu_energy_wh`/`cpu_mean_w`
+  (from `cpu_power_w`) and `mem_energy_wh`/`mem_mean_w` (from `mem_power_w`) — all alongside the
+  unchanged PMIC-total-derived system-energy columns. `_mean_power_w(window, power_key)` factors
+  out the repeated mean-of-a-power-column pattern shared by `amp_mean_w`/`cpu_mean_w`/`mem_mean_w`.
 
 Tests: `tests/test_profiling.py` covers `parsing.py`, `recorder.py`, and `join.py`'s pure functions
-(not `sampler.py`'s actual sysfs/vcgencmd reads, which need a real Pi).
+(not `sampler.py`'s actual sysfs/vcgencmd/I2C reads, which need a real Pi).
+
+## Excel export (benchmark/export_to_xlsx.py)
+
+Added 2026-07-10. Reads the join's own output (`per_sentence_results.csv`/`per_stage_results.csv`)
+— no synthesis/profiling logic of its own — and writes `profile/exports/chatterbox_paste.xlsx`
+(dedicated output subfolder, gitignored like the rest of `profile/`'s generated files), formatted
+to paste directly into the master workbook `Chatterbox_Power_Measurements_final.xlsx`, sheet
+`P2P3_Synthesis`, cell `A12` (columns A-U, header row 1, one 11-row data block per benchmark pass
+in rows 2-12). `--repeats N` produces `N` back-to-back 11-sentence passes in the CSVs (in recorded
+order, no re-sorting anywhere in the pipeline); `export_to_xlsx._split_into_passes()` chunks them
+and `write_workbook()` gives each its own sheet (`P2P3_Synthesis`, `P2P3_Synthesis_pass2`, ...,
+all with the same `A2:U12` layout so any one of them can be pasted individually). A trailing
+partial pass (interrupted run) is dropped with a warning rather than written incomplete.
+
+`runner.py`'s `REF` anchor sentence shares its literal id (`"REF"`) between the first and last
+entry of each pass — `_relabel_ref(sentence_id, position)` distinguishes them by **position**
+within the pass (`0` → `REF_start`, `10` → `REF_end`), not by id.
+
+Derived columns (`RTF`, `synthP_W`, `E/s_Wh`, `cpuP_W`) are computed directly in Python from the
+join's columns per the formulas in the original spec (e.g. `synthP_W = pmicE_Wh*3.6e6/synth_ms`)
+so the pasted block is self-contained (plain values, no Excel formulas). `openpyxl` is imported
+lazily inside `write_workbook()`; if missing, `export()` prints an install hint and returns `None`
+without touching the CSVs — never crashes a `--benchmark` run. Wired into `do_tts.py` via
+`--export-xlsx` (opt-in, implies `--join`, matching the existing "every profiling feature is an
+explicit switch" convention — nothing runs automatically).
+
+Tests: `tests/test_export_xlsx.py` covers the pure row-mapping/pass-splitting/REF-relabeling logic,
+plus one `openpyxl` round-trip (`pytest.importorskip`'d — skips cleanly if `openpyxl` isn't
+installed, since it's an optional dependency).
 
 ## Benchmark mode (benchmark/)
 

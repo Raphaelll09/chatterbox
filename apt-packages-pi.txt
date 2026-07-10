@@ -31,3 +31,8 @@ unzip
 
 # only needed if running with --gui (Tkinter); see embedded_tts/README.md "Avec interface graphique".
 python3-tk
+
+# i2cdetect, used to verify the optional INA226 amp-branch power sensor is wired correctly at
+# i2c-1 @ 0x40 (and doesn't collide with the IQaudio DAC at 0x4c) before a --benchmark --play run;
+# see embedded_tts/README.md "Profilage" / "Capteur INA226".
+i2c-tools

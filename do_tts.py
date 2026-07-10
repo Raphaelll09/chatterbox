@@ -122,6 +122,23 @@ if __name__ == "__main__":
         help="After --benchmark finishes, run the offline profiling join "
              "(profiling/join.py) to produce per_sentence_results.csv / per_stage_results.csv.",
     )
+    parser.add_argument(
+        "--ina",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Auto-detect and log the INA226 amp-branch current/power monitor "
+             "(i2c-1 @ 0x40) alongside PMIC telemetry. On by default when profiling "
+             "is enabled; absent sensor just leaves ina_* columns empty. Overrides "
+             "config_tts.yaml profiling.ina226. Use --no-ina to skip the I2C probe.",
+    )
+    parser.add_argument(
+        "--export-xlsx",
+        action="store_true",
+        default=False,
+        help="After --benchmark finishes, export per_sentence_results.csv / "
+             "per_stage_results.csv to a paste-ready profile/exports/chatterbox_paste.xlsx "
+             "(benchmark/export_to_xlsx.py). Implies --join. Requires openpyxl.",
+    )
     args = parser.parse_args()
 
     # --report-wav: standalone analysis, no synthesis required
@@ -149,6 +166,8 @@ if __name__ == "__main__":
     prof_cfg = tts_config.setdefault("profiling", {})
     if args.profile or args.benchmark or os.environ.get("CHATTERBOX_PROFILE") == "1":
         prof_cfg["enabled"] = True
+    if args.ina is not None:
+        prof_cfg["ina226"] = args.ina
     if prof_cfg.get("enabled", False):
         profiling.enable()
         profiling.set_output_dir(prof_cfg.get("output_dir", "profile"))
@@ -157,6 +176,7 @@ if __name__ == "__main__":
             niceness=prof_cfg.get("niceness", 10),
             sample_hz=prof_cfg.get("sample_hz", 10),
             pmic_hz=prof_cfg.get("pmic_hz", 10),
+            ina=prof_cfg.get("ina226", True),
         )
 
     def load_models():
@@ -194,6 +214,10 @@ if __name__ == "__main__":
     finally:
         profiling.stop_session()
 
-    if args.benchmark and args.join:
+    if args.benchmark and (args.join or args.export_xlsx):
         from profiling.join import run_join
         run_join(prof_cfg.get("output_dir", "profile"))
+
+    if args.benchmark and args.export_xlsx:
+        from benchmark.export_to_xlsx import export as export_xlsx
+        export_xlsx(prof_cfg.get("output_dir", "profile"))
