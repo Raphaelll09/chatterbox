@@ -10,6 +10,7 @@ audio_file_duration_alignment.json
 profile/*.csv
 profile/*.jsonl
 profile/sampler.pid
+profile/exports/
 profiling/__pycache__/
 
 # Ignore dataset, models and training script in FastSpeech2

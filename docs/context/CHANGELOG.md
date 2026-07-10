@@ -15,6 +15,110 @@ state before starting new work.
 
 ---
 
+## 2026-07-10 — Per-rail PMIC power + paste-ready Excel export
+
+- What: Extended the profiler and offline join (not duplicated) with explicit per-rail PMIC power,
+  and added a new Excel exporter for the benchmark results.
+  1. `profiling/parsing.py`: `parse_pmic_rails()` (extracted from the old `parse_pmic_power_w()`
+     body) parses one `vcgencmd pmic_read_adc` call into a `{rail: {A, V}}` dict; `PMIC_RAILS` is
+     now an explicit list of the 12 internally-metered rails (excludes `EXT5V`/`BATT`, which are
+     voltage-only). New `rails_total_power_w()`/`rails_cpu_power_w()` (`VDD_CORE`)/
+     `rails_mem_power_w()` (`DDR_VDD2`+`DDR_VDDQ`+`1V1_SYS`)/`rails_ext5v_v()` derive all four
+     signals from one parse. `parse_pmic_power_w(text)` keeps its old signature as a thin wrapper.
+  2. `profiling/sampler.py`: `_read_pmic()` → `_read_pmic_all()`, one `vcgencmd` call per tick now
+     yields `pmic_power_w`/`cpu_power_w`/`mem_power_w`/`ext5v_v` together; `_interpolate_and_write()`
+     generalized from a single scalar to `PMIC_FIELDS` (a list of 4 keys), same interpolation
+     scheme as before. Three new `per_sample.csv` columns.
+  3. `profiling/join.py`: `load_samples()` parses `cpu_power_w`/`mem_power_w`; both result builders
+     gain `cpu_energy_wh`/`cpu_mean_w` and `mem_energy_wh`/`mem_mean_w` via the already-generalized
+     `_integrate_energy_j(window, power_key)`, plus a new `_mean_power_w()` helper (also used to
+     de-duplicate the existing `amp_mean_w` computation).
+  4. `benchmark/export_to_xlsx.py` (new): reads `per_sentence_results.csv`/`per_stage_results.csv`,
+     writes `profile/exports/chatterbox_paste.xlsx` — sheet `P2P3_Synthesis` (cols A-U, header row
+     1, data rows 2-12) matching the master workbook `Chatterbox_Power_Measurements_final.xlsx`'s
+     paste target exactly, plus a `per_stage` reference sheet. `--repeats N` runs (multiple
+     11-sentence passes in the CSVs) each get their own sheet (`P2P3_Synthesis`,
+     `P2P3_Synthesis_pass2`, ...) rather than only exporting the first pass — this was a deliberate
+     change from the original one-pass-only spec, per explicit request. Wired into `do_tts.py` via
+     `--export-xlsx` (opt-in, implies `--join`).
+- Files: `profiling/parsing.py`, `profiling/sampler.py`, `profiling/join.py`, `do_tts.py`,
+  `benchmark/export_to_xlsx.py` (new), `tests/test_profiling.py` (rail-parsing + join cpu/mem
+  tests), `tests/test_export_xlsx.py` (new), `requirements-dev.txt`/`requirements-pi.txt` (added
+  `openpyxl`), `.gitignore` (added `profile/exports/`), `README.md` ("Puissance par rail PMIC" +
+  "Export Excel" sections), `docs/context/ARCHITECTURE.md`.
+- Why: The PMIC's summed total conflates CPU and memory draw; splitting `VDD_CORE` (compute) from
+  the DDR/1V1 rails (memory) lets a per-stage view show whether a given pipeline stage is CPU-bound
+  or memory-bound. The Excel exporter removes a manual copy/reformat step before results can be
+  pasted into the lab's master power-measurement workbook.
+- Verify: `tests/` (71 tests, all passing) covers rail parsing (explicit list, missing-rail
+  robustness, `EXT5V`/`BATT` exclusion), the join's new `cpu_*`/`mem_*` columns, and
+  `export_to_xlsx`'s row-mapping/pass-splitting/REF-relabeling logic plus one real `openpyxl`
+  round-trip (skipped cleanly if `openpyxl` isn't installed). End-to-end smoke test: synthetic
+  `per_sample.csv` (11-sentence pass, all PMIC/rail/INA226 columns populated) through
+  `profiling.join.run_join()` → `benchmark.export_to_xlsx.export()` — confirmed correct A-U values,
+  `REF_start`/`REF_end` relabeling, and derived-column formulas (`RTF`, `synthP_W`, `E/s_Wh`,
+  `cpuP_W`). Also verified the exporter degrades gracefully (prints an install hint, returns `None`,
+  doesn't crash) with `openpyxl` uninstalled.
+- Notes/gotchas:
+  - `pmic_power_w`'s *value* is unchanged by making the rail list explicit — `EXT5V`/`BATT` were
+    already excluded implicitly (they never have a current channel to pair with their voltage
+    line). The explicit list guards against a future/unexpected rail silently joining the sum.
+  - The paste-ready sheet layout assumes exactly 11 rows per pass; a trailing partial pass
+    (interrupted run) is dropped with a printed warning rather than exported incomplete.
+  - Not tested against real Pi 5 hardware (no PMIC/INA226 available in this dev environment) —
+    `sampler.py`'s actual `vcgencmd`/I2C reads are excluded from the unit-tested surface, same as
+    the existing PMIC/sysfs reads.
+
+---
+
+## 2026-07-10 — INA226 amp-branch telemetry in the profiler
+
+- What: Extended the existing profiling subsystem (not a parallel logger) to capture the
+  amplifier's 5V branch power alongside system PMIC power, so one `--benchmark --play` run
+  measures both simultaneously, on the same shared `time.monotonic()` clock.
+  1. `profiling/sampler.py`: auto-detects an INA226 at `i2c-1 @ 0x40` on startup
+     (`_init_ina226()`, best-effort, never crashes the sampler); one 6-byte I2C block read per
+     10 Hz tick (`_read_ina226()`, contiguous bus-voltage/power/current registers `0x02`-`0x04`);
+     appends `ina_bus_v`, `ina_current_a`, `ina_power_w` to `profile/per_sample.csv`. New
+     `--ina`/`--no-ina` CLI flag (default on; absence of the sensor just leaves the columns empty).
+  2. `profiling/parsing.py`: pure, hardware-free INA226 register decode
+     (`decode_ina226_bus_voltage_v`/`_current_a`/`_power_w`) plus the register/constant map
+     (address `0x40`, `R_SHUNT=0.002`, `CURRENT_LSB=0.00025`, `CAL=10240`, config `0x4527`).
+  3. `profiling/join.py`: generalized `_integrate_energy_j()` to take a `power_key` parameter
+     (default `pmic_power_w`, unchanged for existing callers) and reused it for `ina_power_w`.
+     `per_sentence_results.csv`/`per_stage_results.csv` gain `amp_energy_j`, `amp_energy_wh`,
+     `amp_mean_w`, `amp_peak_w` alongside the untouched PMIC-derived system-energy columns.
+  4. `profiling/__init__.py` (`start_session(ina=...)`) and `do_tts.py` (`--ina`/`--no-ina`,
+     merged into `config_tts.yaml`'s new `profiling.ina226` key) wire the flag through, same
+     pattern as `--postprocess`.
+- Files: `profiling/sampler.py`, `profiling/parsing.py`, `profiling/join.py`,
+  `profiling/__init__.py`, `do_tts.py`, `config_tts.yaml`, `requirements-pi.txt` (added
+  `smbus2`, Pi-only, lazily imported inside `sampler.py`), `apt-packages-pi.txt` (added
+  `i2c-tools` for `i2cdetect`), `tests/test_profiling.py` (INA226 decode tests + join `amp_*`
+  column tests), `README.md` ("Profilage" section), `docs/context/ARCHITECTURE.md` (profiling
+  subsystem section).
+- Why: The PMIC (`vcgencmd pmic_read_adc`) only reports system-wide Pi power; a second INA226
+  sensor was wired directly on the Pi's own I2C bus to isolate the amplifier breadboard's 5V
+  branch draw, so compute cost and amplifier cost can be attributed separately per sentence.
+- Verify: `tests/test_profiling.py` (52 tests, all passing) covers the register decode math and
+  the join's `amp_*` aggregation with both present and absent INA226 samples. End-to-end smoke
+  test: ran `profiling.join.run_join()` against a synthetic `per_sample.csv` with both
+  `pmic_power_w` and `ina_power_w` populated — confirmed system and amp energies compute
+  correctly and independently, per sentence and per stage. Not tested against real INA226
+  hardware (no Pi/sensor available in this dev environment) — `sampler.py`'s actual I2C reads
+  are excluded from the unit-tested surface, same as its existing PMIC/sysfs reads.
+- Notes/gotchas:
+  - No standalone `ina226_logger.py` reference file existed in the repo to match scaling
+    against, despite an original task prompt assuming one did — implemented directly from the
+    prompt's own register spec instead.
+  - INA226 registers `0x02` (bus voltage), `0x03` (power), `0x04` (current) are contiguous, so a
+    single 6-byte block read covers all three — this is what keeps the added per-tick I2C work to
+    "one block read" as required, rather than three separate transactions.
+  - Must not collide with the IQaudio DAC at `0x4c` on the same `i2c-1` bus — verify with
+    `i2cdetect -y 1` before a session (documented in README).
+
+---
+
 ## 2026-07-09 — Split PC/Pi5 dependencies + Pi5 provisioning script
 
 - What: Restructured dependency management into a PC/Pi5 split and added a repeatable Pi5

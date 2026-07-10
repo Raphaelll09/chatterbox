@@ -36,3 +36,11 @@ pydub>=0.25.1
 g2p_en>=2.1.0
 pypinyin>=0.53.0
 sacremoses>=0.1.1
+smbus2>=0.4.3  # optional profiling subsystem: INA226 amp-branch current/power monitor (i2c-1 @
+                # 0x40). Only imported inside profiling/sampler.py, guarded by try/except, so a PC
+                # dev checkout without it (requirements-dev.txt) still runs — the sampler already
+                # no-ops entirely on non-Linux.
+openpyxl>=3.1.5  # optional: benchmark/export_to_xlsx.py (--export-xlsx), so the paste-ready Excel
+                  # sheet can be produced right after a --benchmark --join run on the Pi itself.
+                  # Imported lazily, guarded by try/except — absent package just prints an install
+                  # hint instead of crashing the benchmark run.
