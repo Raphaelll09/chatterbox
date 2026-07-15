@@ -193,11 +193,15 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
     # Denoise signal
     start_denoise = time.time()
     with profiling_rec.stage("write"):
+        # Read the wav HiFi-GAN just wrote once, keep it in memory through
+        # denoise/postprocess/analyze, and write it back to disk exactly once
+        # below -- avoids re-reading/re-writing the same file at every step.
+        wav_path = "{}.wav".format(location_wav_file)
+        rate, data = wavfile.read(wav_path)
+
         if tts_config["use_denoiser"]:
-            # Denoising
-            rate, data = wavfile.read("{}.wav".format(location_wav_file))
             # perform noise reduction
-            # reduced_noise = nr.reduce_noise(
+            # data = nr.reduce_noise(
             #     y=data,
             #     sr=rate,
             #     prop_decrease=0.7,
@@ -207,12 +211,11 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
             #     chunk_size=600000,
             #     # freq_mask_smooth_hz=5000
             # )
-            reduced_noise = nr.reduce_noise(
+            data = nr.reduce_noise(
                 y=data,
                 sr=rate,
                 prop_decrease=1,
             )
-            wavfile.write("{}.wav".format(location_wav_file), rate, reduced_noise)
 
         # ------------------------------------------------------------------ #
         # Optional post-processing: peak normalisation + soft limiter          #
@@ -221,23 +224,25 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
         _pp_cfg = tts_config.get("postprocess", {})
         if _pp_cfg.get("enabled", False):
             import audio_postprocess as _app
-            _pp_rate, _pp_data = wavfile.read("{}.wav".format(location_wav_file))
-            _pp_out, _pp_report = _app.normalize_and_limit(
-                _pp_data,
-                _pp_rate,
+            data, _pp_report = _app.normalize_and_limit(
+                data,
+                rate,
                 target_crest_db=float(_pp_cfg.get("target_crest_db", 14.0)),
                 target_peak_dbfs=float(_pp_cfg.get("target_peak_dbfs", -1.0)),
             )
-            wavfile.write("{}.wav".format(location_wav_file), _pp_rate, _pp_out)
             _app.print_report(_pp_report)
 
         if _pp_cfg.get("analyze", False):
             import audio_postprocess as _app
             _app.report_wav(
-                "{}.wav".format(location_wav_file),
+                wav_path,
                 save_json=True,
                 save_figure=True,
+                preloaded=(data, rate),
             )
+
+        # Single write-back of the fully processed audio.
+        wavfile.write(wav_path, rate, data)
 
         if tts_config["visual_smoothing"]["activate"]:
             shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count = 4, dtype = np.int32))
@@ -262,8 +267,15 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
             # Copy file in a platform-independent way
             shutil.copy(path_au, "./")  # Copy to current directory
 
-        # Update audio infos
-        AUDIO_EXAMPLE = AudioSegment.from_wav("{}.wav".format(location_wav_file))
+        # Update audio infos -- built directly from the in-memory samples
+        # (same ones just written to wav_path) instead of re-reading the file.
+        channels = data.shape[1] if data.ndim == 2 else 1
+        AUDIO_EXAMPLE = AudioSegment(
+            np.ascontiguousarray(data).tobytes(),
+            sample_width=data.dtype.itemsize,
+            frame_rate=rate,
+            channels=channels,
+        )
         audio_duration = len(AUDIO_EXAMPLE)/1000
 
     profiling_rec.set(
