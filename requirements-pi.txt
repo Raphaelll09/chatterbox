@@ -14,10 +14,9 @@
 #     split) and CUDA-only (Waveglow's `amp` usage), so it would very likely fail to build on
 #     aarch64 CPU-only even if it were needed. If Waveglow support is ever required on the Pi,
 #     revisit this — do not add apex back silently.
-#   - tensorflow / tensor2tensor / tgt / tensorboardX / pyworld / scikit_learn / librosa (explicit
-#     pin): FastSpeech2 *training/preprocessing*-only deps, not needed to run synthesize.py against
-#     an already-trained checkpoint. librosa is still present transitively (noisereduce depends on
-#     it), just not pinned here.
+#   - tensorflow / tensor2tensor / tgt / tensorboardX / pyworld / scikit_learn (explicit pin):
+#     FastSpeech2 *training/preprocessing*-only deps, not needed to run synthesize.py against an
+#     already-trained checkpoint.
 #   - simpleaudio / sounddevice: both are imported only under `if platform.system() == "Windows":`
 #     in audio_utils.py and gui_utils.py — dead code on Linux. Playback on the Pi goes through
 #     pydub.playback.play(), which shells out to `ffplay` (see apt-packages-pi.txt: ffmpeg).
@@ -32,6 +31,13 @@ scipy>=1.14.1
 matplotlib>=3.9.2
 transformers>=4.45.1
 noisereduce>=3.0.2
+librosa>=0.10.2  # hard direct dependency of hifi-gan-master/meldataset.py
+                 # (`from librosa.util import normalize`, `librosa.filters.mel`) — the active
+                 # vocoder's mel-filter setup, not optional. Previously left unpinned on the
+                 # assumption noisereduce would pull it in transitively; that broke once a
+                 # noisereduce release dropped its own librosa dependency (moved to a torch-based
+                 # STFT), so do not remove this pin again — pin the floor to a numpy-2.x-compatible
+                 # release (numpy>=2.0.2 above).
 pydub>=0.25.1
 g2p_en>=2.1.0
 pypinyin>=0.53.0

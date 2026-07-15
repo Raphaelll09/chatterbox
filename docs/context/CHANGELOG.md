@@ -15,6 +15,57 @@ state before starting new work.
 
 ---
 
+## 2026-07-15 — Normalize curly apostrophes before symbol filtering
+
+- What: `parse_pronunciation_mistakes()` now replaces `’`/`‘` (U+2019/U+2018) with the straight
+  `'` as its first step, before URL/mail parsing and the `symbols_regex_rules.csv` loop.
+  FastSpeech2's symbol set (`FastSpeech2/text/symbols.py` `_punctuation`) only includes the
+  straight apostrophe, so curly ones (routinely produced by word processors/mobile keyboards)
+  were being silently dropped by `_should_keep_symbol()` (`FastSpeech2/text/__init__.py`),
+  printing `The Character: '...' is not in the symbols list` and losing the elision entirely
+  (e.g. "qu’il" synthesized as if written "quil"). Deliberately *not* added as a
+  `symbols_regex_rules.csv` row: that loop pads every replacement with spaces
+  (`" {} ".format(...)`), which would have turned "qu'il" into "qu ' il" and introduced an
+  audible gap — a direct, unpadded `str.replace` avoids that.
+- Files: `synthesis_modules.py`
+- Why: found by comparing two back-to-back CPU-timing runs on the Pi 5 that both logged
+  repeated "not in the symbols list" warnings for the same French fable text (rich in
+  apostrophe elisions typed with curly quotes).
+- Verify: `python3 do_tts.py` with text containing "qu’il"/"s’est"/etc. (curly apostrophe) no
+  longer prints the symbols-list warning, and `Input after pre-processing:` shows the straight
+  `'` in place.
+- Notes/gotchas: only U+2019/U+2018 are handled. Curly double quotes (`“`/`”`) have the same
+  underlying gap (also absent from `_punctuation`) but weren't hit by the observed input — same
+  fix pattern would apply if they come up.
+
+---
+
+## 2026-07-15 — Pin missing `librosa` dependency in requirements-pi.txt
+
+- What: `requirements-pi.txt` left `librosa` unpinned on the assumption that `noisereduce`
+  pulls it in transitively (true for the exact `noisereduce==3.0.2` pin in
+  `requirements-dev.txt`, per that file's own comment). On a real Pi 5 provisioning run, the
+  loose `noisereduce>=3.0.2` floor resolved to a newer noisereduce release whose dependency
+  metadata no longer requires librosa (moved to a torch-based STFT), so librosa was never
+  installed — even though it's a hard, direct import of the active vocoder code
+  (`hifi-gan-master/meldataset.py`: `from librosa.util import normalize`,
+  `librosa.filters.mel`). Surfaced as `ModuleNotFoundError: No module named 'librosa'` at
+  `import gui_utils` → ... → `inference_e2e` → `meldataset` on `python3 do_tts.py`, despite
+  `scripts/setup_pi.sh`'s own end-to-end smoke test having passed earlier in the same
+  provisioning run (presumably a slightly different noisereduce resolution at that moment, or
+  librosa was present then and removed/never-added by a later `pip` operation — exact trigger
+  unconfirmed, but the missing explicit pin is the root cause either way).
+- Files: `requirements-pi.txt`
+- Why: make librosa's dependency explicit and pinned instead of relying on an incidental
+  transitive resolution that isn't guaranteed to hold as noisereduce's own dependencies drift.
+- Verify: on the Pi, `pip install librosa` unblocks the immediate failure; re-running
+  `pip install -r requirements-pi.txt` (or a fresh `scripts/setup_pi.sh`) now installs librosa
+  directly regardless of what noisereduce resolves to.
+- Notes/gotchas: `requirements-pi-lock.txt` on already-provisioned Pi units won't reflect this
+  until `pip install -r requirements-pi.txt` (or `setup_pi.sh`) is re-run there.
+
+---
+
 ## 2026-07-10 — Inference-time micro-optimizations (I/O caching + inference_mode)
 
 - What: Four targeted, code-only latency fixes identified by a hot-path review, no new
