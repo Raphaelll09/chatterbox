@@ -364,6 +364,12 @@ def parse_params_from_text(text, tts_config):
 
 def parse_pronunciation_mistakes(text_to_syn):
 
+    # Normalize "smart" apostrophes to the straight one the model's symbol set expects
+    # (FastSpeech2/text/symbols.py's _punctuation only has U+0027) -- a direct substitution,
+    # not routed through symbols_regex_rules.csv, since that loop pads replacements with
+    # spaces and would break elisions like "qu'il" into "qu ' il".
+    text_to_syn = text_to_syn.replace("’", "'").replace("‘", "'")
+
     # Spell url and mail
     text_to_syn = re.sub("(https?\:[^ \,]+)", do_adr, text_to_syn, flags=re.IGNORECASE) # url https?
     text_to_syn = re.sub("(www.[^ \,]+)", do_adr, text_to_syn, flags=re.IGNORECASE) # url www.
