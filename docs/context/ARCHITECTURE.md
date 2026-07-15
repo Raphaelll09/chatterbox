@@ -116,6 +116,16 @@ This module is opt-in (`postprocess.enabled: false` by default in `config_tts.ya
 the pipeline only in `audio_utils.syn_audio()`; `do_tts.py --report-wav` also calls it standalone for
 analysis without touching the synthesis pipeline.
 
+`report_wav()` takes an optional `preloaded=(data, rate)` kwarg (added 2026-07-10) so
+`audio_utils.syn_audio()` can pass it the in-memory samples it already has mid-pipeline instead of
+making it re-read the wav from disk; the standalone `--report-wav` CLI path (no samples in memory
+yet) omits it and reads from disk as before.
+
+`audio_utils.syn_audio()`'s "write" stage (denoise → optional postprocess → optional analyze →
+final `AudioSegment` for playback/duration) keeps the waveform in memory across all of those steps
+and writes it to disk exactly once, instead of round-tripping the wav file through disk at each
+step (a change made 2026-07-10 for latency, not correctness — see CHANGELOG).
+
 ## Platform-specific playback
 
 Audio playback branches on `platform.system()` in both `audio_utils.py` and `gui_utils.py`: Windows

@@ -136,7 +136,7 @@ def process_per_batch(
 ):
     batch = to_device(batch, device, use_styleTag_encoder=model_config["styleTag_encoder"]["use_styleTag_encoder"])
 
-    with torch.no_grad():
+    with torch.inference_mode():
         # Forward
         output = model(
             *(batch[2:6]),

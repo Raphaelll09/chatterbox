@@ -36,7 +36,7 @@ def load_free_styleTags_embedding(free_styleTags, flaubert_model, flaubert_token
 def load_FlauBERT_embedding_from_styleTag(styleTag, flaubert_model, flaubert_tokenizer):
     tokens = flaubert_tokenizer.tokenize(styleTag)
     token_ids = flaubert_tokenizer.encode(tokens) # same as flaubert_tokenizer.encode(styleTag)
-    with torch.no_grad():
+    with torch.inference_mode():
         last_layer = flaubert_model(torch.tensor([token_ids]))[0][0, 1:-1, :].detach().numpy()
     # Sum token embeddings into word embedding
     styleTag_embedding = np.sum(last_layer, axis=0)

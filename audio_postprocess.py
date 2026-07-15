@@ -373,6 +373,7 @@ def report_wav(
     *,
     save_json: bool = False,
     save_figure: bool = False,
+    preloaded: tuple[np.ndarray, int] | None = None,
 ) -> dict[str, Any]:
     """Analyze an existing .wav file and optionally save JSON / PNG reports.
 
@@ -381,12 +382,18 @@ def report_wav(
     wav_path:     Path to a .wav file.
     save_json:    Write <wav_path>.report.json alongside the wav.
     save_figure:  Write <wav_path>.report.png (requires matplotlib).
+    preloaded:    Optional (data, rate) tuple to analyze directly instead of
+                  re-reading wav_path from disk (the caller already has the
+                  samples in memory, e.g. mid-pipeline in audio_utils.syn_audio).
 
     Returns
     -------
     The analyze() report dict.
     """
-    rate, data = wavfile.read(wav_path)
+    if preloaded is not None:
+        data, rate = preloaded
+    else:
+        rate, data = wavfile.read(wav_path)
     result = analyze(data, rate)
     print_report(result, label=os.path.basename(wav_path))
 

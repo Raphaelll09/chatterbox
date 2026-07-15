@@ -47,7 +47,7 @@ def inference(a, state_dict_g, h, generator=None):
     # filelist = glob.glob("{}/*.WAVEGLOW".format(a.input_mels_dir))
 
     os.makedirs(a.output_dir, exist_ok=True)
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, filname in enumerate(filelist):
             if re.match(".*WAVEGLOW", filname):
                 if True:

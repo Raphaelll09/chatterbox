@@ -15,6 +15,62 @@ state before starting new work.
 
 ---
 
+## 2026-07-10 — Inference-time micro-optimizations (I/O caching + inference_mode)
+
+- What: Four targeted, code-only latency fixes identified by a hot-path review, no new
+  dependencies:
+  1. `audio_utils.syn_audio()`: the post-synthesis "write" stage (denoise → optional
+     postprocess → optional analyze → final `AudioSegment` for playback/duration) used to
+     read the wav back from disk at every step and re-read it a final time via
+     `AudioSegment.from_wav()`. Now the array is kept in memory across all steps, written to
+     disk exactly once, and `AudioSegment` is built directly from the in-memory samples.
+     `audio_postprocess.report_wav()` gained an optional `preloaded=(data, rate)` kwarg so the
+     `analyze` path can reuse the same in-memory samples instead of re-reading the file
+     (backward-compatible — the standalone `--report-wav` CLI path still reads from disk).
+  2. `synthesis_modules.py`: `parse_pronunciation_mistakes()`/`do_adr()` used to re-open and
+     `tqdm`-iterate `symbols_regex_rules.csv`/`custom_regex_rules.csv`/`url_regex_rules.csv`
+     (123 lines total) on *every* synthesis call. Now parsed once into module-level caches
+     (`_get_symbols_regex_rules()`/`_get_custom_regex_rules()`/`_get_url_regex_rules()`) —
+     the `tqdm` import is gone too, since the per-call iteration it wrapped no longer exists.
+  3. `synthesis_modules.py`: `syn_fastspeech2()` (and the `<SPEAKER=...>` text-tag path in
+     `parse_params_from_text()`) re-read+re-parsed `speakers.json` on every call just to print
+     the speaker's display name. Now cached per-path in `_get_speaker_list()`.
+  4. Swapped `torch.no_grad()` → `torch.inference_mode()` (strictly cheaper — skips autograd
+     view-tracking bookkeeping entirely) in the four hot forward-pass call sites:
+     `FastSpeech2/synthesize.py:process_per_batch`, `FastSpeech2/utils/model.py:vocoder_infer`,
+     `hifi-gan-master/inference_e2e.py:inference`, `FastSpeech2/dataset.py:load_FlauBERT_embedding_from_styleTag`.
+- Files: `audio_utils.py`, `audio_postprocess.py`, `synthesis_modules.py`,
+  `FastSpeech2/synthesize.py`, `FastSpeech2/utils/model.py`, `FastSpeech2/dataset.py`,
+  `hifi-gan-master/inference_e2e.py`.
+- Why: A code-only (no new deps) pass over the synthesis hot path for the Pi 5 embedded
+  target, requested to shave per-utterance latency without touching model architecture or
+  audio quality. Full options list (including ones *not* applied, e.g. reverting the denoiser
+  to its cheaper `stationary=True` mode — a quality/speed trade-off left for a separate
+  decision) was written up as a report before any change was made.
+- Verify: `tests/` (71 tests, all passing, unchanged pass count). Manual before/after
+  benchmark on the dev machine (`do_tts.py --benchmark --sentences <1-sentence file>
+  --repeats 10`, git-stashing the fix commit to get a clean A/B): output `audio_file.wav` is
+  **byte-identical** (same SHA-256) before and after across 40 total synthesis calls — zero
+  functional/quality regression. Console output confirms fix 2 structurally: the `tqdm`
+  progress-bar lines (40 of them across 20 baseline calls, from re-reading the two CSVs each
+  time) disappear entirely after the fix. `write`-stage per-sentence profiling timing (fix 1's
+  target) improved slightly (~-12% mean / ~-2% median) but within run-to-run noise on this
+  dev machine — small wav files mean the redundant reads mostly hit the OS page cache here;
+  expect a clearer win on the Pi 5's slower storage. `vocoder`/`acoustic` stage timings showed
+  no clean signal either way (a mid-run slowdown-then-recovery pattern in one A/B pass points
+  to host-machine noise, e.g. background scanning of just-modified files, not a code-caused
+  regression — `inference_mode` cannot add per-call overhead over `no_grad`).
+- Notes/gotchas: This Windows dev checkout is not the target platform and has enough
+  measurement noise (shared machine, no core pinning, small files fit in OS cache) that only
+  the structural fixes (3, and to a lesser extent 1) could be confirmed with clean evidence
+  here. Re-measure on an actual Pi 5 with `--benchmark --profile --join` (+ PMIC calibration)
+  for a trustworthy energy/latency read before drawing conclusions about the on-device impact.
+  The denoiser parameter question (non-stationary vs. the commented-out `stationary=True`
+  config) was flagged but deliberately left untouched — it's a quality/speed trade-off, not a
+  free win, and needs a listening comparison before deciding.
+
+---
+
 ## 2026-07-10 — Per-rail PMIC power + paste-ready Excel export
 
 - What: Extended the profiler and offline join (not duplicated) with explicit per-rail PMIC power,

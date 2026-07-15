@@ -17,7 +17,6 @@ import re
 import loading_modules
 import profiling
 from scipy.io import loadmat
-from tqdm import tqdm
 
 #sys.path.insert(1, "./FastSpeech2")
 from synthesize import synthesize
@@ -34,6 +33,40 @@ audio_file_name = "audio_file"
 regex_file = "custom_regex_rules.csv"
 symbols_regex_file = "symbols_regex_rules.csv"
 url_regex_file = "url_regex_rules.csv"
+
+# Rule files never change during a run -- parse each once and reuse, instead
+# of re-opening/re-reading them on every synthesis call.
+_symbols_regex_rules = None
+_custom_regex_rules = None
+_url_regex_rules = None
+_speaker_list_cache = {}
+
+def _get_symbols_regex_rules():
+    global _symbols_regex_rules
+    if _symbols_regex_rules is None:
+        with open(symbols_regex_file, encoding="utf-8") as f:
+            _symbols_regex_rules = [line.strip().rsplit("|", 1) for line in f]
+    return _symbols_regex_rules
+
+def _get_custom_regex_rules():
+    global _custom_regex_rules
+    if _custom_regex_rules is None:
+        with open(regex_file, encoding="utf-8") as f:
+            _custom_regex_rules = [line.strip().split("|") for line in f]
+    return _custom_regex_rules
+
+def _get_url_regex_rules():
+    global _url_regex_rules
+    if _url_regex_rules is None:
+        with open(url_regex_file, encoding="utf-8") as f:
+            _url_regex_rules = [line.strip().rsplit("|", 1) for line in f]
+    return _url_regex_rules
+
+def _get_speaker_list(speakers_location):
+    if speakers_location not in _speaker_list_cache:
+        with open(speakers_location, "r") as f:
+            _speaker_list_cache[speakers_location] = json.load(f)
+    return _speaker_list_cache[speakers_location]
 
 def tts(text_to_syn, tts_config, gui_control, linking_utt):
     syn_script = tts_config['syn_script']
@@ -174,8 +207,7 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
 
     # Logs synthesis infos
     speakers_location = os.path.join(configs[0]['path']['preprocessed_path'], "speakers.json")
-    with open(speakers_location, "r") as f:
-        speaker_list = json.load(f)
+    speaker_list = _get_speaker_list(speakers_location)
 
     print('Speaker: "{}", Style: "{}", Style intensity: "{}"'.format(
         list(speaker_list.keys())[args['speaker_id']], 
@@ -313,8 +345,7 @@ def parse_params_from_text(text, tts_config):
             open(os.path.join(tts_config['folder'], tts_config["default_args"]["preprocess_config"]), "r"), Loader=yaml.FullLoader
         )
         speakers_location = os.path.join(preprocess_config['path']['preprocessed_path'], "speakers.json")
-        with open(speakers_location, "r") as f:
-            speaker_list = json.load(f)
+        speaker_list = _get_speaker_list(speakers_location)
 
         try:
             speaker_index = speaker_list[speaker]
@@ -339,20 +370,15 @@ def parse_pronunciation_mistakes(text_to_syn):
     text_to_syn = re.sub("([^ \@]+\@[\w\d]+\.[^ \,]+)", do_adr, text_to_syn, flags=re.IGNORECASE) # mail
 
     # Symbols are replace regardless of their surrounding
-    with open(symbols_regex_file, encoding="utf-8") as f:
-        for line in tqdm(f):
-            parts = line.strip().rsplit("|", 1)
-            text_to_syn = re.sub(parts[0], " {} ".format(parts[1]), text_to_syn, flags=re.IGNORECASE)
+    for parts in _get_symbols_regex_rules():
+        text_to_syn = re.sub(parts[0], " {} ".format(parts[1]), text_to_syn, flags=re.IGNORECASE)
 
     # other regex are replaced only as isolated words
-    with open(regex_file, encoding="utf-8") as f:
-        for line in tqdm(f):
-            parts = line.strip().split("|")
-            
-            ortho = '([ \"\',?;.:!§\(\)\[\]])(' + parts[0] + ')([ \"\',?;.:!§\(\)\[\]])' # \p{P} does not seem to work
-            phonetic = '\\1{}\\3'.format(parts[1])
+    for parts in _get_custom_regex_rules():
+        ortho = '([ \"\',?;.:!§\(\)\[\]])(' + parts[0] + ')([ \"\',?;.:!§\(\)\[\]])' # \p{P} does not seem to work
+        phonetic = '\\1{}\\3'.format(parts[1])
 
-            text_to_syn = re.sub(ortho, phonetic, text_to_syn, flags=re.IGNORECASE)
+        text_to_syn = re.sub(ortho, phonetic, text_to_syn, flags=re.IGNORECASE)
     return text_to_syn
 
 def trim_punctuation_mistakes(text_to_syn):
@@ -375,13 +401,11 @@ def trim_punctuation_mistakes(text_to_syn):
 
     return text_to_syn
 
-def do_adr(match):         
+def do_adr(match):
     url = match.group(0)
 
-    with open(url_regex_file, encoding="utf-8") as f:
-        for line in tqdm(f):
-            parts = line.strip().rsplit("|", 1)
-            url = re.sub(parts[0], " {} ".format(parts[1]), url, flags=re.IGNORECASE)
+    for parts in _get_url_regex_rules():
+        url = re.sub(parts[0], " {} ".format(parts[1]), url, flags=re.IGNORECASE)
 
     return f"{url}"
 

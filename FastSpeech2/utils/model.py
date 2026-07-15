@@ -94,7 +94,7 @@ def get_vocoder(config, device):
 
 def vocoder_infer(mels, vocoder, model_config, preprocess_config, lengths=None):
     name = model_config["vocoder"]["model"]
-    with torch.no_grad():
+    with torch.inference_mode():
         if name == "MelGAN":
             wavs = vocoder.inverse(mels / np.log(10))
         elif name == "HiFi-GAN":
