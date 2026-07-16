@@ -66,6 +66,11 @@ def load_samples(profile_dir, scale, offset):
 
 def load_sentences(profile_dir):
     path = os.path.join(profile_dir, "per_sentence.jsonl")
+    if not os.path.exists(path):
+        raise SystemExit(
+            "[join] {} not found - nothing to join. Run a synthesis session with "
+            "--profile (or --benchmark) first to generate it.".format(path)
+        )
     records = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -87,7 +92,13 @@ def _integrate_energy_j(window, power_key="pmic_power_w"):
     if len(pts) < 2:
         return None
     t, p = zip(*sorted(pts))
-    trapezoid = getattr(np, "trapezoid", np.trapz)
+    # getattr(np, "trapezoid", np.trapz) looks like a safe fallback but isn't:
+    # the default-argument expression np.trapz is evaluated eagerly, before
+    # getattr runs, so it raises AttributeError by itself on NumPy versions
+    # that have dropped np.trapz (renamed to np.trapezoid in NumPy 2.0) --
+    # exactly the "fallback" line is what crashes. hasattr() short-circuits
+    # before ever touching the missing attribute.
+    trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
     return float(trapezoid(p, t))
 
 
@@ -218,10 +229,25 @@ def run_join(profile_dir="profile"):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--profile-dir", default="profile")
+    parser = argparse.ArgumentParser(
+        description="Re-run the offline join (profile/per_sample.csv + "
+                     "per_sentence.jsonl -> per_sentence_results.csv / "
+                     "per_stage_results.csv) on existing logs, without "
+                     "re-running synthesis. Useful after a calibration.json "
+                     "change or a mid-join crash."
+    )
+    parser.add_argument("--profile-dir", default="profile",
+                         help="Directory holding per_sample.csv / per_sentence.jsonl "
+                              "(default: profile)")
+    parser.add_argument("--export-xlsx", action="store_true",
+                         help="After joining, also export to "
+                              "<profile-dir>/exports/chatterbox_paste.xlsx "
+                              "(benchmark/export_to_xlsx.py). Requires openpyxl.")
     args = parser.parse_args()
     run_join(args.profile_dir)
+    if args.export_xlsx:
+        from benchmark.export_to_xlsx import export as export_xlsx
+        export_xlsx(args.profile_dir)
 
 
 if __name__ == "__main__":

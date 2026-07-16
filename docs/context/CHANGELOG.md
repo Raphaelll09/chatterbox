@@ -15,6 +15,88 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Fix NumPy 2.0 join crash, standalone join entry point, subtitle-split print explained
+
+- What:
+  1. `profiling/join.py::_integrate_energy_j`: `trapezoid = getattr(np, "trapezoid",
+     np.trapz)` crashes on NumPy versions where `np.trapz` has actually been removed,
+     because the default-argument expression `np.trapz` is evaluated eagerly (before
+     `getattr` runs) regardless of whether the lookup would've succeeded — the
+     "fallback" line is what raises `AttributeError`. Replaced with
+     `np.trapezoid if hasattr(np, "trapezoid") else np.trapz`, which short-circuits
+     before ever touching the possibly-missing attribute. Repo-wide search for the same
+     eager-`getattr` pattern and other removed-in-2.0 aliases (`np.float_`, `np.int_`,
+     `np.NaN`, `np.alltrue`, `np.product`, `np.cumproduct`, `np.round_`) found no other
+     occurrences. (This dev venv pins numpy 2.0.2, where `np.trapz` still exists — the
+     crash doesn't reproduce here, but the eager-evaluation bug is real regardless, and
+     `requirements-pi.txt`'s loose `numpy>=2.0.2` floor is exactly what let the Pi
+     resolve a newer numpy that already dropped it.)
+  2. `profiling/join.py::load_sentences`: missing `per_sentence.jsonl` now raises a
+     clear `SystemExit` message instead of a raw `FileNotFoundError` traceback.
+  3. `profiling/join.py::main`: added `--export-xlsx` (calls
+     `benchmark.export_to_xlsx.export` after the join, matching `do_tts.py
+     --benchmark --export-xlsx`'s behavior) and a description string. The module
+     already had `if __name__ == "__main__": main()` and a working `--profile-dir`
+     flag, so `python3 -m profiling.join [--profile-dir DIR] [--export-xlsx]` was
+     already usable standalone — verified by running it against local `profile/`
+     logs (no re-synthesis).
+- Files: `profiling/join.py`
+- Why: `python3 do_tts.py --benchmark --profile --join --repeats 3` completed the full
+  33-sentence benchmark on the Pi but crashed in the join step (NumPy 2.0 removed
+  `np.trapz`) — the raw per-sentence/per-sample logs were already written correctly,
+  only the post-processing failed, so the fix needed to be re-runnable against
+  existing logs rather than requiring a ~10-minute re-benchmark.
+- Verify: `python3 -m pytest tests/` (71 passed, unaffected — no test covers
+  `profiling/join.py` directly). Manually: `python3 -m profiling.join --help` shows
+  the new flag; `python3 -m profiling.join --profile-dir /nonexistent` exits 1 with
+  the clear message instead of a traceback; `python3 -m profiling.join` against this
+  checkout's local `profile/` (2 stray `EX1` records, no `per_sample.csv`) writes
+  `per_sentence_results.csv`/`per_stage_results.csv` with the timing columns
+  populated and the power columns empty (expected — no PMIC sampler data on this
+  machine) instead of crashing.
+- Notes/gotchas: **the real verification (33 records, populated `ina_power_w`/
+  `cpu_power_w`) still needs to be run on the Pi**, against the logs already sitting
+  in `~/chatterbox/profile/` from the crashed run — `profile/*.csv`/`*.jsonl` are
+  gitignored (never synced via git), and this dev checkout only has 2 unrelated stray
+  records with no `per_sample.csv` at all, so that specific check couldn't be
+  performed from here. On the Pi: `cd ~/chatterbox && git pull && python3 -m
+  profiling.join` (after pulling this fix) should produce the real
+  `per_sentence_results.csv` from the already-completed benchmark run without
+  re-synthesizing anything.
+
+  Also investigated (no code change, per the "explain, don't change behavior yet"
+  instruction): the debug print seen for inputs over ~58-60 characters (e.g. `[87,
+  102]` for the B2 benchmark sentence, `[39, 138, 138]` for C1 — reproduced exactly
+  by calling `audio_utils.find_separators_subtitles()` directly on those sentences)
+  is `print(separators_indexes)` at `audio_utils.py:390`, inside `write_subtitles()`
+  (only reached when `config_tts.yaml`'s `subtitles.create_file: True`, which is the
+  default, and only for text over `subtitles.max_nbr_char: 60` chars after
+  preprocessing). **This is not synthesis-time chunking** — it's a post-hoc split of
+  the *already-synthesized* subtitle text into ≤60-char `.vtt` cue lines, using the
+  per-symbol durations FastSpeech2 already produced, purely for subtitle display
+  timing. It runs after the full mel-spectrogram + vocoder pass for the whole
+  sentence has already completed, so it is **not** a usable hook for streaming
+  synthesis (chunking here doesn't reduce time-to-first-audio at all). The existing
+  `§` sub-utterance marker (`audio_utils.syn_audio()`'s `sub_utterance_separator`
+  handling, synthesizing each `§`-delimited piece separately then concatenating) is
+  the actual pre-synthesis chunking mechanism already in the pipeline, and would be
+  the real starting point for streaming synthesis if that's wanted later. The print
+  itself has no descriptive label (unlike every other print in the codebase, e.g.
+  `"Speaker: ..."`, `"TTS duration: ..."`) and reads as leftover debug output rather
+  than an intentional user-facing message, but this repo has no existing debug/
+  verbosity flag anywhere to gate it behind (`grep -r "debug\|verbose"` over the
+  active pipeline code found nothing) — left unchanged, since Task 5's instruction
+  to gate it was conditional on such a flag already existing, and inventing one
+  wasn't asked for.
+
+  Task 4 (benchmark warm-up) from the source prompt was intentionally skipped: an
+  equivalent warm-up already exists for free-text mode (see the entry directly
+  below), and `--benchmark` deliberately excludes it — its REF-first/REF-last
+  sentences exist specifically to *measure* the cold-start effect for this project's
+  power-profiling work, so adding a silent pre-benchmark warm-up would defeat that.
+
+---
+
 ## 2026-07-16 — Background warm-up synthesis in free-text mode
 
 - What: `do_tts.py`'s free-text branch now fires a throwaway warm-up synthesis
