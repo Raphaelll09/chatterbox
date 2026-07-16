@@ -567,3 +567,62 @@ def test_sampler_patch_meta_json_is_best_effort_without_existing_file(tmp_path):
     with open(tmp_path / "meta.json", encoding="utf-8") as f:
         meta = json.load(f)
     assert meta["ina_detected"] is False
+
+
+class _FakeInaBus:
+    """Stand-in for smbus2.SMBus: serves each INA226 register independently
+    and refuses any read wider than 2 bytes, so a regression back to a
+    combined multi-register block read (the actual root cause of the
+    always-0xFFFF current/power bug -- the INA226 doesn't auto-increment its
+    register pointer across registers within one read) fails loudly instead
+    of silently reintroducing bad data."""
+
+    def __init__(self, register_words):
+        self.register_words = register_words  # {register: 16-bit int}
+        self.calls = []
+
+    def read_i2c_block_data(self, i2c_addr, register, length):
+        self.calls.append((register, length))
+        assert length == 2, (
+            "expected a single-register (2-byte) read; a length != 2 means "
+            "the combined-block-read bug (BUS_V/POWER/CURRENT assumed to "
+            "auto-increment in one transaction) has come back"
+        )
+        value = self.register_words[register]
+        return [(value >> 8) & 0xFF, value & 0xFF]
+
+
+def test_read_ina226_reads_bus_voltage_and_current_as_separate_registers():
+    # 5.06 V -> raw 4048 (0x0FD0); 0.0625 A -> raw 250 (0x00FA), matching the
+    # idle values ina226_logger.py measured on the real amp branch.
+    fake_bus = _FakeInaBus({
+        parsing.INA226_REG_BUS_V: 4048,
+        parsing.INA226_REG_CURRENT: 250,
+    })
+    sampler = Sampler(out_path="unused.csv")
+    sampler._ina_bus = fake_bus
+
+    result = sampler._read_ina226()
+
+    assert result["ina_bus_v"] == pytest.approx(5.06, abs=0.001)
+    assert result["ina_current_a"] == pytest.approx(0.0625, abs=0.0001)
+    assert result["ina_power_w"] == pytest.approx(5.06 * 0.0625, abs=0.001)
+    # Two separate 2-byte reads, one per register - not one wider read.
+    assert fake_bus.calls == [
+        (parsing.INA226_REG_BUS_V, 2),
+        (parsing.INA226_REG_CURRENT, 2),
+    ]
+
+
+def test_read_ina226_decodes_negative_current():
+    fake_bus = _FakeInaBus({
+        parsing.INA226_REG_BUS_V: 4048,
+        parsing.INA226_REG_CURRENT: 0xFFFF,  # -1 LSB = -0.00025 A
+    })
+    sampler = Sampler(out_path="unused.csv")
+    sampler._ina_bus = fake_bus
+
+    result = sampler._read_ina226()
+
+    assert result["ina_current_a"] == pytest.approx(-0.00025, abs=1e-6)
+    assert result["ina_power_w"] < 0  # bus_v * negative current
