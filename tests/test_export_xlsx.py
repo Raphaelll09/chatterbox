@@ -2,6 +2,8 @@
 logic, plus one openpyxl round-trip check for the actual sheet layout.
 Skips the openpyxl-dependent tests if it isn't installed (it's an optional
 dependency, guarded by try/except in export_to_xlsx.write_workbook())."""
+import os
+
 import pytest
 
 import benchmark.export_to_xlsx as export_to_xlsx
@@ -114,3 +116,91 @@ def test_write_workbook_creates_one_sheet_per_pass(tmp_path):
     assert ws.max_row == 12  # header + 11 data rows
     assert ws["A2"].value == "REF_start"
     assert ws["A12"].value == "REF_end"
+
+
+# ---------------------------------------------------------------------------
+# --profile-dir resolution (profile/latest -> per-run dir, or an interactive
+# pick-a-run fallback when that pointer isn't usable)
+# ---------------------------------------------------------------------------
+
+def _make_run(base_dir, run_id, with_results=True):
+    run_dir = base_dir / run_id
+    run_dir.mkdir()
+    if with_results:
+        (run_dir / "per_sentence_results.csv").write_text("sentence_id\n", encoding="utf-8")
+    return run_dir
+
+
+def test_resolve_profile_dir_uses_explicit_arg_without_touching_disk(tmp_path):
+    # An explicit --profile-dir is used as-is, even if it doesn't exist -
+    # load_per_sentence_rows() gives the "not found" error later, not this.
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), "/some/explicit/path")
+    assert result == "/some/explicit/path"
+
+
+def test_resolve_profile_dir_follows_latest_symlink(tmp_path):
+    _make_run(tmp_path, "run_20260716_120000")
+    os.symlink("run_20260716_120000", tmp_path / "latest", target_is_directory=True)
+
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+    assert result == str(tmp_path / "run_20260716_120000")
+
+
+def test_resolve_profile_dir_follows_latest_txt_pointer(tmp_path):
+    _make_run(tmp_path, "run_20260716_120000")
+    (tmp_path / "latest.txt").write_text("run_20260716_120000", encoding="utf-8")
+
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+    assert result == str(tmp_path / "run_20260716_120000")
+
+
+def test_resolve_profile_dir_ignores_latest_pointing_at_unjoined_run(tmp_path):
+    # profile/latest points at a run that was profiled but never --join'd
+    # (no per_sentence_results.csv yet) - must not be silently accepted.
+    _make_run(tmp_path, "run_20260716_090000", with_results=False)
+    (tmp_path / "latest.txt").write_text("run_20260716_090000", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+
+def test_resolve_profile_dir_prompts_when_no_latest_pointer(tmp_path, monkeypatch):
+    _make_run(tmp_path, "run_20260716_080000")
+    _make_run(tmp_path, "run_20260716_120000")  # most recent, listed first
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+    assert result == str(tmp_path / "run_20260716_120000")
+
+
+def test_resolve_profile_dir_prompt_default_is_most_recent(tmp_path, monkeypatch):
+    _make_run(tmp_path, "run_20260716_080000")
+    _make_run(tmp_path, "run_20260716_120000")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")  # just hit Enter
+
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+    assert result == str(tmp_path / "run_20260716_120000")
+
+
+def test_resolve_profile_dir_prompt_skips_unjoined_runs(tmp_path, monkeypatch):
+    _make_run(tmp_path, "run_20260716_080000", with_results=False)
+    _make_run(tmp_path, "run_20260716_120000")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+
+    result = export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+    assert result == str(tmp_path / "run_20260716_120000")
+
+
+def test_resolve_profile_dir_raises_clearly_with_no_runs_at_all(tmp_path):
+    with pytest.raises(SystemExit):
+        export_to_xlsx._resolve_profile_dir(str(tmp_path), None)
+
+
+def test_load_per_sentence_rows_missing_file_raises_clear_error(tmp_path):
+    with pytest.raises(SystemExit):
+        export_to_xlsx.load_per_sentence_rows(str(tmp_path))

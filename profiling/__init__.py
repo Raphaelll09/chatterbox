@@ -64,6 +64,22 @@ def get_run_dir():
     return _run_dir
 
 
+def list_run_dirs(base_dir="profile"):
+    """Names of every profile/run_YYYYMMDD_HHMMSS* directory under base_dir,
+    most recent first. Lexicographic sort is correct here since the
+    timestamp format is fixed-width and zero-padded. Used by standalone
+    re-run tools (profiling/join.py, benchmark/export_to_xlsx.py) to offer a
+    pick-a-run fallback when profile/latest isn't usable (e.g. stale, or the
+    picked run was never --join'd)."""
+    if not os.path.isdir(base_dir):
+        return []
+    return sorted(
+        (name for name in os.listdir(base_dir)
+         if name.startswith("run_") and os.path.isdir(os.path.join(base_dir, name))),
+        reverse=True,
+    )
+
+
 def _read_governor():
     try:
         with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as f:
