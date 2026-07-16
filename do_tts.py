@@ -181,6 +181,7 @@ if __name__ == "__main__":
             sample_hz=prof_cfg.get("sample_hz", 10),
             pmic_hz=prof_cfg.get("pmic_hz", 10),
             ina=prof_cfg.get("ina226", True),
+            meta_extra={"play": args.play, "repeats": args.repeats} if args.benchmark else None,
         )
 
     def load_models():
@@ -251,8 +252,13 @@ if __name__ == "__main__":
 
     if args.benchmark and (args.join or args.export_xlsx):
         from profiling.join import run_join
-        run_join(prof_cfg.get("output_dir", "profile"))
+        # profiling.get_run_dir() is this session's profile/run_.../ (set by
+        # start_session(), still valid after stop_session() -- see its
+        # docstring). Falls back to the base output_dir only if profiling was
+        # somehow enabled without a session ever starting.
+        run_dir = profiling.get_run_dir() or prof_cfg.get("output_dir", "profile")
+        run_join(run_dir)
 
     if args.benchmark and args.export_xlsx:
         from benchmark.export_to_xlsx import export as export_xlsx
-        export_xlsx(prof_cfg.get("output_dir", "profile"))
+        export_xlsx(run_dir)

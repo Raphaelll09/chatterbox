@@ -4,13 +4,20 @@
 per-stage energy/CPU results. Not time-critical - run this after a batch of
 synthesis, not during it.
 
-Usage:
-    python profiling/join.py [--profile-dir profile]
+Each profiled run writes into its own profile/run_YYYYMMDD_HHMMSS/ directory
+(see profiling/__init__.py's start_session()); profile/latest points at the
+most recent one.
 
-Writes profile/per_sentence_results.csv and profile/per_stage_results.csv.
+Usage:
+    python3 -m profiling.join                       # profile/latest
+    python3 -m profiling.join --profile-dir DIR      # a specific run dir
+    python3 -m profiling.join --export-xlsx          # also export to xlsx
+
+Writes <profile-dir>/per_sentence_results.csv and per_stage_results.csv.
 Applies a PMIC->external-meter calibration (scale, offset) from
-profile/calibration.json if present (identity otherwise) - see
-profiling/calibrate.py and the README "Profiling" section.
+profile/calibration.json (the base dir, shared across runs) if present
+(identity otherwise) - see profiling/calibrate.py and the README "Profiling"
+section.
 """
 import argparse
 import csv
@@ -23,12 +30,19 @@ STAGES = ["front_end", "acoustic", "vocoder", "write"]
 
 
 def load_calibration(profile_dir):
-    path = os.path.join(profile_dir, "calibration.json")
-    if not os.path.exists(path):
-        return 1.0, 0.0
-    with open(path, encoding="utf-8") as f:
-        cal = json.load(f)
-    return float(cal.get("scale", 1.0)), float(cal.get("offset", 0.0))
+    """calibration.json is a base-dir-level artifact (created once by
+    profiling/calibrate.py, reused across every run), not per-run - so with
+    the profile/run_.../ layout it normally lives one directory up from
+    profile_dir. Checked in profile_dir itself first (in case of a
+    deliberate per-run override, or the older flat profile/ layout where
+    profile_dir *is* the base dir), then its parent."""
+    for candidate_dir in (profile_dir, os.path.dirname(os.path.normpath(profile_dir))):
+        path = os.path.join(candidate_dir, "calibration.json")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                cal = json.load(f)
+            return float(cal.get("scale", 1.0)), float(cal.get("offset", 0.0))
+    return 1.0, 0.0
 
 
 def load_samples(profile_dir, scale, offset):
@@ -53,7 +67,10 @@ def load_samples(profile_dir, scale, offset):
                 "pmic_power_w": (scale * float(pmic) + offset) if pmic not in (None, "") else None,
                 "cpu_total": float(cpu) if cpu not in (None, "") else None,
                 "temp_c": float(temp) if temp not in (None, "") else None,
-                "throttled": int(throttled) if throttled not in (None, "") else None,
+                # base 0 auto-detects "0x..." (current sampler.py output) as well
+                # as plain decimal (older per_sample.csv files written before the
+                # throttled column switched to a hex string).
+                "throttled": int(throttled, 0) if throttled not in (None, "") else None,
                 # INA226 and the per-rail PMIC signals are direct absolute readings
                 # (no external-meter fit needed, unlike the summed PMIC total above).
                 "ina_power_w": float(ina_power) if ina_power not in (None, "") else None,
@@ -116,6 +133,39 @@ def _throttled_any(window):
     if not values:
         return None
     return any(v != 0 for v in values)
+
+
+def _filter_records_to_sample_window(records, samples):
+    """Drop sentence records whose synthesis window falls entirely outside
+    the sample stream's time range, instead of silently emitting them with
+    empty energy columns. With per-run output directories this shouldn't
+    normally trigger (per_sample.csv and per_sentence.jsonl always belong to
+    the same run) - it's a defense-in-depth backstop for stale/mismatched
+    files (e.g. hand-copied logs, or older data from before run isolation).
+
+    Records with no sample data at all (samples is empty, e.g. no PMIC
+    sampler on this platform) are left untouched - that's the pre-existing,
+    already-warned-about "energy columns empty" case, not what this guards
+    against."""
+    if not samples:
+        return records
+    t_min = samples[0]["t_mono"]
+    t_max = samples[-1]["t_mono"]
+    kept = []
+    dropped = 0
+    for r in records:
+        t_start, t_end = r["t_synth_start"], r.get("t_audio_write_end")
+        if t_end is not None and t_end < t_min:
+            dropped += 1
+            continue
+        if t_start is not None and t_start > t_max:
+            dropped += 1
+            continue
+        kept.append(r)
+    if dropped:
+        print("[join] WARNING: {} records outside the sample window (stale data?) "
+              "- skipped".format(dropped))
+    return kept
 
 
 def _stage_window(record, stage):
@@ -215,6 +265,7 @@ def run_join(profile_dir="profile"):
     scale, offset = load_calibration(profile_dir)
     samples = load_samples(profile_dir, scale, offset)
     records = load_sentences(profile_dir)
+    records = _filter_records_to_sample_window(records, samples)
 
     per_sentence = build_per_sentence_results(records, samples)
     per_stage = build_per_stage_results(records, samples)
@@ -228,26 +279,45 @@ def run_join(profile_dir="profile"):
     return per_sentence, per_stage
 
 
+def _resolve_default_profile_dir(base_dir="profile"):
+    """profile/latest -> profile/run_YYYYMMDD_HHMMSS/, so `python3 -m
+    profiling.join` with no --profile-dir defaults to the most recent
+    profiled run. Falls back to base_dir itself if there's no "latest"
+    pointer (older flat-layout output, or no run has ever completed)."""
+    link = os.path.join(base_dir, "latest")
+    if os.path.islink(link) or os.path.isdir(link):
+        return link
+    txt_pointer = link + ".txt"
+    if os.path.isfile(txt_pointer):
+        with open(txt_pointer, encoding="utf-8") as f:
+            run_id = f.read().strip()
+        if run_id:
+            return os.path.join(base_dir, run_id)
+    return base_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Re-run the offline join (profile/per_sample.csv + "
+        description="Re-run the offline join (per_sample.csv + "
                      "per_sentence.jsonl -> per_sentence_results.csv / "
-                     "per_stage_results.csv) on existing logs, without "
-                     "re-running synthesis. Useful after a calibration.json "
-                     "change or a mid-join crash."
+                     "per_stage_results.csv) on an existing run's logs, "
+                     "without re-running synthesis. Useful after a "
+                     "calibration.json change or a mid-join crash."
     )
-    parser.add_argument("--profile-dir", default="profile",
+    parser.add_argument("--profile-dir", default=None,
                          help="Directory holding per_sample.csv / per_sentence.jsonl "
-                              "(default: profile)")
+                              "for one run (default: profile/latest, i.e. the most "
+                              "recently completed profiled run under profile/)")
     parser.add_argument("--export-xlsx", action="store_true",
                          help="After joining, also export to "
                               "<profile-dir>/exports/chatterbox_paste.xlsx "
                               "(benchmark/export_to_xlsx.py). Requires openpyxl.")
     args = parser.parse_args()
-    run_join(args.profile_dir)
+    profile_dir = args.profile_dir or _resolve_default_profile_dir("profile")
+    run_join(profile_dir)
     if args.export_xlsx:
         from benchmark.export_to_xlsx import export as export_xlsx
-        export_xlsx(args.profile_dir)
+        export_xlsx(profile_dir)
 
 
 if __name__ == "__main__":

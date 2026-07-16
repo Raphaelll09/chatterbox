@@ -15,6 +15,95 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Fix INA226 power derivation, per-run profiling output isolation
+
+- What:
+  1. **INA226 power (`profiling/sampler.py`)**: `_read_ina226()` now computes `ina_power_w`
+     in software (`bus_v * current_a`) instead of decoding the hardware POWER register
+     (0x03). That register is unsigned and undefined when CURRENT is negative — the "409.6 W
+     constant, current pinned at -1 LSB" symptom is POWER/CURRENT both saturated at 0xFFFF.
+     Bus voltage and (signed) current are each independently well-defined, so their product
+     is trustworthy where the raw register isn't. **Note**: CONFIG (0x4527) and CALIBRATION
+     (10240) were already being written at sampler init in this codebase (`_init_ina226()`)
+     — exactly matching the values the source prompt suggested as the fix — so if the Pi is
+     still seeing garbage after pulling this, the most likely explanation is that the Pi was
+     running an older revision of `sampler.py` predating those writes, not a config/cal gap in
+     the current code. Added defense-in-depth regardless: a `INA226_SETTLE_S` (60ms) delay
+     after CONFIG+CALIBRATION before the first read (AVG=16 needs ~35ms for the first valid
+     conversion), and a startup sanity check (`abs(current_a) < 0.001` or `bus_v < 4.5`) that
+     prints a `[profiling] WARNING: ...` and disables the sensor for the rest of the run
+     instead of silently logging bad data.
+  2. **`throttled` column**: `sampler.py` now writes it as a hex string (`"0x50000"`, matching
+     `vcgencmd get_throttled`'s own format) instead of a plain decimal int; `join.py`'s
+     `load_samples()` parses it with `int(x, 0)` (auto-detects the `0x` prefix, still accepts
+     old plain-decimal files). `_throttled_any()`'s logic was already correct (`any(v != 0
+     ...)` on the parsed int) — the column just wasn't human-legible before.
+  3. **`phoneme_count`**: confirmed it was a duplicate of `char_count`, not a real phoneme
+     count — see `synthesis_modules.py:206`. `text_to_sequence()`
+     (`FastSpeech2/text/__init__.py`) maps one symbol per character for ordinary orthographic
+     text; there's no G2P front-end for French in this pipeline (only the opt-in `{phonetic
+     bracket}` syntax produces a token-per-phoneme sequence, and there's no way to tell from
+     the recording site whether a given input used it). Now reports `null`
+     (`profiling_rec.set(phoneme_count=None)`) instead of the misleading duplicate.
+  4. **Per-run output isolation**: every profiled session now gets its own
+     `profile/run_YYYYMMDD_HHMMSS/` directory (collision-disambiguated with a `_2`/`_3`
+     suffix if two sessions start in the same second), containing `per_sample.csv`,
+     `per_sentence.jsonl`, and (once `--join`/`--export-xlsx` run) `per_sentence_results.csv`,
+     `per_stage_results.csv`, `exports/chatterbox_paste.xlsx`. `profile/latest` points at the
+     most recent run (a symlink where supported, else a `latest.txt` pointer file — both
+     handled by `profiling/join.py`'s new default-dir resolution). Previously
+     `per_sample.csv` was overwritten every run while `per_sentence.jsonl` was appended to
+     forever, so after N runs the join only matched records from the last run against a
+     `per_sentence.jsonl` containing all N runs' records mixed together.
+     `profiling/__init__.py::start_session()` creates the run dir and writes its initial
+     `meta.json` (`sample_hz`, `pmic_hz`, `core`, `niceness`, `ina_requested`, `governor`
+     read from sysfs, a `calibration.json` snapshot, plus `meta_extra` — `do_tts.py` passes
+     `{"play": ..., "repeats": ...}` for `--benchmark`); `sampler.py`'s own process patches in
+     `ina_detected` and `profiler_pid` once it's actually probed the I2C bus (the only two
+     fields it alone knows). `calibration.json` itself stays a base-dir-level, cross-run file
+     (`load_calibration()` now checks the run dir first, then falls back to its parent).
+     `do_tts.py`'s end-of-benchmark `--join`/`--export-xlsx` calls now use
+     `profiling.get_run_dir()` instead of the base `output_dir`.
+  5. **Join safety net**: `run_join()` now drops any `per_sentence.jsonl` record whose
+     synthesis window falls entirely outside the sample stream's `t_mono` range before
+     building results, printing `[join] WARNING: N records outside the sample window (stale
+     data?) - skipped` instead of emitting rows with empty energy columns. With per-run
+     isolation this shouldn't normally trigger — it's a defense-in-depth backstop for
+     hand-mixed or pre-existing (pre-this-fix) logs.
+- Files: `profiling/sampler.py`, `profiling/__init__.py`, `profiling/join.py`, `do_tts.py`,
+  `synthesis_modules.py`, `tests/test_profiling.py`
+- Why: the 7B dry run found the INA226 columns reading constant, physically-impossible values
+  (power pegged at the register's all-ones value) and `profile/per_sentence.jsonl` holding 318
+  records from 9 separate runs against a `per_sample.csv` with only the last run's ~39s of
+  samples, so the join matched 11/318 records and the rest were emitted with empty energy.
+- Verify: `python3 -m pytest tests/` (83 passed — 12 new tests covering the run-dir
+  naming/collision handling, `meta.json` writing and patching, `profile/latest` resolution,
+  `calibration.json`'s parent-dir fallback, and the hex/legacy-decimal `throttled` parsing;
+  none of this needs real hardware). Manually exercised on this dev checkout (no Pi/I2C/PMIC
+  available here): `profiling._new_run_dir()` creates a real timestamped directory with a
+  correctly-populated `meta.json`; `Sampler._patch_meta_json()` correctly read-modify-writes
+  `ina_detected`/`profiler_pid` into an existing `meta.json` without clobbering other fields;
+  `join._resolve_default_profile_dir()` correctly follows both the symlink and `.txt`-pointer
+  forms of `profile/latest`; `join.load_calibration()` correctly finds `calibration.json` in a
+  run dir's parent; `int(x, 0)` correctly parses both `"0x50005"` and legacy `"327685"`.
+- Notes/gotchas: **the INA226 fix's actual effect on real hardware could not be verified from
+  this Windows PC** — no I2C bus, no INA226, no `vcgencmd`. On the Pi, after pulling this and
+  running a **short profiler-only session** (per the constraint: no need to re-run the full
+  benchmark) with the amp powered and idle, `ina_current_a` should read ≈0.0637 A and
+  `ina_power_w` ≈0.32 W in the new run's `per_sample.csv`, matching `ina226_logger.py` on the
+  same rail within a few percent — compare directly. If it's still garbage, check whether the
+  Pi had actually pulled the CONFIG/CALIBRATION-writing revision of `sampler.py` before this
+  session (see note above) — that would point at a different bug than the one fixed here.
+  Similarly, a real throttle event and the new per-run `profile/run_.../` layout (with
+  `profile/latest` resolving correctly) should be spot-checked on the Pi's real filesystem —
+  symlink creation in particular behaves differently across platforms and this was only
+  exercised via the `latest.txt` fallback path implicitly (symlinks did work in the ad hoc
+  check on this Windows dev machine, since Developer Mode is enabled here, but that isn't
+  guaranteed on every Windows setup and is moot on the Pi's Linux filesystem where symlinks
+  are unconditionally supported).
+
+---
+
 ## 2026-07-16 — Fix NumPy 2.0 join crash, standalone join entry point, subtitle-split print explained
 
 - What:
