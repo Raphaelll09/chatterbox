@@ -7,6 +7,10 @@ Created on Fri Jul  1 16:20:38 2022
 """
 
 import os
+import sys
+import io
+import contextlib
+import threading
 import torch
 import yaml
 import argparse
@@ -192,6 +196,23 @@ if __name__ == "__main__":
         vocoder_loading_script = getattr(loading_modules, default_vocoder["load_script"])
         vocoder_loading_script(default_vocoder, device)
 
+    def _warmup_synthesis():
+        # Model weights are already loaded by this point -- what's left is
+        # first-call cost (torch's CPU thread pool spinning up, the Pi's CPU
+        # frequency governor ramping up from idle, noisereduce's own FFT setup,
+        # etc.), paid once by whichever synthesis call happens to go first.
+        # Run one throwaway synthesis now, in the background, so that cost
+        # overlaps with the time the user spends typing their first real
+        # sentence instead of being paid serially in front of them.
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                audio_utils.syn_audio(
+                    False, tts_config, "Bonjour.",
+                    sentence_id="WARMUP", complexity_tag="warmup", play=False,
+                )
+        except Exception as exc:
+            print("[warmup] skipped: {}".format(exc), file=sys.stderr)
+
     try:
         if args.benchmark:
             import benchmark.runner as benchmark_runner
@@ -208,8 +229,22 @@ if __name__ == "__main__":
         else:
             # No GUI, free text
             load_models()
+
+            # Start the warm-up in the background right away, so it overlaps
+            # with the user typing their first sentence. If they submit before
+            # it finishes, join() blocks until it's done -- this keeps the
+            # warm-up and the first real synthesis from running concurrently
+            # (they'd otherwise race on the fixed-path FastSpeech2/HiFi-GAN
+            # output files and contend for the same CPU cores).
+            warmup_thread = threading.Thread(target=_warmup_synthesis, daemon=True)
+            warmup_thread.start()
+
+            first_input = True
             while True:
                 txt_input = input("Input Text (Ctrl+C to exit): ")
+                if first_input:
+                    warmup_thread.join()
+                    first_input = False
                 audio_utils.syn_audio(False, tts_config, txt_input)
     finally:
         profiling.stop_session()
