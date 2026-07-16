@@ -15,6 +15,50 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Background warm-up synthesis in free-text mode
+
+- What: `do_tts.py`'s free-text branch now fires a throwaway warm-up synthesis
+  ("Bonjour.", `play=False`, stdout suppressed) on a background daemon thread
+  right after `load_models()`, instead of paying first-call cost on the
+  user's first real sentence. The main thread immediately shows the `Input
+  Text` prompt, so the warm-up overlaps with the time spent typing. On the
+  *first* real submission only, the main thread `warmup_thread.join()`s
+  before calling `audio_utils.syn_audio()` — this serializes warm-up and the
+  first real synthesis (they'd otherwise both write the same fixed-path
+  FastSpeech2/HiFi-GAN output files and contend for the same CPU cores).
+  Subsequent inputs skip the join (thread is already finished by then).
+  Tagged `sentence_id="WARMUP"` / `complexity_tag="warmup"` so it's
+  identifiable if profiling happens to be enabled during interactive use.
+- Files: `do_tts.py`
+- Why: measured on the Pi 5 (see the two preceding sessions), the very first
+  synthesis in a process runs noticeably slower than steady-state even though
+  model *weights* are already loaded before the prompt appears — the
+  remaining cost is first-call setup (torch's CPU thread pool, the CPU
+  governor ramping up from idle, noisereduce's internal FFT setup), which
+  this pays for once, off the user's critical path.
+- Verify: `python3 do_tts.py`, type the first sentence somewhat slowly —
+  synthesis prints/timings should not appear until you press Enter (warm-up
+  output is suppressed), and the first real `TTS duration` / `Vocoder
+  duration` percentages should already be near steady-state instead of the
+  inflated first-call numbers seen previously.
+- Notes/gotchas: scoped to free-text (`do_tts.py`, no `--gui`, no
+  `--benchmark`) only. Deliberately *not* added to `--benchmark` mode — its
+  REF-first/REF-last sentences exist specifically to measure this exact
+  warm-up/drift effect for the power-profiling work, so pre-warming there
+  would corrupt what it's designed to capture. GUI mode (`--gui`) doesn't
+  block the same way `input()` does (Tkinter's loop isn't blocked by typing),
+  so the same background-thread approach wasn't added there — worth a
+  separate look if GUI first-synthesis latency turns out to matter too.
+  Correction to a claim made earlier in this session: HiFi-GAN's
+  `meldataset.py` `mel_basis`/`hann_window` lazy caches (mentioned as a
+  suspected warm-up cost) are **not** actually exercised by the active
+  `inference_e2e.py` runtime path — only `MAX_WAV_VALUE` is imported from
+  that module. The warm-up fix here doesn't depend on that specific
+  mechanism; running one real end-to-end call pays whatever the actual
+  first-call costs are, wherever they live.
+
+---
+
 ## 2026-07-15 — Normalize curly apostrophes before symbol filtering
 
 - What: `parse_pronunciation_mistakes()` now replaces `’`/`‘` (U+2019/U+2018) with the straight
