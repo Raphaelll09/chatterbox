@@ -1,0 +1,43 @@
+{
+  "run_id": "run_20260716_165705",
+  "started_at": "2026-07-16T16:57:05",
+  "sample_hz": 10,
+  "pmic_hz": 10,
+  "core": 3,
+  "niceness": 10,
+  "ina_requested": true,
+  "governor": "ondemand",
+  "calibration": {
+    "scale": 1.101559,
+    "offset": 3.446171,
+    "r2": 0.998105,
+    "note": "P_true = scale * pmic_sum + offset. Valid ONLY for the configuration calibrated in (screen ON at profiling brightness, amp powered).",
+    "points": [
+      {
+        "state": "idle (no load)",
+        "pmic_w": 1.9532,
+        "meter_w": 5.55
+      },
+      {
+        "state": "CPU load: 1 core",
+        "pmic_w": 2.9854,
+        "meter_w": 6.82
+      },
+      {
+        "state": "CPU load: 2 cores",
+        "pmic_w": 3.9169,
+        "meter_w": 7.74
+      },
+      {
+        "state": "CPU load: 4 cores",
+        "pmic_w": 4.7845,
+        "meter_w": 8.7
+      }
+    ],
+    "timestamp": "2026-07-16 10:17:51"
+  },
+  "play": false,
+  "repeats": 1,
+  "ina_detected": true,
+  "profiler_pid": 8394
+}

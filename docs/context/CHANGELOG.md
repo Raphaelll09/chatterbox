@@ -15,6 +15,36 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — INA226 fix verified on real Pi hardware, both run modes
+
+- What: the register-read fix (two separate single-register reads instead of one combined
+  6-byte block read — see the entry directly below) confirmed working end-to-end on the Pi,
+  across two separate runs:
+  1. `python3 do_tts.py --profile` (idle, no synthesis): `ina_current_a` held at
+     0.0625/0.06375 A throughout ~2000 samples, `ina_bus_v` tracked load realistically
+     (5.00-5.19V), `ina_power_w` matched `ina226_logger.py`'s reference reading (~0.32 W)
+     almost exactly. Zero occurrences of the old stuck `-0.00025` (-1 LSB) value.
+  2. `python3 do_tts.py --benchmark --profile --join --repeats 1` (real synthesis, CPU
+     spiking to 90-100% repeatedly, no `--play`): same idle-band current throughout — correct,
+     since without `--play` the amp is never actually driven, so it's expected to stay flat
+     while `pmic_power_w`/`cpu_power_w` swing widely from the synthesis load. Spot-checked the
+     software power derivation directly against several rows: `5.045 * 0.065 = 0.327925`,
+     `5.055 * 0.065 = 0.328575`, `5.05875 * 0.06375 = 0.3224953125` — each matches the logged
+     `ina_power_w` exactly, confirming `bus_v * current_a` is wired correctly on real hardware,
+     not just in the `_FakeInaBus` unit tests.
+- Files: none (verification only, no code changes this entry)
+- Why: closes out the INA226 investigation started with Blocker 1 of the original profiler
+  prompt — three sessions (software power derivation, register read-back diagnostic, then the
+  actual root-cause fix) needed real hardware to confirm, which wasn't available from the dev
+  machine that wrote the fixes.
+- Verify: already done — see "What" above. No further action needed on the INA226 side.
+- Notes/gotchas: none outstanding. If amp-branch current/power ever looks wrong again, the
+  regression tests in `tests/test_profiling.py` (`_FakeInaBus`, asserting every INA226 read is
+  a single 2-byte transaction) should catch a reintroduction of the combined-block-read bug
+  before it reaches hardware again.
+
+---
+
 ## 2026-07-16 — Actual INA226 root cause found: no cross-register auto-increment
 
 - What: root-caused by diffing `_read_ina226()` against `ina226_logger.py` (the standalone
