@@ -15,6 +15,92 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Actual INA226 root cause found: no cross-register auto-increment
+
+- What: root-caused by diffing `_read_ina226()` against `ina226_logger.py` (the standalone
+  reference script, user-provided, confirmed correct on real hardware -
+  `test_repair.csv` shows steady 0.0625 A / 0.319 W at idle). `ina226_logger.py` reads bus
+  voltage, current, and power as **three separate single-register transactions**, each its
+  own `read_i2c_block_data(addr, reg, 2)`. `_read_ina226()` instead did **one combined 6-byte
+  block read** starting at BUS_V (0x02), assuming the INA226 auto-increments its internal
+  register pointer across BUS_V -> POWER -> CURRENT within a single transaction. It doesn't.
+  That's the entire bug, in both this session's data and every prior session's: bus voltage
+  (the first, correctly-addressed register) always decoded fine and tracked load, because
+  it's the only register actually being read correctly; the bytes assumed to be POWER and
+  CURRENT are the chip's over-read filler, which happens to decode to exactly 0xFFFF,
+  regardless of actual current - explaining both the original "409.6 W constant" symptom
+  *and* the "current frozen at -1 LSB" symptom that survived the previous session's software
+  power-derivation fix (which only changed how an unread, always-0xFFFF current value got
+  turned into a power number). The write side was never the problem - both scripts write
+  CONFIG/CALIBRATION identically - so the read-back diagnostic added last session was a
+  reasonable diagnostic to add but wasn't pointing at the actual bug; left in place since it's
+  still a legitimate sanity check, just not the one that mattered here.
+  `_read_ina226()` now calls `_read_ina226_reg()` (added last session for the read-back check)
+  twice - once for BUS_V, once for CURRENT - instead of one combined block read. POWER is
+  still not read from hardware at all (software `bus_v * current_a`, from the prior session,
+  is still correct and cheaper than a third register read).
+- Files: `profiling/sampler.py`, `tests/test_profiling.py`
+- Why: the previous two sessions' fixes addressed real but secondary issues (power-register
+  reliability, diagnostic messaging) without touching the actual read-path bug, because
+  neither could be tested against real I2C hardware from this dev machine. Having the
+  known-working reference script to diff against made the real cause immediately visible.
+- Verify: `python3 -m pytest tests/` (85 passed - 2 new). Added
+  `test_read_ina226_reads_bus_voltage_and_current_as_separate_registers` and
+  `test_read_ina226_decodes_negative_current`, using a fake I2C bus
+  (`_FakeInaBus`) that serves each register independently and **asserts any read call has
+  length 2** - a regression back to a combined block read fails the test loudly instead of
+  silently reintroducing the bug. Confirmed the fake-bus call log shows exactly two
+  single-register reads, not one wider one.
+- Notes/gotchas: still needs confirmation on the Pi with real hardware - the fake-bus test
+  proves the *code* now does two separate reads and decodes them correctly, not that the
+  physical sensor responds as expected end-to-end. Run a short `--profile`-only session and
+  check `ina_current_a`/`ina_power_w` land near 0.0625 A / ~0.32 W at idle, matching
+  `ina226_logger.py` on the same rail.
+
+---
+
+## 2026-07-16 — INA226 still broken after the previous fix; add register read-back diagnostic
+
+- What: a real `--benchmark --profile --join` run on the Pi (the "7B" dry run, 11 records,
+  `profile/run_20260716_162448/`) confirmed the previous session's INA226 fix did **not**
+  resolve the root cause: `ina_current_a` is still frozen at exactly `-0.00025` (-1 LSB /
+  0xFFFF) on every one of ~2000 samples across the whole run, regardless of load, even though
+  `ina_bus_v` reads correctly and dynamically (5.03-5.19V, sags under load - that channel
+  genuinely works). The startup sanity check added last session did correctly fire (`[profiling]
+  WARNING: INA226 reads ~0 A ...`), which disproves the previous CHANGELOG entry's guess that
+  the Pi might have been running a stale pre-fix revision - this **is** the current code, and
+  the sensor communication issue is real. Also found and fixed a bug in that sanity-check
+  message itself: it passed 5 positional args to a 4-placeholder format string, so `.format()`
+  silently dropped the trailing `CAL` argument and the bare `{}` placeholder printed
+  `INA226_CONFIG` (0x4527) in **decimal** (17703), mislabeled as the calibration value at
+  register 0x05 - actively misleading for exactly the debugging this message exists for.
+  Fixed the message, and added a real diagnostic instead of more guessing: `_write_ina226_reg`/
+  `_read_ina226_reg` helpers, with a read-back of CONFIG and CALIBRATION immediately after
+  writing them, logging `[profiling] WARNING: INA226 register read-back mismatch ...` if what's
+  actually stored on the chip doesn't match what was intended. This turns "is the write even
+  taking effect?" from a guess into a directly observable fact on the next run.
+- Files: `profiling/sampler.py`
+- Why: the previous fix (software power derivation from bus_v*current_a) only changed how an
+  already-invalid current reading gets turned into a power number - it never addressed why
+  CURRENT itself never produces a valid conversion. Needed a way to actually see whether the
+  CONFIG/CALIBRATION writes are landing on the chip rather than continuing to guess between
+  read-timing, wrong smbus2 API framing for this device, bus contention, etc.
+- Verify: `python3 -m pytest tests/` (83 passed, unaffected - this is real-hardware-only code,
+  no unit coverage possible without an actual INA226). Manually reproduced the exact
+  malformed-message bug from the Pi's terminal output on this dev machine by replaying the same
+  `.format()` call with the same arguments - confirmed byte-for-byte match to the observed
+  "17703 @ reg 0x05" text, and confirmed the corrected messages render sensibly.
+- Notes/gotchas: **still unresolved, needs a short profiler-only run on the Pi** to read the new
+  read-back diagnostic. If it reports a mismatch, the write itself is the problem (candidates:
+  `write_i2c_block_data`'s exact wire framing for this device vs. what `ina226_logger.py` - the
+  known-working reference script - does; worth diffing the two directly). If CONFIG/CALIBRATION
+  *do* read back correctly and current is still frozen, the bug is downstream of configuration
+  entirely (e.g. conversion never actually triggering in continuous mode) and the read-back
+  check won't be enough on its own - would need scoping further with `ina226_logger.py`'s
+  working register sequence as the reference.
+
+---
+
 ## 2026-07-16 — Fix INA226 power derivation, per-run profiling output isolation
 
 - What:

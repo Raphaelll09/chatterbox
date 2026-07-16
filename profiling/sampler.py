@@ -139,6 +139,18 @@ class Sampler:
         except (OSError, subprocess.SubprocessError):
             return None
 
+    def _write_ina226_reg(self, bus, register, value):
+        bus.write_i2c_block_data(
+            self.ina_addr, register, [(value >> 8) & 0xFF, value & 0xFF],
+        )
+
+    def _read_ina226_reg(self, bus, register):
+        try:
+            data = bus.read_i2c_block_data(self.ina_addr, register, 2)
+        except OSError:
+            return None
+        return (data[0] << 8) | data[1]
+
     def _init_ina226(self):
         """Best-effort probe/config of the INA226 on i2c-1. Never raises -
         absent sensor or read failure just means empty ina_* columns."""
@@ -151,15 +163,27 @@ class Sampler:
             return
         try:
             bus = smbus2.SMBus(1)
-            bus.write_i2c_block_data(
-                self.ina_addr, parsing.INA226_REG_CONFIG,
-                [(parsing.INA226_CONFIG >> 8) & 0xFF, parsing.INA226_CONFIG & 0xFF],
-            )
-            bus.write_i2c_block_data(
-                self.ina_addr, parsing.INA226_REG_CALIBRATION,
-                [(parsing.CAL >> 8) & 0xFF, parsing.CAL & 0xFF],
-            )
+            self._write_ina226_reg(bus, parsing.INA226_REG_CONFIG, parsing.INA226_CONFIG)
+            self._write_ina226_reg(bus, parsing.INA226_REG_CALIBRATION, parsing.CAL)
             self._ina_bus = bus
+
+            # Read back what's actually stored, not just what we intended to
+            # write -- a write silently not taking effect (wrong smbus2 call
+            # for this device's register width/endianness, bus contention,
+            # etc.) looks identical to "it worked" unless checked directly.
+            config_readback = self._read_ina226_reg(bus, parsing.INA226_REG_CONFIG)
+            cal_readback = self._read_ina226_reg(bus, parsing.INA226_REG_CALIBRATION)
+            if config_readback != parsing.INA226_CONFIG or cal_readback != parsing.CAL:
+                print("[profiling] WARNING: INA226 register read-back mismatch after "
+                      "configuration - wrote CONFIG=0x{:04x} CALIBRATION=0x{:04x}, read "
+                      "back CONFIG=0x{} CALIBRATION=0x{} - the write is not taking "
+                      "effect on the chip (wrong smbus2 call, bus contention, ...); "
+                      "amp-branch columns will be garbage.".format(
+                          parsing.INA226_CONFIG, parsing.CAL,
+                          "?" if config_readback is None else "{:04x}".format(config_readback),
+                          "?" if cal_readback is None else "{:04x}".format(cal_readback),
+                      ))
+
             # Don't read before the first averaged conversion (AVG=16) has had
             # time to complete -- CURRENT/POWER can read back stale/invalid
             # (e.g. still at their pre-calibration value) otherwise.
@@ -175,10 +199,11 @@ class Sampler:
             elif abs(current_a) < 0.001 or bus_v < 4.5:
                 print("[profiling] WARNING: INA226 reads ~0 A ({:.5f} A) or an "
                       "implausible bus voltage ({:.3f} V) right after configuration "
-                      "- check the shunt is in series with the amp 5V feed and that "
-                      "CONFIG/CALIBRATION were actually written (0x{:02x} @ reg "
-                      "0x00, {} @ reg 0x05).".format(
-                          current_a, bus_v, self.ina_addr, parsing.INA226_CONFIG, parsing.CAL,
+                      "- check the shunt is in series with the amp 5V feed. Intended "
+                      "CONFIG=0x{:04x} CALIBRATION=0x{:04x} at 0x{:02x} (see the "
+                      "read-back check above for whether those actually landed on "
+                      "the chip).".format(
+                          current_a, bus_v, parsing.INA226_CONFIG, parsing.CAL, self.ina_addr,
                       ))
                 self.ina_detected = True
             else:
@@ -189,25 +214,29 @@ class Sampler:
             self._ina_bus = None
 
     def _read_ina226(self):
-        """Single 6-byte block read spanning the contiguous bus-voltage
-        (0x02), power (0x03), and current (0x04) registers.
+        """Bus voltage and current as two SEPARATE single-register
+        transactions, matching ina226_logger.py (the known-working reference
+        script confirmed against real hardware) -- NOT a combined multi-byte
+        block read starting at BUS_V. The INA226 does not auto-increment its
+        register pointer across registers within one read transaction; a
+        previous version of this method assumed it did (one 6-byte read
+        spanning BUS_V/POWER/CURRENT), which is exactly why bus_v (the
+        first, correctly-addressed register) always decoded fine while
+        POWER/CURRENT came back as the chip's over-read filler -- constant
+        0xFFFF, regardless of actual load.
 
         ina_power_w is computed in software (bus_v * current_a) rather than
-        decoded from the hardware POWER register (0x03): that register is
-        unsigned and its behavior is undefined when CURRENT is negative,
-        which is exactly the "409.6 W constant" symptom this was replacing
-        (POWER pegged at 0xFFFF while CURRENT read -1 LSB). Bus voltage and
-        current are each independently well-defined (current is signed),
-        so their product is trustworthy where the raw register isn't."""
+        decoded from the hardware POWER register (0x03): unsigned, and
+        undefined when CURRENT is negative. Bus voltage and (signed) current
+        are each independently well-defined, so their product is trustworthy
+        where the raw register isn't."""
         empty = {"ina_bus_v": None, "ina_current_a": None, "ina_power_w": None}
         if self._ina_bus is None:
             return empty
-        try:
-            data = self._ina_bus.read_i2c_block_data(self.ina_addr, parsing.INA226_REG_BUS_V, 6)
-        except OSError:
+        bus_raw = self._read_ina226_reg(self._ina_bus, parsing.INA226_REG_BUS_V)
+        cur_raw = self._read_ina226_reg(self._ina_bus, parsing.INA226_REG_CURRENT)
+        if bus_raw is None or cur_raw is None:
             return empty
-        bus_raw = (data[0] << 8) | data[1]
-        cur_raw = (data[4] << 8) | data[5]
         bus_v = parsing.decode_ina226_bus_voltage_v(bus_raw)
         current_a = parsing.decode_ina226_current_a(cur_raw)
         return {
