@@ -15,6 +15,44 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Fix export_to_xlsx.py for per-run profile/ directories
+
+- What: `benchmark/export_to_xlsx.py` still defaulted `--profile-dir` to the base `profile`
+  and read `profile/per_sentence_results.csv` directly — missed when per-run output
+  isolation (`profile/run_YYYYMMDD_HHMMSS/`) was added, since that change only updated
+  `profiling/join.py`'s standalone entry point and `do_tts.py`'s in-process call, not this
+  script's own separate CLI. Standalone `python -m benchmark.export_to_xlsx` therefore raised
+  a raw `FileNotFoundError` (the file has never lived directly under `profile/` since that
+  change) instead of finding the actual run.
+  1. `load_per_sentence_rows()`: missing `per_sentence_results.csv` now raises a clear
+     `SystemExit` instead of a raw traceback.
+  2. `main()`'s `--profile-dir` now defaults to `None` and resolves via the new
+     `_resolve_profile_dir()`: follows `profile/latest` (symlink or the `latest.txt`
+     Windows-without-symlinks fallback) if it points at a run that actually has
+     `per_sentence_results.csv` (i.e. was `--join`'d, not just profiled).
+  3. If `profile/latest` isn't usable (missing, stale, or points at an unjoined run),
+     `_resolve_profile_dir()` lists every `profile/run_.../` directory that *does* have
+     results (most recent first, via the new `profiling.list_run_dirs()`) and interactively
+     prompts which one to export — the "ask for the name of the file" behavior requested,
+     rather than failing outright when there's more than one candidate or no usable default.
+     `export()` itself (the programmatic entry point `do_tts.py --export-xlsx` calls
+     in-process, always with an explicit resolved dir) is untouched and never prompts.
+- Files: `benchmark/export_to_xlsx.py`, `profiling/__init__.py` (new `list_run_dirs()`,
+  shared with the picker), `tests/test_export_xlsx.py`
+- Why: closes the same class of gap as the `profiling/join.py` fix from earlier today, in
+  the one standalone entry point that was missed at the time.
+- Verify: `python3 -m pytest tests/` (94 passed — 9 new: explicit-arg passthrough, following
+  both forms of the `latest` pointer, rejecting a `latest` that points at an unjoined run,
+  the interactive prompt (via `monkeypatch` on `builtins.input`) including its
+  most-recent-first default and skipping unjoined runs, the no-runs-at-all error, and the
+  missing-file `SystemExit`). `python -m benchmark.export_to_xlsx --help` shows the updated
+  flag description.
+- Notes/gotchas: `_resolve_profile_dir()` is only wired into `main()` (the CLI), not
+  `export()` — deliberately, since `export()` is also called in-process by `do_tts.py`
+  right after a benchmark run and must never block on `input()` there.
+
+---
+
 ## 2026-07-16 — INA226 fix verified on real Pi hardware, both run modes
 
 - What: the register-read fix (two separate single-register reads instead of one combined

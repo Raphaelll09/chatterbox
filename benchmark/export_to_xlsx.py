@@ -15,7 +15,15 @@ sheet (P2P3_Synthesis, P2P3_Synthesis_pass2, ...), all with the same A2:U12
 layout so any of them can be pasted individually.
 
 Usage:
-    python -m benchmark.export_to_xlsx [--profile-dir profile] [--out-dir profile/exports]
+    python -m benchmark.export_to_xlsx                        # profile/latest
+    python -m benchmark.export_to_xlsx --profile-dir profile/run_20260716_120000
+    python -m benchmark.export_to_xlsx --out-dir SOMEWHERE
+
+With no --profile-dir, this defaults to profile/latest (the most recently
+completed profiled run - see profiling/__init__.py's start_session()); if
+that pointer is missing or stale (no per_sentence_results.csv there yet),
+it lists the available profile/run_.../ directories and asks which one to
+use, rather than failing outright.
 
 Requires openpyxl (pip install openpyxl), imported lazily so a profiling-only
 environment without it doesn't crash - just prints how to install it.
@@ -51,6 +59,14 @@ def _round_or_none(value, ndigits):
 
 def load_per_sentence_rows(profile_dir):
     path = os.path.join(profile_dir, "per_sentence_results.csv")
+    if not os.path.exists(path):
+        raise SystemExit(
+            "[export_to_xlsx] {} not found. Run `python3 do_tts.py --benchmark --profile "
+            "--join` first, or `python -m profiling.join --profile-dir {}` if that run "
+            "already has per_sample.csv/per_sentence.jsonl but was never joined.".format(
+                path, profile_dir,
+            )
+        )
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
@@ -205,13 +221,72 @@ def export(profile_dir="profile", out_dir=None):
     return written
 
 
+def _run_has_results(base_dir, run_id):
+    return os.path.exists(os.path.join(base_dir, run_id, "per_sentence_results.csv"))
+
+
+def _latest_pointer_target(base_dir):
+    """Resolve profile/latest (symlink or the Windows-without-symlinks
+    latest.txt fallback - see profiling._update_latest_pointer(), which
+    always writes the plain run_id as the symlink target / file content) to
+    a run directory name, or None if there's no usable pointer."""
+    link = os.path.join(base_dir, "latest")
+    if os.path.islink(link):
+        target = os.readlink(link)
+        return os.path.basename(target) if target else None
+    txt_pointer = link + ".txt"
+    if os.path.isfile(txt_pointer):
+        with open(txt_pointer, encoding="utf-8") as f:
+            run_id = f.read().strip()
+        return run_id or None
+    return None
+
+
+def _resolve_profile_dir(base_dir, explicit):
+    """--profile-dir if given; otherwise profile/latest if it points at a
+    run that's actually been joined; otherwise list the available
+    profile/run_.../ directories (most recent first, per
+    profiling.list_run_dirs()) and ask which one to export."""
+    if explicit:
+        return explicit
+
+    run_id = _latest_pointer_target(base_dir)
+    if run_id and _run_has_results(base_dir, run_id):
+        return os.path.join(base_dir, run_id)
+
+    import profiling
+    candidates = [r for r in profiling.list_run_dirs(base_dir) if _run_has_results(base_dir, r)]
+    if not candidates:
+        raise SystemExit(
+            "[export_to_xlsx] no run under {}/ has a per_sentence_results.csv yet - run "
+            "`python3 do_tts.py --benchmark --profile --join` first, or `python -m "
+            "profiling.join --profile-dir <run>` on an existing run.".format(base_dir)
+        )
+
+    print("[export_to_xlsx] profile/latest isn't usable (missing, or that run was never "
+          "joined) - pick a run to export:")
+    for i, candidate in enumerate(candidates, start=1):
+        print("  {}) {}{}".format(i, candidate, "  (most recent)" if i == 1 else ""))
+    choice = input("Run number [1]: ").strip() or "1"
+    try:
+        selected = candidates[int(choice) - 1]
+    except (ValueError, IndexError):
+        raise SystemExit("[export_to_xlsx] invalid selection: {!r}".format(choice))
+    return os.path.join(base_dir, selected)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile-dir", default="profile")
+    parser.add_argument("--profile-dir", default=None,
+                         help="Directory holding per_sentence_results.csv / "
+                              "per_stage_results.csv for one run (default: "
+                              "profile/latest; if that isn't usable, prompts "
+                              "interactively with the available runs)")
     parser.add_argument("--out-dir", default=None,
                          help="Default: <profile-dir>/exports")
     args = parser.parse_args()
-    export(args.profile_dir, args.out_dir)
+    profile_dir = _resolve_profile_dir("profile", args.profile_dir)
+    export(profile_dir, args.out_dir)
 
 
 if __name__ == "__main__":
