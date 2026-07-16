@@ -429,3 +429,141 @@ def test_run_join_without_per_sample_csv_still_writes_timing_results(tmp_path):
     assert per_sentence[0]["rtf"] == 2.0
     assert (tmp_path / "per_sentence_results.csv").exists()
     assert (tmp_path / "per_stage_results.csv").exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-run output isolation (profile/run_YYYYMMDD_HHMMSS/, profile/latest,
+# calibration.json resolved from the base dir, stale-record safety net)
+# ---------------------------------------------------------------------------
+
+def test_load_calibration_resolved_from_parent_of_a_run_dir(tmp_path):
+    # calibration.json lives in the base profile/ dir, shared across every
+    # run - not copied into each per-run subdirectory.
+    (tmp_path / "calibration.json").write_text(
+        json.dumps({"scale": 1.05, "offset": -0.3}), encoding="utf-8",
+    )
+    run_dir = tmp_path / "run_20260716_120000"
+    run_dir.mkdir()
+    assert join.load_calibration(str(run_dir)) == (1.05, -0.3)
+
+
+def test_load_calibration_prefers_a_dedicated_per_run_override(tmp_path):
+    (tmp_path / "calibration.json").write_text(
+        json.dumps({"scale": 1.0, "offset": 0.0}), encoding="utf-8",
+    )
+    run_dir = tmp_path / "run_20260716_120000"
+    run_dir.mkdir()
+    (run_dir / "calibration.json").write_text(
+        json.dumps({"scale": 2.0, "offset": 1.0}), encoding="utf-8",
+    )
+    assert join.load_calibration(str(run_dir)) == (2.0, 1.0)
+
+
+def test_load_samples_parses_hex_throttled_column(tmp_path):
+    # sampler.py now writes throttled as a hex string ("0x50005") instead of
+    # a plain decimal int, so a real throttle event is legible directly in
+    # the CSV.
+    (tmp_path / "per_sample.csv").write_text(
+        "t_mono,pmic_power_w,cpu_total,temp_c,throttled\n"
+        "0.0,3.0,10.0,40.0,0x50005\n"
+        "1.0,3.0,10.0,40.0,0x0\n",
+        encoding="utf-8",
+    )
+    samples = join.load_samples(str(tmp_path), 1.0, 0.0)
+    assert samples[0]["throttled"] == 0x50005
+    assert samples[1]["throttled"] == 0
+
+
+def test_load_samples_still_parses_legacy_plain_decimal_throttled(tmp_path):
+    # Backward compat with per_sample.csv files written before the hex-string
+    # change.
+    (tmp_path / "per_sample.csv").write_text(
+        "t_mono,pmic_power_w,cpu_total,temp_c,throttled\n"
+        "0.0,3.0,10.0,40.0,327685\n",
+        encoding="utf-8",
+    )
+    samples = join.load_samples(str(tmp_path), 1.0, 0.0)
+    assert samples[0]["throttled"] == 327685
+
+
+def test_filter_records_to_sample_window_drops_stale_records(capsys):
+    records = [
+        {"sentence_id": "A1", "t_synth_start": 0.5, "t_audio_write_end": 1.5},
+        {"sentence_id": "STALE", "t_synth_start": 500.0, "t_audio_write_end": 501.0},
+    ]
+    samples = [{"t_mono": 0.0}, {"t_mono": 2.0}]
+    kept = join._filter_records_to_sample_window(records, samples)
+    assert [r["sentence_id"] for r in kept] == ["A1"]
+    assert "1 records outside the sample window" in capsys.readouterr().out
+
+
+def test_filter_records_to_sample_window_noop_without_samples():
+    records = [{"sentence_id": "A1", "t_synth_start": 0.0, "t_audio_write_end": 1.0}]
+    # No per_sample.csv at all is the pre-existing "empty energy columns"
+    # case, not what this filter guards against - records must pass through.
+    assert join._filter_records_to_sample_window(records, []) == records
+
+
+def test_resolve_default_profile_dir_falls_back_to_base_without_latest(tmp_path):
+    assert join._resolve_default_profile_dir(str(tmp_path)) == str(tmp_path)
+
+
+def test_resolve_default_profile_dir_follows_latest_txt_pointer(tmp_path):
+    # Windows-without-symlinks fallback written by
+    # profiling._update_latest_pointer().
+    (tmp_path / "run_20260716_120000").mkdir()
+    (tmp_path / "latest.txt").write_text("run_20260716_120000", encoding="utf-8")
+    resolved = join._resolve_default_profile_dir(str(tmp_path))
+    assert resolved == str(tmp_path / "run_20260716_120000")
+
+
+import profiling
+from profiling.sampler import Sampler
+
+
+def test_new_run_dir_is_timestamped_and_isolated(tmp_path):
+    run_dir_1 = profiling._new_run_dir(str(tmp_path))
+    run_dir_2 = profiling._new_run_dir(str(tmp_path))
+    assert os.path.isdir(run_dir_1)
+    assert os.path.isdir(run_dir_2)
+    assert os.path.basename(run_dir_1).startswith("run_")
+    # Two sessions started within the same wall-clock second must not
+    # silently collide on the same second-resolution timestamp and clobber
+    # each other's files.
+    assert run_dir_1 != run_dir_2
+
+
+def test_new_run_dir_writes_meta_json_with_requested_config(tmp_path):
+    run_dir = profiling._new_run_dir(
+        str(tmp_path), meta_extra={"play": True, "repeats": 3},
+        sample_hz=20, ina=False,
+    )
+    with open(os.path.join(run_dir, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["sample_hz"] == 20
+    assert meta["ina_requested"] is False
+    assert meta["play"] is True
+    assert meta["repeats"] == 3
+
+
+def test_sampler_patch_meta_json_adds_ina_detected_and_pid(tmp_path):
+    with open(tmp_path / "meta.json", "w", encoding="utf-8") as f:
+        json.dump({"run_id": "run_x", "sample_hz": 10}, f)
+    sampler = Sampler(out_path=str(tmp_path / "per_sample.csv"))
+    sampler.ina_detected = True
+    sampler._patch_meta_json()
+    with open(tmp_path / "meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["ina_detected"] is True
+    assert meta["profiler_pid"] == os.getpid()
+    assert meta["sample_hz"] == 10  # pre-existing field preserved, not clobbered
+
+
+def test_sampler_patch_meta_json_is_best_effort_without_existing_file(tmp_path):
+    # No meta.json present (e.g. sampler started standalone, outside
+    # profiling.start_session()) - must not raise.
+    sampler = Sampler(out_path=str(tmp_path / "per_sample.csv"))
+    sampler._patch_meta_json()
+    with open(tmp_path / "meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["ina_detected"] is False

@@ -203,7 +203,17 @@ def syn_fastspeech2(tts_config, loaded_tts_model, text_to_syn, gui_control, text
 
     batchs = [(id_audio_file, raw_texts, speakers, texts, text_lens, max(text_lens), phon_align, np.array([emotion_weights]), styleTag_emb)]
 
-    profiling_rec.add("phoneme_count", int(text_lens[0]))
+    # text_lens[0] is the FastSpeech2 input SYMBOL sequence length, not a
+    # true phoneme count: text_to_sequence() (FastSpeech2/text/__init__.py)
+    # maps one symbol per character for ordinary orthographic text -- there's
+    # no G2P front-end for French in this pipeline (see CLAUDE.md) - so this
+    # was silently duplicating char_count under a misleading name (confirmed:
+    # equal on every record). Only the opt-in {phonetic bracket} syntax
+    # produces a token-per-phoneme sequence distinct from character count,
+    # and there's no reliable way to tell from here whether a given input
+    # used it. Report null rather than a sometimes-correct, sometimes-
+    # duplicate number.
+    profiling_rec.set(phoneme_count=None)
 
     # Logs synthesis infos
     speakers_location = os.path.join(configs[0]['path']['preprocessed_path'], "speakers.json")
