@@ -626,3 +626,159 @@ def test_read_ina226_decodes_negative_current():
 
     assert result["ina_current_a"] == pytest.approx(-0.00025, abs=1e-6)
     assert result["ina_power_w"] < 0  # bus_v * negative current
+
+
+# ---------------------------------------------------------------------------
+# start_session_at() -- P4 sweep support: an explicit, caller-named run_dir
+# instead of an auto-generated run_YYYYMMDD_HHMMSS/, with calibration
+# resolved from the true base dir (not derived from run_dir's own path) and
+# profile/latest deliberately left untouched.
+# ---------------------------------------------------------------------------
+
+def test_start_session_at_writes_meta_into_the_given_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(profiling, "_enabled", True)
+    monkeypatch.setattr(profiling, "_sampler_proc", None)
+    monkeypatch.setattr(profiling, "_output_dir", str(tmp_path))
+    monkeypatch.setattr(profiling, "_launch_sampler", lambda *a, **k: None)
+
+    cadence_dir = tmp_path / "p4_sweep_20260716_120000" / "cadence_05"
+    profiling.start_session_at(str(cadence_dir), meta_extra={"cadence_requested": 5})
+
+    assert cadence_dir.is_dir()
+    with open(cadence_dir / "meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["run_id"] == "cadence_05"
+    assert meta["cadence_requested"] == 5
+    assert profiling.get_run_dir() == str(cadence_dir)
+
+
+def test_start_session_at_resolves_calibration_two_levels_deep(tmp_path, monkeypatch):
+    # calibration.json lives at the true base dir; a cadence dir sits two
+    # levels under it (base/p4_sweep_TS/cadence_XX/) -- _write_meta() must be
+    # given calibration_base_dir explicitly (profiling._output_dir), not
+    # derive it from run_dir's own path (which would only look one level up
+    # and miss it entirely -- see profiling/join.py's load_calibration()).
+    (tmp_path / "calibration.json").write_text(
+        json.dumps({"scale": 1.05, "offset": -0.3}), encoding="utf-8",
+    )
+    monkeypatch.setattr(profiling, "_enabled", True)
+    monkeypatch.setattr(profiling, "_sampler_proc", None)
+    monkeypatch.setattr(profiling, "_output_dir", str(tmp_path))
+    monkeypatch.setattr(profiling, "_launch_sampler", lambda *a, **k: None)
+
+    cadence_dir = tmp_path / "p4_sweep_20260716_120000" / "cadence_05"
+    profiling.start_session_at(str(cadence_dir))
+
+    with open(cadence_dir / "meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["calibration"] == {"scale": 1.05, "offset": -0.3}
+
+
+def test_start_session_at_does_not_touch_latest_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(profiling, "_enabled", True)
+    monkeypatch.setattr(profiling, "_sampler_proc", None)
+    monkeypatch.setattr(profiling, "_output_dir", str(tmp_path))
+    monkeypatch.setattr(profiling, "_launch_sampler", lambda *a, **k: None)
+
+    cadence_dir = tmp_path / "p4_sweep_20260716_120000" / "cadence_05"
+    profiling.start_session_at(str(cadence_dir))
+
+    assert not (tmp_path / "latest").exists()
+    assert not (tmp_path / "latest.txt").exists()
+
+
+def test_start_session_at_noop_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(profiling, "_enabled", False)
+    monkeypatch.setattr(profiling, "_sampler_proc", None)
+
+    cadence_dir = tmp_path / "cadence_00"
+    profiling.start_session_at(str(cadence_dir))
+
+    assert not cadence_dir.exists()
+
+
+def test_new_run_dir_still_updates_latest_pointer_after_refactor(tmp_path):
+    # _new_run_dir()/start_session()'s existing behavior must survive the
+    # _write_meta()/_launch_sampler() factoring unchanged.
+    run_dir = profiling._new_run_dir(str(tmp_path))
+    assert os.path.islink(str(tmp_path / "latest")) or (tmp_path / "latest.txt").is_file()
+    assert os.path.basename(run_dir) in profiling.list_run_dirs(str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# join_full_session() -- whole-window (not per-sentence) integration, for
+# the P4 sweep's per-point aggregates (including the cadence=0 pure-idle
+# case, which has no per_sentence.jsonl at all).
+# ---------------------------------------------------------------------------
+
+import csv
+
+
+def _write_full_session_sample_csv(path, rows):
+    fieldnames = [
+        "t_mono", "pmic_power_w", "cpu_total", "temp_c", "throttled",
+        "ina_power_w", "cpu_power_w", "mem_power_w", "arm_freq_hz",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_join_full_session_integrates_the_whole_window(tmp_path):
+    _write_full_session_sample_csv(str(tmp_path / "per_sample.csv"), [
+        {"t_mono": 0.0, "pmic_power_w": 5.0, "cpu_total": 10.0, "temp_c": 50.0,
+         "throttled": "0x0", "ina_power_w": 0.30, "cpu_power_w": 1.0, "mem_power_w": 0.5,
+         "arm_freq_hz": 1500000},
+        {"t_mono": 10.0, "pmic_power_w": 7.0, "cpu_total": 20.0, "temp_c": 55.0,
+         "throttled": "0x0", "ina_power_w": 0.35, "cpu_power_w": 1.5, "mem_power_w": 0.6,
+         "arm_freq_hz": 2400000},
+    ])
+
+    result = join.join_full_session(str(tmp_path))
+
+    assert result["duration_s"] == pytest.approx(10.0)
+    assert result["p_use_w"] == pytest.approx(6.0)  # trapezoid avg(5,7)
+    assert result["energy_wh"] == pytest.approx(6.0 * 10 / 3600.0)
+    assert result["mean_arm_freq_khz"] == pytest.approx(1950.0)
+    assert result["throttled_any"] is False
+    assert result["peak_temp"] == pytest.approx(55.0)
+
+
+def test_join_full_session_applies_calibration_from_parent_dir(tmp_path):
+    # Mirrors run_join()'s calibration resolution: checked in profile_dir
+    # itself first, then its parent (base-dir-level, shared across runs).
+    (tmp_path / "calibration.json").write_text(
+        json.dumps({"scale": 2.0, "offset": 1.0}), encoding="utf-8",
+    )
+    run_dir = tmp_path / "cadence_05"
+    run_dir.mkdir()
+    _write_full_session_sample_csv(str(run_dir / "per_sample.csv"), [
+        {"t_mono": 0.0, "pmic_power_w": 1.0, "cpu_total": None, "temp_c": None,
+         "throttled": None, "ina_power_w": None, "cpu_power_w": None, "mem_power_w": None,
+         "arm_freq_hz": None},
+        {"t_mono": 10.0, "pmic_power_w": 1.0, "cpu_total": None, "temp_c": None,
+         "throttled": None, "ina_power_w": None, "cpu_power_w": None, "mem_power_w": None,
+         "arm_freq_hz": None},
+    ])
+
+    result = join.join_full_session(str(run_dir))
+
+    # calibrated pmic_power_w = scale*1.0 + offset = 3.0 W, constant -> p_use_w = 3.0
+    assert result["p_use_w"] == pytest.approx(3.0)
+
+
+def test_join_full_session_returns_none_with_no_samples(tmp_path):
+    # The cadence=0 pure-idle case still produces per_sample.csv (the
+    # background sampler doesn't need any synthesis to run), but a totally
+    # missing/empty file (e.g. non-Linux dev checkout) must not crash.
+    assert join.join_full_session(str(tmp_path)) is None
+
+
+def test_join_full_session_single_sample_returns_none(tmp_path):
+    _write_full_session_sample_csv(str(tmp_path / "per_sample.csv"), [
+        {"t_mono": 0.0, "pmic_power_w": 5.0, "cpu_total": 10.0, "temp_c": 50.0,
+         "throttled": "0x0", "ina_power_w": 0.3, "cpu_power_w": 1.0, "mem_power_w": 0.5,
+         "arm_freq_hz": 1500000},
+    ])
+    assert join.join_full_session(str(tmp_path)) is None

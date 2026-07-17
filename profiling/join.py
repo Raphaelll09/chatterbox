@@ -62,6 +62,7 @@ def load_samples(profile_dir, scale, offset):
             ina_power = row.get("ina_power_w")
             cpu_power = row.get("cpu_power_w")
             mem_power = row.get("mem_power_w")
+            arm_freq = row.get("arm_freq_hz")
             rows.append({
                 "t_mono": float(row["t_mono"]),
                 "pmic_power_w": (scale * float(pmic) + offset) if pmic not in (None, "") else None,
@@ -76,6 +77,7 @@ def load_samples(profile_dir, scale, offset):
                 "ina_power_w": float(ina_power) if ina_power not in (None, "") else None,
                 "cpu_power_w": float(cpu_power) if cpu_power not in (None, "") else None,
                 "mem_power_w": float(mem_power) if mem_power not in (None, "") else None,
+                "arm_freq_hz": float(arm_freq) if arm_freq not in (None, "") else None,
             })
     rows.sort(key=lambda r: r["t_mono"])
     return rows
@@ -277,6 +279,49 @@ def run_join(profile_dir="profile"):
         len(per_sentence), len(per_stage), profile_dir,
     ))
     return per_sentence, per_stage
+
+
+def join_full_session(profile_dir="profile"):
+    """Like run_join(), but integrates over the WHOLE per_sample.csv window
+    (first to last t_mono) instead of per-sentence synthesis windows.
+
+    For experiments (the P4 cadence sweep) whose unit of interest is true
+    average system power over an entire measurement point -- including idle
+    gaps between/around synthesis calls, and points with zero sentences at
+    all (a pure-idle cadence=0 anchor) -- not just active-compute windows.
+    Reuses the same calibration/integration helpers as run_join() so the
+    numbers are computed identically; the only difference is the window.
+
+    Returns None if per_sample.csv is missing or has fewer than 2 rows
+    (nothing to integrate over). Does not read per_sentence.jsonl at all."""
+    scale, offset = load_calibration(profile_dir)
+    samples = load_samples(profile_dir, scale, offset)
+    if len(samples) < 2:
+        return None
+
+    duration_s = samples[-1]["t_mono"] - samples[0]["t_mono"]
+    energy_j = _integrate_energy_j(samples)
+    amp_energy_j = _integrate_energy_j(samples, "ina_power_w")
+    cpu_energy_j = _integrate_energy_j(samples, "cpu_power_w")
+    mem_energy_j = _integrate_energy_j(samples, "mem_power_w")
+    mean_arm_freq_hz = _stat_or_none(
+        [s["arm_freq_hz"] for s in samples], lambda v: sum(v) / len(v),
+    )
+
+    return {
+        "duration_s": duration_s,
+        "energy_wh": (energy_j / 3600.0) if energy_j is not None else None,
+        "p_use_w": (energy_j / duration_s) if energy_j is not None and duration_s else None,
+        "amp_energy_wh": (amp_energy_j / 3600.0) if amp_energy_j is not None else None,
+        "amp_mean_w": _mean_power_w(samples, "ina_power_w"),
+        "cpu_energy_wh": (cpu_energy_j / 3600.0) if cpu_energy_j is not None else None,
+        "cpu_mean_w": _mean_power_w(samples, "cpu_power_w"),
+        "mem_energy_wh": (mem_energy_j / 3600.0) if mem_energy_j is not None else None,
+        "mem_mean_w": _mean_power_w(samples, "mem_power_w"),
+        "peak_temp": _stat_or_none([s["temp_c"] for s in samples], max),
+        "throttled_any": _throttled_any(samples),
+        "mean_arm_freq_khz": (mean_arm_freq_hz / 1000.0) if mean_arm_freq_hz is not None else None,
+    }
 
 
 def _resolve_default_profile_dir(base_dir="profile"):

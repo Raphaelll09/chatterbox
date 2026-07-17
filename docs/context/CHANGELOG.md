@@ -15,6 +15,95 @@ state before starting new work.
 
 ---
 
+## 2026-07-16 — Add P4 cadence sweep (`--p4-sweep`)
+
+- What: new experiment measuring how average system power `P_use` varies with conversational
+  rate (utterances/minute), fitting `P_use(N) = P_idle + k·N`. Ran the design through a Plan
+  subagent review against the actual files before implementing; it found and this fixes four
+  real correctness gaps beyond the original spec:
+  1. **Calibration lookup would have silently gone uncalibrated.** `profiling/join.py`'s
+     `load_calibration()` only checks one directory up from wherever it's asked to join.
+     `profile/calibration.json` is two levels above a cadence dir
+     (`profile/p4_sweep_.../cadence_02/`), so it would have missed it entirely and silently
+     fallen back to identity scale/offset for every sweep point, with no error. Fixed by
+     copying `calibration.json` into the sweep root once at sweep start, not by touching
+     `join.py`'s lookup (kept `run_join()` fully unmodified).
+  2. **`mean_arm_freq_khz` (a spec'd summary column) was unparseable.** `load_samples()` never
+     read `arm_freq_hz` from `per_sample.csv` at all, despite the sampler always writing it.
+     Added as an additive, `None`-safe column parse alongside the existing ones.
+  3. **An hour-long, unattended, human-in-the-loop sweep must not lose completed points on a
+     later Ctrl-C.** `sweep_summary.csv` is now appended to after every point, not buffered to
+     a single write at the end; each point's profiling session is wrapped in its own
+     `try/finally` so `profiling.stop_session()` always runs even if a point is interrupted
+     mid-cycle.
+  4. **Meter-vs-profiler window mismatch is structural** (the totaliser is reset before the
+     sampler subprocess launches and read after it stops, so its bracket is always slightly
+     wider) — not fixable without fighting the "human reads an external meter" constraint;
+     documented in the README instead of engineered around.
+  - `profiling/__init__.py`: factored `_new_run_dir()`'s meta.json-writing into `_write_meta()`
+    and `start_session()`'s sampler-subprocess launch into `_launch_sampler()` (both reused,
+    behavior-preserving — existing `start_session()`/`_new_run_dir()` tests pass unchanged).
+    New `start_session_at(run_dir, ...)`: like `start_session()` but writes into a
+    caller-specified directory instead of auto-generating a `run_YYYYMMDD_HHMMSS` name, and
+    deliberately never touches `profile/latest` (that pointer means "the last single
+    benchmark/free-text run", not a sweep sub-point). `calibration_base_dir` is passed
+    explicitly to `_write_meta()` rather than derived from `run_dir`'s path — the fix for gap
+    #1's root cause at the `meta.json`-informational-field level.
+  - `profiling/join.py`: `load_samples()` now also parses `arm_freq_hz` (gap #2). New
+    `join_full_session(profile_dir)`: like `run_join()` but integrates the *whole*
+    `per_sample.csv` window (first to last `t_mono`) instead of per-sentence windows, reusing
+    the same calibration/integration helpers (`_integrate_energy_j`, `_mean_power_w`,
+    `_stat_or_none`, `_throttled_any`) — this is what makes `cadence=0` (zero sentences, no
+    `per_sentence.jsonl` at all) work uniformly with every other point.
+  - New `benchmark/p4_sweep.py` (mirrors `benchmark/runner.py`'s style): `parse_cadences()`,
+    `cadence_dir_name()`, `run_p4_sweep()` (the per-point cycle loop, prompts, summary-row
+    computation, linear fit + R² + flagging, `sweep_paste.xlsx` writer), plus a standalone
+    `--refit SWEEP_DIR` re-entry point (re-reads an existing `sweep_summary.csv` and redoes
+    only the fit + xlsx write, no hardware re-run — matches the same "expensive measurement
+    pass vs. re-runnable offline analysis pass" convention already used by `profiling/join.py`
+    and `benchmark/export_to_xlsx.py`'s own standalone `main()`s).
+  - `do_tts.py`: new `--p4-sweep`/`--cadences`/`--duration` flags, dispatched next to
+    `--benchmark`. `--cadences`/`--duration` are validated eagerly right after `argparse`
+    (same spot as the existing `--report-wav` early-exit) — a malformed value fails before
+    `load_models()` and the first interactive prompt, not deep into an unattended hour. The
+    existing top-level `profiling.start_session()` call is skipped for `--p4-sweep` (the sweep
+    manages its own per-point sessions via `start_session_at()`) but `profiling.enable()`/
+    `set_output_dir()` still run, since `start_session_at()` depends on both.
+  - `play_time_total_s` (not separately timestamped anywhere in the existing `Recorder`, and
+    intentionally not added there per "do not touch synthesis logic") is derived as
+    `sum(busy_i) - synth_time_total_s`, where `busy_i` is the sweep loop's own
+    `time.monotonic()` bracket around each whole `syn_audio(..., play=True)` call (confirmed
+    `play_audio()` blocks on every platform branch, so this genuinely covers synth+playback).
+    Guarded with a defensive length check against `per_sentence_results.csv`'s row count —
+    `None` + a printed warning on a mismatch, never a silent mis-sum.
+- Files: `profiling/__init__.py`, `profiling/join.py`, `benchmark/p4_sweep.py` (new),
+  `do_tts.py`, `tests/test_p4_sweep.py` (new), `tests/test_profiling.py`, `README.md`
+- Why: last power experiment in the measurement suite — no longer choosing a battery board
+  (decided: DFRobot FIT0992), now characterising each process's power contribution for later
+  optimisation and producing a formula that converts any usage model into a daily energy
+  budget.
+- Verify: `python3 -m pytest tests/` (full suite green — 24 new tests in `test_p4_sweep.py`
+  covering cadence parsing/naming, the synth/play time split, the linear fit + R² + flagging
+  against synthetic series, the `sweep_paste.xlsx` column layout and meter-vs-profiler
+  precedence, and the `--refit` round-trip; 9 new tests in `test_profiling.py` covering
+  `start_session_at()`'s calibration resolution two levels deep and that it never touches
+  `profile/latest`, plus `join_full_session()` against synthetic `per_sample.csv` including
+  the empty/single-sample edge cases). Manually verified end-to-end with real (non-hardware)
+  data: `parse_cadences`/`cadence_dir_name`/`_linear_fit` recover the spec's own sanity-check
+  formula (`P_use = 5.73 + 0.072·N`) exactly from synthetic points; `_build_summary_row` →
+  `_append_summary_row` → `_load_summary_rows` → `_refit_from_summary` round-trips correctly
+  through a real CSV + xlsx write. `do_tts.py --help` and eager `--cadences` validation
+  (`do_tts.py --p4-sweep --cadences 0,foo --duration 600`) both confirmed to fail fast with a
+  clear message, before any model loading.
+- Notes/gotchas: **cannot be verified against real hardware from this dev machine** (no I2C
+  bus, no Pi, no actual amplifier/meter) — the cycle loop, `profiling.start_session_at()`
+  launching the real sampler subprocess, and the full interactive prompt flow all still need a
+  real run on the Pi. Suggested first real test: a short `--duration 30 --cadences 0,30` dry
+  run (covers both the pure-idle and a numeric-cadence code path in under a minute) before
+  committing to a full multi-hour sweep.
+
+---
+
 ## 2026-07-16 — Fix export_to_xlsx.py for per-run profile/ directories
 
 - What: `benchmark/export_to_xlsx.py` still defaulted `--profile-dir` to the base `profile`
