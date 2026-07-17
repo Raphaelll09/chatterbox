@@ -348,6 +348,33 @@ def _write_paste_xlsx(sweep_root, rows):
     return out_path
 
 
+def _join_cadence_point(cadence, cadence_dir):
+    """run_join() for one cadence point's per_sentence.jsonl, tolerating the
+    case where it doesn't exist at all.
+
+    cadence=0 synthesizes nothing (the pure-idle anchor), so per_sentence.jsonl
+    is never created -- Recorder only writes it from finalize(), never called
+    with zero utterances. run_join()'s load_sentences() treats a missing
+    per_sentence.jsonl as a hard error (SystemExit) by design, for the
+    standalone `python -m profiling.join` case where that really does mean
+    "nothing was profiled". Here it's the expected, correct state of the idle
+    point, so skip the (sentence-only) join for it -- join_full_session()
+    (called separately) doesn't touch per_sentence.jsonl at all, so the
+    point's whole-session power/energy aggregates are unaffected.
+
+    Also wrapped in try/except as a backstop for any other unexpected case
+    that reaches zero utterances: an hour-long unattended sweep should
+    degrade a single point's synth_time_total_s to 0 rather than crash and
+    lose every point after it."""
+    if cadence == 0:
+        return
+    try:
+        run_join(cadence_dir)
+    except SystemExit as exc:
+        print("[p4_sweep] WARNING: join skipped for this point ({}) - "
+              "synth_time_total_s will read 0.".format(exc))
+
+
 def run_p4_sweep(tts_config, cadences, duration, sentences_path=DEFAULT_SENTENCES_PATH,
                   output_dir="profile"):
     sentences = load_sentences(sentences_path)
@@ -390,7 +417,7 @@ def run_p4_sweep(tts_config, cadences, duration, sentences_path=DEFAULT_SENTENCE
         finally:
             profiling.stop_session()
 
-        run_join(cadence_dir)
+        _join_cadence_point(cadence, cadence_dir)
         full = join_full_session(cadence_dir)
 
         totaliser_input = input("Read the totaliser. Enter mWh (blank to skip): ").strip()
