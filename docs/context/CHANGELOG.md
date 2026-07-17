@@ -57,6 +57,19 @@ state before starting new work.
   `sweep_summary.csv`/`sweep_paste.xlsx` land correctly (2 points → `R²` will read exactly
   1.0, per the note in the previous entry — expected for a 2-point fit, not a bug).
 
+**Follow-up, same session**: the re-run (`--cadences 0,30 --duration 30`) completed end to
+end on real Pi hardware — both points, the fit, and `sweep_paste.xlsx` all produced.
+Cross-checked the printed numbers independently (recomputed `p_use_meter_w`'s implied
+`duration_s` from the raw totaliser entries, recomputed `cadence_achieved` from
+`n_utterances`/`duration_s`, refit the line from the raw values) — everything reproduces
+exactly. One point header text was misleading rather than wrong: `"expected ~15
+utterances"` for the `cadence=30` point (which only reached 7, since 30/min was never
+achievable for this sentence set at ~4-5s synth+playback each — same fact the
+`cadence not achievable` warning already reported) read like a broken prediction rather than
+a best-case ceiling. Reworded to `"up to N utterances if fully achievable"` in
+`benchmark/p4_sweep.py`, with a comment explaining `cadence_achieved` (not this figure) is
+what actually gets fitted. No behavior change, no new test needed for a print string.
+
 ---
 
 ## 2026-07-16 — Add P4 cadence sweep (`--p4-sweep`)
