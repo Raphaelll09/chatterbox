@@ -392,11 +392,16 @@ def run_p4_sweep(tts_config, cadences, duration, sentences_path=DEFAULT_SENTENCE
 
     for cadence in cadences:
         cadence_dir = os.path.join(sweep_root, cadence_dir_name(cadence))
+        # This is only a naive ceiling (cadence * duration/60, i.e. zero
+        # synth+playback latency per utterance) -- real cycles routinely take
+        # several seconds each, so the actually-achieved count/rate is often
+        # far below this for a demanding cadence. That's not a bug: it's
+        # exactly what the "cadence not achievable" warning below reports,
+        # and cadence_achieved (not this number) is what gets fitted.
         expected_n = "?" if cadence == "max" else int(round(cadence * duration / 60.0))
         print()
-        print("=== cadence {} /min | duration {}s | expected ~{} utterances ===".format(
-            cadence, duration, expected_n,
-        ))
+        print("=== cadence {} /min | duration {}s | up to {} utterances if fully "
+              "achievable ===".format(cadence, duration, expected_n))
         input("Reset the meter's mWh totaliser now, then press Enter to start...")
 
         profiling.start_session_at(
