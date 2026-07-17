@@ -97,13 +97,70 @@ def _read_calibration(base_dir):
         return None
 
 
+def _write_meta(run_dir, meta_extra, sample_hz, pmic_hz, core, niceness, ina,
+                 calibration_base_dir):
+    """Write meta.json into run_dir with the fields known at session-start
+    time (profiling/sampler.py separately patches in
+    ina_detected/profiler_pid once it's actually probed the I2C bus).
+
+    calibration_base_dir is passed explicitly rather than derived from
+    run_dir's path: calibration.json always lives at the true base "profile"
+    dir, but callers may nest run_dir arbitrarily deep under it (e.g. the P4
+    sweep's profile/p4_sweep_.../cadence_02/ is two levels down, not one)."""
+    meta = {
+        "run_id": os.path.basename(run_dir),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "sample_hz": sample_hz,
+        "pmic_hz": pmic_hz,
+        "core": core,
+        "niceness": niceness,
+        "ina_requested": ina,
+        "governor": _read_governor(),
+        "calibration": _read_calibration(calibration_base_dir),
+    }
+    if meta_extra:
+        meta.update(meta_extra)
+    try:
+        with open(os.path.join(run_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except OSError:
+        pass
+
+
+def _launch_sampler(run_dir, sample_hz, pmic_hz, core, niceness, ina):
+    """Launch profiling/sampler.py as its own OS process, writing into
+    run_dir. Linux-only (the sysfs/vcgencmd sources it reads don't exist
+    elsewhere) -- prints a note and returns None on other platforms."""
+    if platform.system() != "Linux":
+        print("[profiling] background sampler needs sysfs/vcgencmd (Linux-only); "
+              "skipping it. Per-sentence timing marks are still recorded, in {}.".format(run_dir))
+        return None
+
+    out_path = os.path.join(run_dir, "per_sample.csv")
+    pid_file = os.path.join(run_dir, "sampler.pid")
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "profiling.sampler",
+            "--out", out_path,
+            "--sample-hz", str(sample_hz),
+            "--pmic-hz", str(pmic_hz),
+            "--core", str(core),
+            "--nice", str(niceness),
+            "--pid-file", pid_file,
+            "--ina" if ina else "--no-ina",
+        ],
+        cwd=_PACKAGE_ROOT,
+    )
+    atexit.register(stop_session)
+    return proc
+
+
 def _new_run_dir(base_dir, meta_extra=None, sample_hz=10, pmic_hz=10, core=3,
                   niceness=10, ina=True):
-    """Create profile/run_YYYYMMDD_HHMMSS/, write its initial meta.json (the
-    fields known at session-start time -- profiling/sampler.py separately
-    patches in ina_detected/profiler_pid once it's actually probed the I2C
-    bus), and point profile/latest at it. Isolates each run's per_sample.csv
-    + per_sentence.jsonl from every other run's, instead of the previous
+    """Create profile/run_YYYYMMDD_HHMMSS/, write its initial meta.json, and
+    point profile/latest at it. Isolates each run's per_sample.csv +
+    per_sentence.jsonl from every other run's, instead of the previous
     single shared profile/ directory (overwritten sampler output vs
     forever-appended per_sentence.jsonl, which made the two impossible to
     join correctly after more than one run)."""
@@ -121,25 +178,8 @@ def _new_run_dir(base_dir, meta_extra=None, sample_hz=10, pmic_hz=10, core=3,
         suffix += 1
     os.makedirs(run_dir)
 
-    meta = {
-        "run_id": run_id,
-        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "sample_hz": sample_hz,
-        "pmic_hz": pmic_hz,
-        "core": core,
-        "niceness": niceness,
-        "ina_requested": ina,
-        "governor": _read_governor(),
-        "calibration": _read_calibration(base_dir),
-    }
-    if meta_extra:
-        meta.update(meta_extra)
-    try:
-        with open(os.path.join(run_dir, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-    except OSError:
-        pass
-
+    _write_meta(run_dir, meta_extra, sample_hz, pmic_hz, core, niceness, ina,
+                calibration_base_dir=base_dir)
     _update_latest_pointer(base_dir, run_id)
     return run_dir
 
@@ -186,29 +226,29 @@ def start_session(core=3, niceness=10, sample_hz=10, pmic_hz=10, ina=True, meta_
         _output_dir, meta_extra=meta_extra, sample_hz=sample_hz, pmic_hz=pmic_hz,
         core=core, niceness=niceness, ina=ina,
     )
+    _sampler_proc = _launch_sampler(_run_dir, sample_hz, pmic_hz, core, niceness, ina)
 
-    if platform.system() != "Linux":
-        print("[profiling] background sampler needs sysfs/vcgencmd (Linux-only); "
-              "skipping it. Per-sentence timing marks are still recorded, in {}.".format(_run_dir))
+
+def start_session_at(run_dir, sample_hz=10, pmic_hz=10, core=3, niceness=10, ina=True,
+                      meta_extra=None):
+    """Like start_session(), but writes directly into the given run_dir
+    instead of auto-generating a profile/run_YYYYMMDD_HHMMSS/ name, and
+    deliberately does NOT update profile/latest -- that pointer means "the
+    last single benchmark/free-text run", which a sweep sub-point isn't.
+
+    Used by benchmark/p4_sweep.py: each cadence point needs its own
+    predictably-named directory (profile/p4_sweep_.../cadence_02/, ...)
+    rather than a fresh timestamp per point. Caller is responsible for
+    run_dir being a fresh/unique path -- unlike _new_run_dir(), this does
+    not disambiguate collisions."""
+    global _sampler_proc, _run_dir
+    if not _enabled or _sampler_proc is not None:
         return
-
-    out_path = os.path.join(_run_dir, "per_sample.csv")
-    pid_file = os.path.join(_run_dir, "sampler.pid")
-
-    _sampler_proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "profiling.sampler",
-            "--out", out_path,
-            "--sample-hz", str(sample_hz),
-            "--pmic-hz", str(pmic_hz),
-            "--core", str(core),
-            "--nice", str(niceness),
-            "--pid-file", pid_file,
-            "--ina" if ina else "--no-ina",
-        ],
-        cwd=_PACKAGE_ROOT,
-    )
-    atexit.register(stop_session)
+    os.makedirs(run_dir, exist_ok=True)
+    _run_dir = run_dir
+    _write_meta(run_dir, meta_extra, sample_hz, pmic_hz, core, niceness, ina,
+                calibration_base_dir=_output_dir)
+    _sampler_proc = _launch_sampler(run_dir, sample_hz, pmic_hz, core, niceness, ina)
 
 
 def stop_session(timeout=5):

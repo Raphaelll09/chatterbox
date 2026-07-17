@@ -246,6 +246,43 @@ Le jeu est construit pour isoler un facteur à la fois :
 - **C1–C2** cumulent plusieurs facteurs (nombres empilés ; homographes hétérophones nécessitant une bonne conversion grapheme-to-phoneme) ;
 - **REF** ancre le jeu en début et fin d'exécution pour détecter une dérive (échauffement CPU, throttling, ...).
 
+# P4 : balayage de cadence
+
+Le dernier volet des expériences de puissance : mesure comment la puissance système moyenne `P_use` varie avec le débit conversationnel (énoncés/minute), pour produire une formule `P_use(N) = P_idle + k·N` convertissant n'importe quel modèle d'usage en budget d'énergie journalier. Réutilise exactement le même appel de synthèse+lecture que `--benchmark` (`audio_utils.syn_audio()`) et les mêmes `profiling`/`join` — aucune logique de synthèse dupliquée.
+
+```
+python3 do_tts.py --p4-sweep --cadences 0,1,2,5,10,max --duration 600
+```
+
+- `--cadences` : liste d'énoncés/minute séparés par des virgules. `0` = ancre idle pure (aucune synthèse). `max` = enchaînement sans pause (mesure la cadence réellement atteignable).
+- `--duration` : secondes par point de cadence (défaut 600).
+- `--p4-sweep` active automatiquement le profilage et joue systématiquement l'audio, quels que soient `--play`/`--profile` (acceptés sans effet, pour compatibilité avec les autres modes).
+
+**Déroulement par point** : affichage de l'en-tête du point → invite « Reset the meter's mWh totaliser now, then press Enter to start... » → la boucle de synthèse tourne pendant `--duration` secondes à la cadence demandée (chaque cycle synthétise + joue une phrase du jeu `benchmark/sentences_fr.jsonl`, bloquant, puis patiente le temps restant du créneau ; `max` enchaîne sans pause) → arrêt du profileur, jointure → invite « Read the totaliser. Enter mWh (blank to skip): » → la ligne du point est **ajoutée immédiatement** à `sweep_summary.csv` (un balayage dure facilement une heure sans surveillance entre les points ; un Ctrl-C tardif ne doit pas faire perdre les points déjà terminés).
+
+**Sortie** :
+```
+profile/p4_sweep_YYYYMMDD_HHMMSS/
+    cadence_00/     (per_sample.csv, per_sentence.jsonl, *_results.csv, meta.json)
+    cadence_01/
+    ...
+    sweep_summary.csv
+    sweep_paste.xlsx
+```
+
+`sweep_summary.csv` contient une ligne par point (cadence demandée/atteinte, temps de synthèse/lecture, taux d'occupation, énergie/puissance calculées par le profileur **sur toute la fenêtre du point** — pas seulement les fenêtres de synthèse actives, pour englober correctement le point `cadence=0` qui n'a aucune phrase — et la lecture du wattmètre externe). En fin de balayage, un ajustement linéaire `P_use = P_idle + k·N` est imprimé et sauvegardé, calculé séparément pour la série profileur et la série wattmètre (contre `cadence_achieved`, pas `cadence_requested`), avec un signal si `R² < 0,95` ou si l'ordonnée à l'origine ajustée diffère de plus de 5 % du point `cadence=0` mesuré directement.
+
+`sweep_paste.xlsx` produit un bloc prêt à coller pour la feuille `P4_Conversational` du classeur maître (colonnes `run | cadence_achieved | duration_h | totaliser_wh | p_use_w | duty_active`, valeurs littérales) — la colonne `p_use_w` prend la valeur du wattmètre quand elle est disponible (référence), sinon celle du profileur.
+
+**Re-calculer sans relancer une mesure** (par ex. après correction manuelle d'une lecture de wattmètre dans `sweep_summary.csv`) :
+```
+python -m benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
+```
+
+**⚠️ Validité de la calibration** : la calibration PMIC→wattmètre (`profile/calibration.json`, voir "Calibration PMIC" ci-dessus) n'est valable que dans les conditions où elle a été établie — écran **allumé, à la luminosité de calibration**, amplificateur alimenté. Ces deux conditions doivent rester **fixes pendant tout le balayage** (le script invite une fois à noter la luminosité dans `meta.json`, à titre de rappel, mais ne peut pas la vérifier automatiquement) ; tout changement en cours de balayage invalide silencieusement `energy_wh_profiler`/`p_use_profiler_w` pour les points suivants — la lecture du wattmètre externe reste la référence dans ce cas.
+
+Note structurelle : le wattmètre est remis à zéro juste avant le lancement du profileur (et lu juste après son arrêt), donc sa fenêtre de mesure est toujours légèrement plus large que celle du profileur (premières/dernières millisecondes d'échantillonnage) — une source de `discrepancy_pct` de quelques pourcents, inhérente et non corrigeable sans modifier ce protocole humain-dans-la-boucle.
+
 # Performances
 
 Avec les paramètres recommandés (FastSpeech2 + Hifi-GAN V2), la durée d'inférence est d'environ 20% de la durée d'audio sur CPU.

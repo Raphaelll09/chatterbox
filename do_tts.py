@@ -143,6 +143,32 @@ if __name__ == "__main__":
              "per_stage_results.csv to a paste-ready profile/exports/chatterbox_paste.xlsx "
              "(benchmark/export_to_xlsx.py). Implies --join. Requires openpyxl.",
     )
+    parser.add_argument(
+        "--p4-sweep",
+        action="store_true",
+        default=False,
+        help="Run the P4 cadence sweep (benchmark/p4_sweep.py): a series of fixed-cadence "
+             "points (--cadences), profiling+playback on throughout, prompting to read an "
+             "external power meter between points, fitting P_use(N) = P_idle + k*N at the "
+             "end. Implies profiling; always plays back regardless of --play/--profile "
+             "(both accepted as harmless no-ops alongside --p4-sweep).",
+    )
+    parser.add_argument(
+        "--cadences",
+        type=str,
+        default="0,1,2,5,10,max",
+        metavar="LIST",
+        help="Comma-separated utterances/minute for --p4-sweep, e.g. '0,1,2,5,10,max'. "
+             "0 = pure idle anchor (no synthesis). max = back-to-back, no sleep. "
+             "Requires --p4-sweep.",
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=600,
+        metavar="SECONDS",
+        help="Seconds per cadence point for --p4-sweep (default: 600). Requires --p4-sweep.",
+    )
     args = parser.parse_args()
 
     # --report-wav: standalone analysis, no synthesis required
@@ -150,6 +176,19 @@ if __name__ == "__main__":
         import audio_postprocess as _app
         _app.report_wav(args.report_wav, save_json=True, save_figure=True)
         raise SystemExit(0)
+
+    # --p4-sweep: validate --cadences/--duration eagerly, before load_models()
+    # and the first interactive prompt -- an hour-long, human-in-the-loop
+    # procedure shouldn't fail on a typo deep into it.
+    p4_cadences = None
+    if args.p4_sweep:
+        import benchmark.p4_sweep as p4_sweep_module
+        try:
+            p4_cadences = p4_sweep_module.parse_cadences(args.cadences)
+        except ValueError as exc:
+            parser.error("--cadences: {}".format(exc))
+        if args.duration <= 0:
+            parser.error("--duration must be > 0, got {}".format(args.duration))
 
     tts_config = yaml.load(
         open(args.config, "r"), Loader=yaml.FullLoader
@@ -168,21 +207,26 @@ if __name__ == "__main__":
 
     # Merge CLI/env profiling flags into tts_config
     prof_cfg = tts_config.setdefault("profiling", {})
-    if args.profile or args.benchmark or os.environ.get("CHATTERBOX_PROFILE") == "1":
+    if args.profile or args.benchmark or args.p4_sweep or os.environ.get("CHATTERBOX_PROFILE") == "1":
         prof_cfg["enabled"] = True
     if args.ina is not None:
         prof_cfg["ina226"] = args.ina
     if prof_cfg.get("enabled", False):
         profiling.enable()
         profiling.set_output_dir(prof_cfg.get("output_dir", "profile"))
-        profiling.start_session(
-            core=prof_cfg.get("core", 3),
-            niceness=prof_cfg.get("niceness", 10),
-            sample_hz=prof_cfg.get("sample_hz", 10),
-            pmic_hz=prof_cfg.get("pmic_hz", 10),
-            ina=prof_cfg.get("ina226", True),
-            meta_extra={"play": args.play, "repeats": args.repeats} if args.benchmark else None,
-        )
+        # --p4-sweep manages its own per-cadence-point sessions via
+        # profiling.start_session_at() (benchmark/p4_sweep.py) -- it still
+        # needs enable()/set_output_dir() above, just not this single
+        # top-level session.
+        if not args.p4_sweep:
+            profiling.start_session(
+                core=prof_cfg.get("core", 3),
+                niceness=prof_cfg.get("niceness", 10),
+                sample_hz=prof_cfg.get("sample_hz", 10),
+                pmic_hz=prof_cfg.get("pmic_hz", 10),
+                ina=prof_cfg.get("ina226", True),
+                meta_extra={"play": args.play, "repeats": args.repeats} if args.benchmark else None,
+            )
 
     def load_models():
         # Load TTS
@@ -223,6 +267,14 @@ if __name__ == "__main__":
                 sentences_path=args.sentences or benchmark_runner.DEFAULT_SENTENCES_PATH,
                 play=args.play,
                 repeats=args.repeats,
+            )
+        elif args.p4_sweep:
+            load_models()
+            p4_sweep_module.run_p4_sweep(
+                tts_config,
+                cadences=p4_cadences,
+                duration=args.duration,
+                output_dir=prof_cfg.get("output_dir", "profile"),
             )
         elif args.gui:
             gui_config = tts_config['GUI_config']
