@@ -41,7 +41,15 @@ SUMMARY_COLUMNS = [
     "peak_temp", "throttled_any", "mean_arm_freq_khz",
 ]
 
-PASTE_COLUMNS = ["run", "cadence_achieved", "duration_h", "totaliser_wh", "p_use_w", "duty_active"]
+# Mirrors the master "P4_Conversational" tracking workbook's header row
+# (A:P) exactly, so a whole sweep pastes in one block -- see
+# _write_paste_xlsx()'s docstring for the source-row mapping.
+PASTE_COLUMNS = [
+    "cadence_req", "cad_achiev", "dur_h", "n_utt", "totalis_Wh",
+    "P_use_met_W", "P_use_prof_W", "discrep_%",
+    "duty_synth", "duty_play", "duty_active",
+    "amp_mean_W", "cpu_mean_W", "mem_mean_W", "peak_C", "throttled",
+]
 
 CALIBRATION_NOTE = (
     "[p4_sweep] Calibration (scale/offset) is only valid with the screen ON "
@@ -310,6 +318,21 @@ def _fit_and_report(rows):
 
 
 def _write_paste_xlsx(sweep_root, rows):
+    """Writes one row per cadence point, columns A:P matching the master
+    "P4_Conversational" tracking workbook's header row exactly (see
+    PASTE_COLUMNS), so the whole block can be copied in one paste. Column
+    mapping from a sweep_summary.csv row:
+        cadence_req  <- cadence_requested
+        cad_achiev   <- cadence_achieved
+        dur_h        <- duration_s / 3600
+        n_utt        <- n_utterances
+        totalis_Wh   <- totaliser_mwh / 1000
+        P_use_met_W  <- p_use_meter_w   (blank if the totaliser was skipped)
+        P_use_prof_W <- p_use_profiler_w
+        discrep_%    <- discrepancy_pct
+        duty_synth/duty_play/duty_active, amp_mean_W, cpu_mean_W, mem_mean_W,
+        peak_C, throttled <- the like-named summary columns, unchanged.
+    """
     try:
         import openpyxl
     except ImportError:
@@ -323,27 +346,32 @@ def _write_paste_xlsx(sweep_root, rows):
     ws.title = "P4_Conversational"
     ws.append(PASTE_COLUMNS)
 
-    run_name = os.path.basename(os.path.normpath(sweep_root))
     for row in rows:
         duration_h = row["duration_s"] / 3600.0 if row["duration_s"] else None
         totaliser_wh = row["totaliser_mwh"] / 1000.0 if row["totaliser_mwh"] is not None else None
-        # The meter totaliser is ground truth for P_use; fall back to the
-        # profiler's calibrated PMIC integral only when the totaliser entry
-        # was left blank for that point.
-        p_use_w = row["p_use_meter_w"] if row["p_use_meter_w"] is not None else row["p_use_profiler_w"]
         ws.append([
-            run_name,
+            row["cadence_requested"],
             row["cadence_achieved"],
             round(duration_h, 5) if duration_h is not None else None,
+            row["n_utterances"],
             round(totaliser_wh, 5) if totaliser_wh is not None else None,
-            p_use_w,
+            row["p_use_meter_w"],
+            row["p_use_profiler_w"],
+            row["discrepancy_pct"],
+            row["duty_synth"],
+            row["duty_play"],
             row["duty_active"],
+            row["amp_mean_w"],
+            row["cpu_mean_w"],
+            row["mem_mean_w"],
+            row["peak_temp"],
+            row["throttled_any"],
         ])
 
     out_path = os.path.join(sweep_root, "sweep_paste.xlsx")
     wb.save(out_path)
     print("Wrote {} row(s) to {}".format(len(rows), out_path))
-    print("Open sweep_paste.xlsx, copy A2:F{} from sheet 'P4_Conversational', paste into "
+    print("Open sweep_paste.xlsx, copy A2:P{} from sheet 'P4_Conversational', paste into "
           "the master workbook's P4_Conversational sheet.".format(len(rows) + 1))
     return out_path
 

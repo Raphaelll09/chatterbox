@@ -15,6 +15,51 @@ state before starting new work.
 
 ---
 
+## 2026-07-17 — Fix `sweep_paste.xlsx` column layout (didn't match the master tracking workbook)
+
+- What: the first full real sweep (`--cadences 0,1,2,5,10,max --duration 600`, all 6 points,
+  ~1h on real Pi hardware) completed cleanly end-to-end with sane data throughout (peak temp
+  rising 49→79°C with load, `throttled_any` false at every point, `cadence_achieved` tracking
+  `cadence_requested` closely up to 5/min and visibly saturating at 10 and `max` as expected,
+  profiler/meter `p_use` agreeing within ±4.25%) — no bug in the measurement pipeline itself.
+  But `sweep_paste.xlsx` was unusable for its actual purpose: the user's pre-built master
+  "P4_Conversational" tracking sheet expects a 16-column block (`A:P` — `cadence_req`,
+  `cad_achiev`, `dur_h`, `n_utt`, `totalis_Wh`, `P_use_met_W`, `P_use_prof_W`, `discrep_%`,
+  `duty_synth`, `duty_play`, `duty_active`, `amp_mean_W`, `cpu_mean_W`, `mem_mean_W`, `peak_C`,
+  `throttled`), while `_write_paste_xlsx()` only ever wrote the 6-column
+  `["run", "cadence_achieved", "duration_h", "totaliser_wh", "p_use_w", "duty_active"]` layout
+  from the original implementation — a scope reduction I made during the initial `--p4-sweep`
+  build that never matched what the downstream master workbook actually needed. Not a data
+  problem, not user error: `sweep_summary.csv` already had every column needed, it just wasn't
+  the file being pasted.
+  Rewrote `PASTE_COLUMNS` and `_write_paste_xlsx()` to emit exactly the master sheet's 16
+  columns, in order, one-to-one off `sweep_summary.csv`'s fields (unit conversions only for
+  `dur_h`/`totalis_Wh`, same as before). Dropped the old merged `p_use_w`
+  meter-falls-back-to-profiler column — no longer needed now that `P_use_met_W` and
+  `P_use_prof_W` are separate columns matching the sheet, so a skipped totaliser reading now
+  correctly leaves only `P_use_met_W` blank instead of silently substituting the profiler
+  value into a column labeled "meter". Also dropped the `run` column (not present in the
+  master sheet at all).
+- Files: `benchmark/p4_sweep.py`, `tests/test_p4_sweep.py`
+- Why: `sweep_paste.xlsx` exists solely to be copy-pasted as one block into the master
+  workbook; a column mismatch makes every number land in the wrong field silently (no error,
+  just wrong data if pasted as-is), which is worse than a crash.
+- Verify: `python3 -m pytest tests/` (130 passed — `test_write_paste_xlsx_column_layout_matches_master_workbook`
+  rewritten for the 16-column layout, asserts the header row, column count, and the
+  no-fallback blank-totaliser behavior). Regenerated `sweep_paste.xlsx` for the real
+  `profile/P4 - First Full try/` run via `python -m benchmark.p4_sweep --refit "profile/P4 -
+  First Full try"` (the existing `--refit` re-entry point doubles as the "rebuild
+  sweep_paste.xlsx from already-collected results" tool — no new script needed) and confirmed
+  by hand: 16 columns, 6 data rows (`A2:P7`), values correctly split between `P_use_met_W` and
+  `P_use_prof_W`.
+- Notes/gotchas: the fitted `P_idle` from this first full sweep: profiler 5.549 W (k=0.190 W
+  per utt/min, R²=0.9995), meter 5.437 W (k=0.231 W per utt/min, R²=0.9994) — both series fit
+  well and agree with each other within ~2%, a good sign the additive model
+  `P_use = P_idle + k·N` holds for this system. No flags raised (R² well above 0.95, fitted
+  intercept within 5% of the direct cadence=0 measurement on both series).
+
+---
+
 ## 2026-07-17 — Fix P4 sweep crash on the cadence=0 idle point
 
 - What: the first real dry run (`--p4-sweep --cadences 0,30 --duration 30`) crashed

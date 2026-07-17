@@ -234,19 +234,26 @@ def test_fit_and_report_flags_intercept_mismatch_vs_direct_idle_point(capsys):
 openpyxl = pytest.importorskip("openpyxl", reason="openpyxl not installed (optional dependency)")
 
 
-def test_write_paste_xlsx_column_layout_and_meter_precedence(tmp_path):
+def test_write_paste_xlsx_column_layout_matches_master_workbook(tmp_path):
     rows = [
         {
             "cadence_requested": 5, "cadence_achieved": 5.0, "duration_s": 600.0,
-            "totaliser_mwh": 1000.0, "p_use_meter_w": 6.0, "p_use_profiler_w": 6.05,
-            "duty_active": 0.39,
+            "n_utterances": 50, "totaliser_mwh": 1000.0,
+            "p_use_meter_w": 6.0, "p_use_profiler_w": 6.05, "discrepancy_pct": 0.83,
+            "duty_synth": 0.1, "duty_play": 0.29, "duty_active": 0.39,
+            "amp_mean_w": 0.33, "cpu_mean_w": 1.0, "mem_mean_w": 0.47,
+            "peak_temp": 65.0, "throttled_any": False,
         },
         {
-            # blank totaliser -> falls back to the profiler's p_use_w for
-            # column E, per "meter is ground truth, profiler is cross-check".
+            # blank totaliser -> P_use_met_W stays blank, does NOT fall back
+            # to the profiler value (unlike the old merged "p_use_w" column
+            # -- the master sheet has separate met/prof columns).
             "cadence_requested": 10, "cadence_achieved": 10.0, "duration_s": 600.0,
-            "totaliser_mwh": None, "p_use_meter_w": None, "p_use_profiler_w": 6.8,
-            "duty_active": 0.55,
+            "n_utterances": 94, "totaliser_mwh": None,
+            "p_use_meter_w": None, "p_use_profiler_w": 6.8, "discrepancy_pct": None,
+            "duty_synth": 0.18, "duty_play": 0.62, "duty_active": 0.81,
+            "amp_mean_w": 0.34, "cpu_mean_w": 1.55, "mem_mean_w": 0.51,
+            "peak_temp": 73.8, "throttled_any": False,
         },
     ]
     out_path = p4._write_paste_xlsx(str(tmp_path), rows)
@@ -254,15 +261,21 @@ def test_write_paste_xlsx_column_layout_and_meter_precedence(tmp_path):
     wb = openpyxl.load_workbook(out_path)
     ws = wb["P4_Conversational"]
     assert [c.value for c in ws[1]] == p4.PASTE_COLUMNS
-    assert ws["B2"].value == 5.0
-    # duration_h/totaliser_wh are rounded to 5 dp in the source (CSV/xlsx
+    assert len(p4.PASTE_COLUMNS) == 16  # A:P, matches the master sheet's header row
+    assert ws["A2"].value == 5  # cadence_req
+    assert ws["B2"].value == 5.0  # cad_achiev
+    # dur_h/totalis_Wh are rounded to 5 dp in the source (CSV/xlsx
     # readability) - allow for that rounding rather than the default tight
     # relative tolerance.
     assert ws["C2"].value == pytest.approx(600.0 / 3600.0, abs=1e-5)
-    assert ws["D2"].value == pytest.approx(1.0)  # 1000 mWh -> 1 Wh
-    assert ws["E2"].value == pytest.approx(6.0)  # meter value used
-    assert ws["D3"].value is None
-    assert ws["E3"].value == pytest.approx(6.8)  # falls back to profiler value
+    assert ws["D2"].value == 50  # n_utt
+    assert ws["E2"].value == pytest.approx(1.0)  # 1000 mWh -> 1 Wh
+    assert ws["F2"].value == pytest.approx(6.0)  # P_use_met_W
+    assert ws["G2"].value == pytest.approx(6.05)  # P_use_prof_W
+    assert ws["P2"].value is False  # throttled
+    assert ws["E3"].value is None  # totalis_Wh blank when totaliser skipped
+    assert ws["F3"].value is None  # P_use_met_W stays blank, no fallback
+    assert ws["G3"].value == pytest.approx(6.8)  # P_use_prof_W still populated
 
 
 def test_refit_from_summary_end_to_end(tmp_path):
