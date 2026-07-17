@@ -15,6 +15,50 @@ state before starting new work.
 
 ---
 
+## 2026-07-17 — Fix P4 sweep crash on the cadence=0 idle point
+
+- What: the first real dry run (`--p4-sweep --cadences 0,30 --duration 30`) crashed
+  immediately on the very first point:
+  `[join] profile/p4_sweep_.../cadence_00/per_sentence.jsonl not found - nothing to join.`
+  Root cause: `cadence=0` (the pure-idle anchor) synthesizes nothing at all, so
+  `per_sentence.jsonl` is never created (`Recorder` only writes it from `finalize()`, never
+  called with zero utterances) — but `run_p4_sweep()` unconditionally called `run_join()` for
+  every point, and `profiling/join.py`'s `load_sentences()` treats a missing
+  `per_sentence.jsonl` as a hard `SystemExit` by design (a deliberate choice from an earlier
+  session, correct for the *standalone* `python -m profiling.join` case where it really does
+  mean "nothing was profiled"). Uncaught, this killed the entire sweep on point 1 — before
+  cadence=30 (the actual thing under test in that dry run) ever ran.
+  Extracted the join-or-skip decision into `_join_cadence_point(cadence, cadence_dir)`:
+  skips the (sentence-only) join entirely for `cadence == 0` (expected, not an error —
+  `join_full_session()`, called separately right after, doesn't touch `per_sentence.jsonl` at
+  all, so the point's whole-session power/energy aggregates are unaffected), and wraps the
+  non-zero-cadence case in `try/except SystemExit` as a backstop — an hour-long unattended
+  sweep should degrade one point's `synth_time_total_s` to 0 with a printed warning rather
+  than crash and lose every point after it.
+- Files: `benchmark/p4_sweep.py`, `tests/test_p4_sweep.py`
+- Why: this exact crash would have hit every real sweep, since `0` is cadence #1 in the
+  documented example (`--cadences 0,1,2,5,10,max`) and in the dry-run recipe I gave after
+  implementing the feature — untested against real hardware from the dev machine, so this
+  surfaced on the first actual run rather than in review.
+- Verify: `python3 -m pytest tests/` (130 passed — 3 new:
+  `test_join_cadence_point_skips_join_for_cadence_zero` confirms no `SystemExit` and no
+  `per_sentence_results.csv` written for `cadence=0` with no data;
+  `test_join_cadence_point_still_raises_join_for_nonzero_cadence_with_no_data` confirms the
+  backstop still warns loudly for the *unexpected* case of a non-zero cadence somehow
+  producing zero utterances; `test_join_cadence_point_runs_normally_when_data_exists` confirms
+  normal joins are unaffected).
+- Notes/gotchas: **still not verified end-to-end on real hardware** — this fixes the specific
+  crash observed, but the `cadence=30` point (which never ran in the reported dry run) is
+  still unverified. Traced through it by hand: with real `benchmark/sentences_fr.jsonl`
+  sentences and a 2s slot (60/30), several sentences' synth+playback time will legitimately
+  exceed 2s, so the `warn_once` "cadence not achievable" message firing during that point is
+  *expected*, not a bug. Re-run the same dry run
+  (`--p4-sweep --cadences 0,30 --duration 30`) to confirm both points now complete and
+  `sweep_summary.csv`/`sweep_paste.xlsx` land correctly (2 points → `R²` will read exactly
+  1.0, per the note in the previous entry — expected for a 2-point fit, not a bug).
+
+---
+
 ## 2026-07-16 — Add P4 cadence sweep (`--p4-sweep`)
 
 - What: new experiment measuring how average system power `P_use` varies with conversational

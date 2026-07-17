@@ -278,3 +278,39 @@ def test_refit_from_summary_end_to_end(tmp_path):
 
     assert fit_report["profiler"] is not None
     assert (tmp_path / "sweep_paste.xlsx").exists()
+
+
+# ---------------------------------------------------------------------------
+# _join_cadence_point() -- regression test for the cadence=0 crash: no
+# sentences synthesized means per_sentence.jsonl never exists, and
+# run_join()'s load_sentences() raises SystemExit on a missing file by
+# design (for the standalone `python -m profiling.join` "nothing was
+# profiled" case). The P4 sweep must not propagate that and kill the whole
+# sweep on its very first (idle anchor) point.
+# ---------------------------------------------------------------------------
+
+def test_join_cadence_point_skips_join_for_cadence_zero(tmp_path):
+    # No per_sentence.jsonl at all in this dir -- would raise SystemExit if
+    # run_join() were called on it. Must not raise.
+    p4._join_cadence_point(0, str(tmp_path))
+    assert not (tmp_path / "per_sentence_results.csv").exists()
+
+
+def test_join_cadence_point_still_raises_join_for_nonzero_cadence_with_no_data(tmp_path, capsys):
+    # A non-zero cadence with a missing per_sentence.jsonl is unexpected (it
+    # should have synthesized at least one utterance) -- the backstop
+    # catches it and warns rather than crashing the sweep, but this is a
+    # real anomaly and should be visible.
+    p4._join_cadence_point(5, str(tmp_path))
+    assert "WARNING" in capsys.readouterr().out
+    assert not (tmp_path / "per_sentence_results.csv").exists()
+
+
+def test_join_cadence_point_runs_normally_when_data_exists(tmp_path):
+    (tmp_path / "per_sentence.jsonl").write_text(
+        '{"sentence_id": "A1", "text": "x", "t_synth_start": 0.0, '
+        '"t_audio_write_end": 1.0, "audio_duration_s": 1.0}\n',
+        encoding="utf-8",
+    )
+    p4._join_cadence_point(5, str(tmp_path))
+    assert (tmp_path / "per_sentence_results.csv").exists()
