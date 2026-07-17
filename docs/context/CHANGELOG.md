@@ -15,6 +15,61 @@ state before starting new work.
 
 ---
 
+## 2026-07-17 — Compare the two full P4 sweeps: reproducible P_idle, thermal-dependent k
+
+- What: ran a full 6-point P4 sweep twice back-to-back on real Pi 5 hardware
+  (`profile/P4 - First Full try/`, `profile/P4 - Second Full try/`, ~40 min apart, same
+  `calibration.json`/governor/brightness/duration/sentence set). Compared them point-by-point
+  to check the experiment is reproducible before trusting either fit.
+  - **Idle/low load (cadence 0, 1, 2/min) reproduces tightly**: `p_use_profiler_w` and
+    `p_use_meter_w` agree within ≤1.7% between the two runs — the protocol itself is solid.
+  - **A real thermal effect at higher load (cadence 5, 10, max)**: run 2 measured
+    consistently *cooler* (`peak_temp` −3.4% to −4.9%) and drew correspondingly *less* power
+    (`p_use_profiler_w`/`p_use_meter_w` −4% to −7.5%) than run 1 at the same cadence points,
+    with `mean_arm_freq_khz` essentially identical between runs (rules out frequency scaling
+    as the cause) and `amp_mean_w` barely moving (rules out the amplifier). Consistent with
+    CPU leakage current dropping with die temperature at a fixed clock/workload, not a
+    protocol or code fault — `n_utterances`/`duty_active` matched to 3 decimals between runs,
+    so the two runs drove genuinely identical workloads.
+  - Consequence: the fitted **intercept `P_idle` is reproducible** (profiler 5.549 W vs
+    5.590 W, meter 5.437 W vs 5.454 W — within ~1%), but the fitted **slope `k` is not**
+    (profiler 0.190 vs 0.139 W/(utt/min), meter 0.231 vs 0.177 W/(utt/min) — ~25-30% apart)
+    despite both individual fits reporting R² ≥ 0.996. A single sweep's R² does not capture
+    this run-to-run thermal variance.
+  - Pooled fit across all 12 points (both runs together):
+    **profiler P_idle=5.570 W, k=0.164 W/(utt/min), R²=0.955**;
+    **meter P_idle=5.446 W, k=0.204 W/(utt/min), R²=0.963** — still clears the 0.95 flag
+    threshold and matches each run's individual intercept closely; recommended as the working
+    number over either single run's `k`.
+  - Also noted (same sign pattern in both runs, so systematic not noise): `discrepancy_pct`
+    is positive (profiler > meter) at low cadence and negative (profiler < meter) at high
+    cadence in both runs — likely the 4-point static-load PMIC→meter calibration curve
+    mildly under/over-fitting outside its calibration range, not a bug.
+- Files: no code changes; analysis of `profile/P4 - First Full try/` and
+  `profile/P4 - Second Full try/` (`sweep_summary.csv`, `meta.json`, `per_sample.csv` row
+  counts). Both directories' `sweep_paste.xlsx` already use the fixed 16-column layout from
+  the entry below.
+- Why: before trusting a single sweep's `P_use = P_idle + k·N` formula for the daily energy
+  budget, wanted to confirm it's reproducible run-to-run rather than a one-off fit.
+- Verify: per-point diff table computed directly from both `sweep_summary.csv` files;
+  `mean_arm_freq_khz` cross-checked to rule out frequency scaling; pooled fit computed by
+  concatenating both runs' rows and reusing `benchmark.p4_sweep._linear_fit()` unmodified.
+  Sampler health double-checked (~6000 `per_sample.csv` rows at 10 Hz over 600 s, no dropped
+  samples, `throttled_any=False`) at every point in both runs.
+- Notes/gotchas: **the master `P4_Conversational` sheet's fixed 6-row template (one block per
+  sweep) can only hold one run's block as literal values at a time.** To merge both runs into
+  one more-robust estimate: either (a) stack both 6-row blocks (12 rows total) and re-point
+  the sheet's fit formulas at the combined range, or (b) if the sheet only accepts exactly 6
+  rows, average each matching cadence pair row-by-row before pasting — but (b) hides exactly
+  the signal that matters here (that `k` is thermal-state-dependent), so (a) is preferred if
+  the sheet can be adapted. Either way, the ~25-30% k spread should be flagged in the sheet
+  (e.g. a note on the cadence 5/10/max rows) rather than silently presenting a single run's
+  `k` as the final number. If a third sweep is run, record ambient/room temperature (not just
+  screen brightness) alongside each point, and consider randomizing cadence order across
+  sweeps to decorrelate within-sweep thermal soak from the cadence variable itself.
+
+---
+
 ## 2026-07-17 — Fix `sweep_paste.xlsx` column layout (didn't match the master tracking workbook)
 
 - What: the first full real sweep (`--cadences 0,1,2,5,10,max --duration 600`, all 6 points,
