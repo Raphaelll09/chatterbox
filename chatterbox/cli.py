@@ -301,7 +301,8 @@ def main():
         "--gui",
         required=False,
         action='store_true',
-        help="User Interface",
+        help="User Interface. Ignored (with a warning) if --benchmark or --p4-sweep is also "
+             "given -- those are mutually exclusive top-level modes, not composable with --gui.",
     )
     parser.add_argument(
         "--default_tts",
@@ -523,6 +524,17 @@ def main():
                 )
         except Exception as exc:
             print("[warmup] skipped: {}".format(exc), file=sys.stderr)
+
+    # --gui, --benchmark, and --p4-sweep are mutually exclusive top-level modes (checked in this
+    # priority order below) -- previously a silent override with no indication --gui had been
+    # ignored; make that explicit now that manual testing surfaced how confusing it was.
+    if args.gui and (args.benchmark or args.p4_sweep):
+        winning_flag = "--benchmark" if args.benchmark else "--p4-sweep"
+        print(
+            "[do_tts] --gui has no effect together with {0} -- running {0} instead. "
+            "Launch the interface on its own with `do_tts.py --gui`.".format(winning_flag),
+            file=sys.stderr,
+        )
 
     try:
         if args.benchmark:
