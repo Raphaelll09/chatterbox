@@ -5,7 +5,7 @@ conversational rate (utterances/minute), to fit P_use(N) = P_idle + k*N.
 
 Runs a series of fixed-cadence points (--cadences), each for --duration
 seconds, reusing the exact same synthesis+playback call as --benchmark
-(audio_utils.syn_audio()) and the existing profiling/join machinery - no
+(chatterbox.cli.syn_audio()) and the existing profiling/join machinery - no
 synthesis logic lives here. A human reads an external USB-C power-meter
 totaliser between points; the profiler's own calibrated PMIC integral is
 the cross-check, not the ground truth.
@@ -15,7 +15,7 @@ Usage (via do_tts.py):
 
 Re-fit an existing sweep's summary without re-running any hardware (e.g.
 after hand-correcting a totaliser entry in sweep_summary.csv):
-    python -m benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
+    python -m tools.measurement.benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
 """
 import argparse
 import csv
@@ -25,7 +25,7 @@ import time
 
 import numpy as np
 
-import audio_utils
+import chatterbox.cli as cli
 import tools.monitoring.profiling as profiling
 from tools.monitoring.profiling.join import run_join, join_full_session
 from tools.measurement.benchmark.runner import load_sentences, DEFAULT_SENTENCES_PATH
@@ -107,7 +107,7 @@ def _run_cadence_point(tts_config, cadence, duration, sentences):
     """Runs the cycle loop for one cadence point (the profiling session must
     already be started, pointed at this point's own directory). Returns
     (n_utterances, busy_times), where busy_times[i] is the wall-clock
-    seconds the i-th audio_utils.syn_audio() call (synth + blocking
+    seconds the i-th chatterbox.cli.syn_audio() call (synth + blocking
     playback) took, in synthesis order -- used afterwards to split
     synth vs. play time (see _build_summary_row)."""
     if cadence == 0:
@@ -130,7 +130,7 @@ def _run_cadence_point(tts_config, cadence, duration, sentences):
     while (time.monotonic() - start) < duration:
         sentence = sentences[utterance_index % len(sentences)]
         t0 = time.monotonic()
-        audio_utils.syn_audio(
+        cli.syn_audio(
             False, tts_config, sentence["text"],
             sentence_id="{}_{:04d}".format(sentence["id"], utterance_index),
             complexity_tag=sentence["tag"],
@@ -337,7 +337,7 @@ def _write_paste_xlsx(sweep_root, rows):
         import openpyxl
     except ImportError:
         print("[p4_sweep] openpyxl not installed - run `pip install openpyxl` and re-run "
-              "`python -m benchmark.p4_sweep --refit {}` to produce sweep_paste.xlsx. "
+              "`python -m tools.measurement.benchmark.p4_sweep --refit {}` to produce sweep_paste.xlsx. "
               "sweep_summary.csv is unaffected.".format(sweep_root))
         return None
 

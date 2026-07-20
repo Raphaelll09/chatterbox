@@ -3,6 +3,16 @@
 Read this when you need module-level detail beyond what's in the root `CLAUDE.md`. Not loaded
 automatically — read on demand.
 
+> **Stale as of 2026-07-20 (reorg Phase 3), pending Phase 4.** The module names below
+> (`loading_modules.py`, `synthesis_modules.py`, `audio_utils.py`, `gui_utils.py`, `keyboards.py`,
+> `tts_utils.py`) no longer exist — see `docs/REORG_PROPOSAL.md` Phase 3 (§7) and the
+> 2026-07-20 CHANGELOG entries for where each one's logic actually lives now (short version: a new
+> `chatterbox/` package, with model state now owned by a `FastSpeech2HifiGanBackend` class instance
+> — `chatterbox.synthesis.registry.BACKEND` — instead of the module-level globals this document
+> describes below). A full rewrite of this file is Phase 4's job, deliberately deferred rather than
+> done piecemeal across every phase; until then, treat every `*.py` path mentioned below as
+> historical, and cross-check against `docs/REORG_PROPOSAL.md` §2's tree for the current location.
+
 ## Repository layout
 
 The repo root (where `CLAUDE.md` lives) is the working root for running scripts, tests, and

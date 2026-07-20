@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Benchmark routine: runs the fixed sentence set (benchmark/sentences_fr.jsonl)
+"""Benchmark routine: runs the fixed sentence set (tools/measurement/benchmark/sentences_fr.jsonl)
 through the exact same synthesis call as free-text mode
-(audio_utils.syn_audio()), with each sentence's id/tag labelling its
+(chatterbox.cli.syn_audio()), with each sentence's id/tag labelling its
 profiling record. See README.md "Benchmark" for the sentence-set design.
 
 Order: REF (anchor), then the file's remaining entries in order, then REF
@@ -14,7 +14,7 @@ import json
 import os
 import time
 
-import audio_utils
+import chatterbox.cli as cli
 
 DEFAULT_SENTENCES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sentences_fr.jsonl")
 PAUSE_S = 2.0
@@ -46,7 +46,7 @@ def run_benchmark(tts_config, sentences_path=DEFAULT_SENTENCES_PATH, play=False,
             print("[benchmark] {}/{} - {} ({})".format(
                 run_index, total_runs, sentence["id"], sentence["tag"],
             ))
-            audio_utils.syn_audio(
+            cli.syn_audio(
                 False, tts_config, sentence["text"],
                 sentence_id=sentence["id"],
                 complexity_tag=sentence["tag"],

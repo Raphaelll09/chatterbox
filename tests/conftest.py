@@ -1,4 +1,4 @@
-"""Add the project root to sys.path so tests can import audio_postprocess."""
+"""Add the project root to sys.path so tests can import chatterbox.* / tools.*."""
 import sys
 import os
 

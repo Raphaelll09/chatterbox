@@ -15,12 +15,12 @@ sheet (P2P3_Synthesis, P2P3_Synthesis_pass2, ...), all with the same A2:U12
 layout so any of them can be pasted individually.
 
 Usage:
-    python -m benchmark.export_to_xlsx                        # profile/latest
-    python -m benchmark.export_to_xlsx --profile-dir profile/run_20260716_120000
-    python -m benchmark.export_to_xlsx --out-dir SOMEWHERE
+    python -m tools.measurement.benchmark.export_to_xlsx                        # profile/latest
+    python -m tools.measurement.benchmark.export_to_xlsx --profile-dir profile/run_20260716_120000
+    python -m tools.measurement.benchmark.export_to_xlsx --out-dir SOMEWHERE
 
 With no --profile-dir, this defaults to profile/latest (the most recently
-completed profiled run - see profiling/__init__.py's start_session()); if
+completed profiled run - see tools/monitoring/profiling/__init__.py's start_session()); if
 that pointer is missing or stale (no per_sentence_results.csv there yet),
 it lists the available profile/run_.../ directories and asks which one to
 use, rather than failing outright.
@@ -171,7 +171,7 @@ def write_workbook(sentence_passes, stage_passes, out_path):
         import openpyxl
     except ImportError:
         print("[export_to_xlsx] openpyxl not installed - run `pip install openpyxl` and "
-              "re-run `python -m benchmark.export_to_xlsx` to produce the paste-ready sheet. "
+              "re-run `python -m tools.measurement.benchmark.export_to_xlsx` to produce the paste-ready sheet. "
               "per_sentence_results.csv / per_stage_results.csv are unaffected.")
         return None
 

@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 
-import paths
+import chatterbox.config.paths as paths
 from .recorder import NullRecorder, Recorder
 
 _PACKAGE_ROOT = str(paths.ROOT)
