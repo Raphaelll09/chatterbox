@@ -23,6 +23,6 @@ CUSTOM_REGEX_RULES = _RULES_DIR / "custom_regex_rules.csv"
 SYMBOLS_REGEX_RULES = _RULES_DIR / "symbols_regex_rules.csv"
 URL_REGEX_RULES = _RULES_DIR / "url_regex_rules.csv"
 
-# audio_keyboards/ hasn't moved yet (planned for Phase 4's assets/audio/prompts/ relocation) --
-# anchored here now so gui_utils.py stops hardcoding the bare relative folder name.
-AUDIO_KEYBOARDS_DIR = ROOT / "audio_keyboards"
+# Moved from audio_keyboards/ to assets/audio/prompts/ in Phase 4 -- only this constant needed to
+# change (chatterbox/gui/app.py routes through it already, per the Phase 0 path-anchoring invariant).
+AUDIO_KEYBOARDS_DIR = ROOT / "assets" / "audio" / "prompts"
