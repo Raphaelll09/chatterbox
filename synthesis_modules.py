@@ -16,6 +16,7 @@ import re
 
 import loading_modules
 import profiling
+import paths
 from scipy.io import loadmat
 
 #sys.path.insert(1, "./FastSpeech2")
@@ -30,9 +31,9 @@ sys.path.insert(1, './Waveglow/tacotron2')
 from inference import main as inference_main
 
 audio_file_name = "audio_file"
-regex_file = "custom_regex_rules.csv"
-symbols_regex_file = "symbols_regex_rules.csv"
-url_regex_file = "url_regex_rules.csv"
+regex_file = str(paths.CUSTOM_REGEX_RULES)
+symbols_regex_file = str(paths.SYMBOLS_REGEX_RULES)
+url_regex_file = str(paths.URL_REGEX_RULES)
 
 # Rule files never change during a run -- parse each once and reuse, instead
 # of re-opening/re-reading them on every synthesis call.

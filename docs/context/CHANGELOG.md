@@ -15,6 +15,44 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg Phase 0: repo-root-anchored path resolution (`paths.py`)
+
+- What: Phase 0 of `docs/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
+  directory moves. Added a temporary root-level `paths.py` module (`ROOT =
+  Path(__file__).resolve().parent`, i.e. anchored to the file's own location, not the process's
+  CWD) and routed every CWD-relative path through it:
+  - `loading_modules.py`'s three `sys.path.insert(1, "./FastSpeech2")` / `"./hifi-gan-master"` /
+    `"./Waveglow"` calls now use `paths.FASTSPEECH2_DIR` / `paths.HIFIGAN_DIR` /
+    `paths.WAVEGLOW_DIR`.
+  - `synthesis_modules.py`'s three regex-rule file constants (`regex_file`,
+    `symbols_regex_file`, `url_regex_file`) now resolve via `paths.CUSTOM_REGEX_RULES` /
+    `paths.SYMBOLS_REGEX_RULES` / `paths.URL_REGEX_RULES` instead of bare CWD-relative filenames.
+  - `FastSpeech2/utils/model.py`'s hardcoded `modelname = './flaubert/flaubert_large_cased'`
+    (bypassed `config_tts.yaml` entirely, CWD-relative) now uses `paths.FLAUBERT_DIR`.
+  No directories moved yet — this phase only changes how existing paths are computed, so
+  `do_tts.py` still must be run with the repo as the working directory today; the payoff is that
+  Phase 1+'s directory moves become a matter of updating `paths.py`'s constants instead of hunting
+  down scattered CWD-relative strings.
+- Files: `paths.py` (new), `loading_modules.py`, `synthesis_modules.py`,
+  `FastSpeech2/utils/model.py`.
+- Why: `docs/REORG_PROPOSAL.md` §6 flagged CWD-relative `sys.path.insert` as the highest-risk item
+  in the whole reorg — every subsequent phase that moves `FastSpeech2/`, `hifi-gan-master/`,
+  `Waveglow/`, `flaubert/`, or the regex-rule CSVs would silently break without this fix landing
+  first.
+- Verify: `pytest tests/` (130 passed, unchanged). Real end-to-end smoke test on this Windows
+  checkout (real weights present locally): `printf 'Bonjour, ceci est un test.\n' | python
+  do_tts.py` — FlauBERT, FastSpeech2 (`390000`), and HiFi-GAN (`FR_V2/g_00570000`) all loaded via
+  the new anchored paths, text normalization (which reads the regex-rule CSVs) ran correctly, and
+  `audio_file.wav` was produced with normal timing (TTS 0.291s / vocoder 0.507s / denoise 0.117s
+  for the one sentence).
+- Notes/gotchas: no Pi 5 hardware access for this session, so this phase is **Windows-verified,
+  Pi-unverified** — real hardware validation is still needed before this is considered fully safe,
+  per `docs/REORG_PROPOSAL.md`'s note on the retired "Pi-mandatory" amendment. `paths.py` is
+  intentionally a temporary root-level module (not yet under a `chatterbox/` package, which doesn't
+  exist until Phase 3) — see the proposal doc for the full phased plan.
+
+---
+
 ## 2026-07-17 — Compare the two full P4 sweeps: reproducible P_idle, thermal-dependent k
 
 - What: ran a full 6-point P4 sweep twice back-to-back on real Pi 5 hardware
