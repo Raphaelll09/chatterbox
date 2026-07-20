@@ -26,9 +26,9 @@ pip install --upgrade setuptools
 ```
 
 ## Dependencies
-Le fichier requirements.txt permet d'installer les packages nécessaires.
+Le fichier `requirements-dev.txt` (PC) permet d'installer les packages nécessaires — voir `INSTALL.md` pour la distinction PC / Raspberry Pi 5 (`requirements-pi.txt`).
 ```
-pip3 install -r requirements.txt
+pip3 install -r requirements-dev.txt
 ```
 Il est possible qu'une commande supplémentaire soit nécessaire pour installer les dépendances de l'interfaces graphique.
 ```
