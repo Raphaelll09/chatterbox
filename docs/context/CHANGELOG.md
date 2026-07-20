@@ -15,6 +15,61 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg Phase 2: move benchmark/profiling into tools/, plus fixing Phase 1's open follow-up
+
+- What: Two pieces of work.
+  1. Closed the one open follow-up from Phase 1 (gitignored FastSpeech2 config YAMLs hardcoding
+     `"FastSpeech2/…"` paths): `loading_modules.py` gained
+     `_repoint_legacy_fastspeech2_config_paths()`, called right after `preprocess_config`/
+     `train_config` load in `load_fastspeech2()`. It rewrites `preprocessed_path`/
+     `output_syn_path`/`ckpt_path` in memory to `ROOT/assets/models/<value>` whenever the value
+     still carries the legacy `"FastSpeech2/"` prefix — fixes this for a fresh
+     `scripts/setup_pi.sh` download, a manual install, and this checkout alike, with no YAML
+     hand-editing needed. Chosen over patching `setup_pi.sh` with a `sed` step because that would
+     only cover the Pi provisioning path, not a manual install following the same README
+     instructions.
+  2. Phase 2 of `docs/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
+     tools/measurement/benchmark/`, `git mv profiling/ tools/monitoring/profiling/`, `git mv
+     pmic_calibrate.py tools/measurement/`. Added `tools/__init__.py`,
+     `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`. Updated every
+     `import`/`from` reference to the new dotted paths across `do_tts.py`, `audio_utils.py`,
+     `synthesis_modules.py`, the moved packages' own cross-imports, and all four
+     `tests/test_*.py` files that import them (existing aliases like `as profiling`/`as p4` kept,
+     so only import lines changed).
+  3. Found and fixed a second gap of the exact same class as Phase 1's (a directory-depth
+     assumption baked into a path constant, broken by nesting the directory deeper):
+     `tools/monitoring/profiling/__init__.py`'s `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(
+     os.path.abspath(__file__)))` assumed `profiling/` sat exactly one level under the repo root.
+     Nesting it three levels deep silently broke the `subprocess.Popen(cwd=_PACKAGE_ROOT, ...)`
+     call that launches the background sampler. Fixed: `_PACKAGE_ROOT = str(paths.ROOT)`.
+- Files: `loading_modules.py`; `do_tts.py`, `audio_utils.py`, `synthesis_modules.py`; the `git mv`
+  of `benchmark/` → `tools/measurement/benchmark/` and `profiling/` → `tools/monitoring/profiling/`
+  and `pmic_calibrate.py` → `tools/measurement/pmic_calibrate.py`; new `tools/__init__.py`,
+  `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`; the moved packages' own
+  cross-imports and self-referential usage strings; `tests/test_benchmark.py`,
+  `tests/test_p4_sweep.py`, `tests/test_export_xlsx.py`, `tests/test_profiling.py`;
+  `docs/REORG_PROPOSAL.md`.
+- Why: `docs/REORG_PROPOSAL.md` Phase 2 (Goal 4, monitoring isolated as maintenance-only); the
+  config-path fix closes the one thing Phase 1 explicitly left unresolved.
+- Verify: `pytest tests/` — 130 passed. Re-verified the config-path fix by reverting the local
+  YAMLs to their original stale, as-downloaded content and re-running a synthesis — confirmed the
+  in-memory remap (not a lingering hand-edit) does the work. Exercised every Phase 2 code path
+  directly: plain synthesis, `--profile` (a real `tools.monitoring.profiling` run directory was
+  written with correct `per_sentence.jsonl`), `--benchmark --repeats 1` (all 11 sentences),
+  `--join`, and `--export-xlsx` (the trickiest cross-import, `profiling.join` →
+  `benchmark.export_to_xlsx`) — all succeeded. Deleted the test-generated `profile/run_*`
+  directories afterward rather than leaving them in the tree.
+- Notes/gotchas: no Pi 5 hardware access this round — the sampler subprocess launch string is the
+  one Phase 2 change Windows genuinely cannot exercise (the sampler no-ops off-Linux before
+  reaching that code), so it's the highest-risk item to merge blind, per
+  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. Flagging the general pattern for Phase 3
+  (nests files even deeper, under `chatterbox/synthesis/backends/fastspeech2_hifigan/...`): grep
+  for other `dirname(dirname(...))`/`Path(__file__).parents[N]`-style constants across the whole
+  tree before executing it, not just in the files being moved that phase — this is the second time
+  a directory move has broken one.
+
+---
+
 ## 2026-07-20 — Reorg Phase 1: move vendored model repos + weights under `assets/models/`
 
 - What: Phase 1 of `docs/REORG_PROPOSAL.md`'s migration plan.

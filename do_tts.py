@@ -18,7 +18,7 @@ import loading_modules
 import gui_utils
 import tts_utils
 import audio_utils
-import profiling
+import tools.monitoring.profiling as profiling
 
 device = torch.device("cpu")
 
@@ -182,7 +182,7 @@ if __name__ == "__main__":
     # procedure shouldn't fail on a typo deep into it.
     p4_cadences = None
     if args.p4_sweep:
-        import benchmark.p4_sweep as p4_sweep_module
+        import tools.measurement.benchmark.p4_sweep as p4_sweep_module
         try:
             p4_cadences = p4_sweep_module.parse_cadences(args.cadences)
         except ValueError as exc:
@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
     try:
         if args.benchmark:
-            import benchmark.runner as benchmark_runner
+            import tools.measurement.benchmark.runner as benchmark_runner
             load_models()
             benchmark_runner.run_benchmark(
                 tts_config,
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         profiling.stop_session()
 
     if args.benchmark and (args.join or args.export_xlsx):
-        from profiling.join import run_join
+        from tools.monitoring.profiling.join import run_join
         # profiling.get_run_dir() is this session's profile/run_.../ (set by
         # start_session(), still valid after stop_session() -- see its
         # docstring). Falls back to the base output_dir only if profiling was
@@ -312,5 +312,5 @@ if __name__ == "__main__":
         run_join(run_dir)
 
     if args.benchmark and args.export_xlsx:
-        from benchmark.export_to_xlsx import export as export_xlsx
+        from tools.measurement.benchmark.export_to_xlsx import export as export_xlsx
         export_xlsx(run_dir)

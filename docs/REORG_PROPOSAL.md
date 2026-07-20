@@ -1,11 +1,11 @@
 # Chatterbox — Repository Reorganization Proposal
 
-**Status: Phases 0–1 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
-Phases 2–4 are still analysis only — no directories moved, renamed, or deleted yet beyond Phase 1's
-vendored-model move. Every phase in §7 uses `git mv` on this dedicated branch when executed, each
-with its own validation checkpoint. Phase 1 surfaced two real gaps invisible to static analysis —
-see Phase 1's notes and the new §6 risk item on gitignored FastSpeech2 config YAMLs, which is an
-**open follow-up**, not yet resolved.
+**Status: Phases 0–2 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
+Phases 3–4 are still analysis only — no further directories moved, renamed, or deleted beyond
+Phases 1–2's moves. Every phase in §7 uses `git mv` on this dedicated branch when executed, each
+with its own validation checkpoint. Phases 1 and 2 each surfaced real gaps invisible to static
+analysis — see their notes in §7 and the two new §6 risk items (gitignored FastSpeech2 config
+YAMLs, now **fixed**; and a directory-depth-assumption bug pattern to watch for in Phase 3).
 
 **No Pi 5 hardware access for this execution round.** Amendment #8 ("Pi 5 hardware run mandatory
 before merging each phase") is retired for now — there's no Pi 5 available to run it against. Every
@@ -457,7 +457,7 @@ should import its vendored dependencies via `importlib.util.spec_from_file_locat
 own subtree, or vendor each model repo as a proper installable subpackage, instead of mutating
 global `sys.path`. Worth doing regardless of whether the broader reorg proceeds.
 
-**High — gitignored FastSpeech2 config YAMLs hardcode their own repo-root-relative paths,
+**✅ Fixed — gitignored FastSpeech2 config YAMLs hardcode their own repo-root-relative paths,
 discovered during Phase 1.** `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
 (`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each contain
 a literal `"FastSpeech2/…"` string, read directly by `FastSpeech2/model/modules.py` and
@@ -465,16 +465,34 @@ a literal `"FastSpeech2/…"` string, read directly by `FastSpeech2/model/module
 alongside `sys.path.insert` and the Python-level hardcodes already in this table, and the one that
 slipped through the original audit (no leading `./`, so the grep pattern that caught everything
 else in this table didn't match it). These YAMLs are **gitignored** — downloaded from the Google
-Drive archives named in `README.md`, never committed — so fixing the local copy (done for Phase 1's
-own verification) does not fix anything for a fresh `scripts/setup_pi.sh` run, which re-downloads
-and re-unzips the same stale-path archive. *Fix, not yet done:* either (a) have
-`scripts/setup_pi.sh` `sed`-patch these two YAML keys immediately after unzipping (mirrors the
-"flatten nested archive dir" post-processing it already does in `fetch_and_unzip()`), or (b) change
-`FastSpeech2/model/modules.py`/`utils/model.py` to resolve these config values relative to
-`paths.FASTSPEECH2_DIR` rather than trusting them as CWD-relative literals, treating the YAML values
-as filenames within the FastSpeech2 tree rather than full repo-root-relative paths. Needs a decision
-before Phase 4 closes this reorg out, since a fresh Pi provisioning run will hit this exact break
-otherwise.
+Drive archives named in `README.md`, never committed — so patching the local copy alone doesn't fix
+anything for a fresh `scripts/setup_pi.sh` run, which re-downloads and re-unzips the same
+stale-path archive.
+
+*Fix (implemented):* `loading_modules.py` now has
+`_repoint_legacy_fastspeech2_config_paths()`, called right after the three YAMLs load in
+`load_fastspeech2()`. It rewrites `preprocessed_path`/`output_syn_path`/`ckpt_path` **in memory**
+to `ROOT/assets/models/<value>` whenever the value still starts with the legacy `"FastSpeech2/"`
+prefix — i.e. it re-derives the same `assets/models/` prefix I'd otherwise have to hand-patch into
+every fresh download, so it works for `scripts/setup_pi.sh`, a manual README-instructions install,
+*and* this checkout, all from the same code path, with zero YAML editing required. Verified by
+reverting the local YAMLs to their original stale content and re-running the smoke test — it
+picked up the legacy values and remapped them correctly. Chosen over patching
+`scripts/setup_pi.sh` with a `sed` step because that would only cover the Pi provisioning path, not
+a manual Windows/PC install following the same README instructions.
+
+**Medium — directory-depth assumptions baked into `dirname()`/`parents[N]`-style constants, found
+during Phase 2.** `profiling/__init__.py` (now `tools/monitoring/profiling/__init__.py`) had
+`_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))` — two `dirname()`
+hops, correct only because `profiling/` used to sit exactly one level under the repo root. Phase 2
+nested it three levels deep (`tools/monitoring/profiling/`), silently breaking the `subprocess.Popen(...,
+cwd=_PACKAGE_ROOT)` call that launches the sampler (it would have pointed at `tools/monitoring/`,
+not the repo root). Fixed by replacing it with `paths.ROOT` directly — but the general lesson
+applies beyond this one constant: **any hardcoded `dirname()`-chain or `Path(__file__).parents[N]`
+elsewhere in the codebase is a landmine for Phase 3**, which nests files even deeper
+(`chatterbox/synthesis/backends/fastspeech2_hifigan/...`). Grep for `dirname(dirname`,
+`parents[`, and similar patterns across the whole tree before executing Phase 3, not just in the
+files being moved that phase.
 
 ### Hardcoded paths
 
@@ -485,7 +503,8 @@ otherwise.
 | `synthesis_modules.py`'s `sys.path.insert(1, './Waveglow/tacotron2')` | a **fourth** CWD-relative insert Phase 0 missed (only the three in `loading_modules.py` were in its checklist) | ✅ fixed during Phase 1 verification, after it broke `pytest` collection post-move — routed through `paths.WAVEGLOW_DIR / "tacotron2"` |
 | `synthesis_modules.py` (regex_file, symbols_regex_file, url_regex_file) | bare CWD-relative filenames for the three rule CSVs | ✅ fixed in Phase 0 — routed through `paths.py` |
 | `loading_modules.py` (tts_model["folder"], vocoder_model["folder"]) | config-driven from `config_tts.yaml`, base was CWD-relative | ✅ fixed in Phase 1 — `config_tts.yaml`'s `folder` values now read `assets/models/…` |
-| `FastSpeech2/config/ALL_corpus/{preprocess,train}.yaml` (`preprocessed_path`, `output_syn_path`, `ckpt_path`) | literal `"FastSpeech2/…"` strings inside **gitignored** config files (downloaded, never committed) | **not fixed** — see the new §6 risk item above; local checkout patched for verification only, fresh downloads will still break |
+| `FastSpeech2/config/ALL_corpus/{preprocess,train}.yaml` (`preprocessed_path`, `output_syn_path`, `ckpt_path`) | literal `"FastSpeech2/…"` strings inside **gitignored** config files (downloaded, never committed) | ✅ fixed — `loading_modules._repoint_legacy_fastspeech2_config_paths()` remaps them in memory at load time; works for fresh downloads too, not just this checkout (see §6) |
+| `tools/monitoring/profiling/__init__.py`'s `_PACKAGE_ROOT` | `dirname(dirname(__file__))` — assumed `profiling/` was exactly one level under repo root | ✅ fixed in Phase 2 — now just `str(paths.ROOT)` |
 | `audio_utils.py:268` | `shutil.copy(path_au, "./")` — copies the AU file to CWD explicitly | make explicit once a real output directory exists, rather than implicitly "wherever you launched from" |
 | GPIO / amp-mute, ALSA device selection | **not found** — no GPIO or amp-mute code exists anywhere in the current tree | the starting hypothesis's `config/` description assumes hardware-control code that hasn't been written yet; treat as aspirational, not a migration item |
 
@@ -610,37 +629,65 @@ analysis — flagging this as a gap in the original §6 audit, not a new problem
    contained a literal `"FastSpeech2/…"` string — invisible to the original audit because it had no
    leading `./` (the grep pattern that surfaced every other hardcode in §6 only matched
    `"./`/`'./` prefixes). These files are gitignored (downloaded from the Google Drive archives,
-   never committed), so fixing them on this checkout does **not** fix them for anyone else: a fresh
-   `scripts/setup_pi.sh` run re-downloads and re-unzips the same archives, restoring the same stale
-   value. **This is an open follow-up, not resolved by this phase** — see the new §6 risk item.
-   Fixed on this checkout only (edited the two YAML values directly to the `assets/models/…` paths)
-   so verification below could complete.
+   never committed), so hand-editing them on this checkout wouldn't fix anything for anyone else — a
+   fresh `scripts/setup_pi.sh` run re-downloads and re-unzips the same archives, restoring the same
+   stale value. **✅ Fixed** (as a follow-up, between Phase 1 and Phase 2) — see the updated §6 risk
+   item: `loading_modules.py` now remaps these paths in memory at load time, so a fresh download
+   works with no manual YAML editing at all, on any install path (Pi script, manual, or this
+   checkout).
 
 **Verify:** `pytest tests/` — 130 passed (after fix 1 above). Real end-to-end smoke test on Windows
-against the now-relocated weights (after fix 2 above): FlauBERT, FastSpeech2
-(`assets/models/FastSpeech2/390000`), and HiFi-GAN (`assets/models/hifi-gan-master/FR_V2/g_00570000`)
-all loaded, and `audio_file.wav` was produced with normal per-stage timing. **Pi 5 hardware
-verification is owed, not available this round** (see the note at the top of §7) — when Pi access
-exists, confirm the weights are found at the new path without re-downloading, *and* pay specific
-attention to the config-YAML issue above, since a fresh Pi provisioning run will hit it fresh
-(nothing on the Pi side has been patched).
+against the now-relocated weights: FlauBERT, FastSpeech2 (`assets/models/FastSpeech2/390000`), and
+HiFi-GAN (`assets/models/hifi-gan-master/FR_V2/g_00570000`) all loaded, and `audio_file.wav` was
+produced with normal per-stage timing — re-verified after fix 2 by reverting the local YAMLs to
+their stale, as-downloaded content and re-running, confirming the in-memory remap (not a lingering
+hand-edit) is what makes it work. **Pi 5 hardware verification is owed, not available this round**
+(see the note at the top of §7).
 
-### Phase 2 — Move research/measurement tooling
+### Phase 2 — Move research/measurement tooling — ✅ done (same branch)
 
 *Goal 4 (monitoring isolated as maintenance-only).*
 
-- `git mv benchmark/ tools/measurement/benchmark/`, `git mv profiling/
+- [x] `git mv benchmark/ tools/measurement/benchmark/`, `git mv profiling/
   tools/monitoring/profiling/`, `git mv pmic_calibrate.py tools/measurement/`.
-- Update every `import benchmark…` / `import profiling…` in `do_tts.py`, the moved packages
-  themselves, and all four `tests/test_*.py` files that import them.
-- Update `profiling/sampler.py`'s own `python -m profiling.sampler` subprocess launch string.
+- [x] Added `tools/__init__.py`, `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`
+  (explicit packages, consistent with the rest of the codebase rather than relying on implicit
+  namespace packages).
+- [x] Updated every `import benchmark…` / `import profiling…` (and `from benchmark…` / `from
+  profiling…`) to `tools.measurement.benchmark…` / `tools.monitoring.profiling…` in: `do_tts.py`,
+  `audio_utils.py`, `synthesis_modules.py`, the moved packages' own cross-imports
+  (`tools/measurement/benchmark/p4_sweep.py`, `export_to_xlsx.py`, `tools/monitoring/profiling/join.py`),
+  and all four `tests/test_*.py` files that import them (aliased as before —
+  `as profiling`/`as p4`/`as export_to_xlsx`/`as runner` — so only the import line changed, not
+  every call site).
+- [x] Updated `tools/monitoring/profiling/__init__.py`'s subprocess launch string
+  (`"-m", "profiling.sampler"` → `"-m", "tools.monitoring.profiling.sampler"`) — see the new §6
+  finding on `_PACKAGE_ROOT` below, a second bug in the same function this string lives in.
+- [x] Updated the self-referential `python -m profiling.…` usage strings inside the moved files'
+  own docstrings/comments/error messages (`calibrate.py`, `join.py`, `sampler.py`,
+  `export_to_xlsx.py`, `p4_sweep.py`) — left `README.md`/`docs/context/ARCHITECTURE.md`'s much
+  larger Profiling/Benchmark sections alone, since a full rewrite there is Phase 4's batched
+  doc-consistency pass, not a one-line fix like these.
 
-**Verify:** `pytest tests/` passes in full on Windows. **Pi 5 hardware verification is owed, not
-available this round** (see the note at the top of §7): `--profile` and `--p4-sweep` need to
-produce output under `profile/` exactly as before once Pi access exists — this phase changes the
-sampler's own `python -m …` subprocess launch string, the one code path that only executes on the
-Pi, so a broken module path here is invisible on Windows (the sampler already no-ops off-Linux) and
-would only surface on real hardware. Treat this phase as higher-risk-than-usual to merge blind.
+**Found and fixed one more gap, same class as Phase 1's:** `tools/monitoring/profiling/__init__.py`
+had `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))` — a hardcoded
+"two levels up" that was correct only because `profiling/` used to sit exactly one level under the
+repo root. Nesting it three levels deep broke the `subprocess.Popen(cwd=_PACKAGE_ROOT, ...)` call
+that launches the background sampler (silently — it would point at `tools/monitoring/`, not the
+repo root). Fixed: `_PACKAGE_ROOT = str(paths.ROOT)`. See the new §6 risk item — this is a *pattern*
+to grep for before Phase 3, not just a one-off.
+
+**Verify:** `pytest tests/` — 130 passed. Exercised every moved code path directly on Windows,
+against the running `assets/models/` weights: plain synthesis, `--profile` (confirmed a real
+`tools.monitoring.profiling` run directory with `meta.json`/`per_sentence.jsonl` was written),
+`--benchmark --repeats 1` (all 11 sentences via `tools.measurement.benchmark.runner`), `--join`
+(via `tools.monitoring.profiling.join`), and `--export-xlsx` (the trickiest cross-import:
+`profiling.join` → `benchmark.export_to_xlsx`) — all succeeded. Test-generated `profile/run_*`
+scratch directories were deleted afterward rather than left in the tree (exactly the kind of
+generated-output-in-source-tree clutter §4 already flags). **Pi 5 hardware verification is owed,
+not available this round** (see the note at the top of §7) — the sampler subprocess launch string
+is the one change in this phase that Windows genuinely cannot exercise (the sampler no-ops
+off-Linux before ever reaching that code), so it remains the highest-risk item to merge blind.
 
 ### Phase 3 — Introduce the Synthesizer abstraction, move orchestration code into chatterbox/
 

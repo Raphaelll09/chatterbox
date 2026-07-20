@@ -23,6 +23,25 @@ from models import Generator
 
 sys.path.insert(1, str(paths.WAVEGLOW_DIR))
 
+# The FastSpeech2 config/output/preprocessed_data archives are gitignored (downloaded from the
+# Google Drive links in README.md, never committed) and hardcode paths like
+# "FastSpeech2/preprocessed_data/ALL_corpus" -- relative to where FastSpeech2/ used to live at the
+# repo root, before the reorg moved it to assets/models/FastSpeech2/ (docs/REORG_PROPOSAL.md Sec6).
+# Remap them in memory so a fresh download doesn't need hand-patching every time; values that have
+# already been updated (no longer starting with this prefix) are left untouched.
+_LEGACY_FASTSPEECH2_PREFIX = "FastSpeech2/"
+
+
+def _repoint_legacy_fastspeech2_config_paths(preprocess_config, train_config):
+    for key in ("preprocessed_path", "output_syn_path"):
+        value = preprocess_config["path"].get(key)
+        if value and value.startswith(_LEGACY_FASTSPEECH2_PREFIX):
+            preprocess_config["path"][key] = str(paths.ROOT / "assets" / "models" / value)
+
+    value = train_config["path"].get("ckpt_path")
+    if value and value.startswith(_LEGACY_FASTSPEECH2_PREFIX):
+        train_config["path"]["ckpt_path"] = str(paths.ROOT / "assets" / "models" / value)
+
 def load_fastspeech2(tts_model, device):
     global TTS_MODEL
     global CONFIGS
@@ -45,6 +64,7 @@ def load_fastspeech2(tts_model, device):
     train_config = yaml.load(
         open(os.path.join(model_folder, default_args["train_config"]), "r"), Loader=yaml.FullLoader
     )
+    _repoint_legacy_fastspeech2_config_paths(preprocess_config, train_config)
     CONFIGS = (preprocess_config, model_config, train_config)
 
     # Load model

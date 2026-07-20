@@ -10,12 +10,12 @@ procedure.
 
 Three components share one clock:
 - start_session()/stop_session(): background PMIC/CPU/thermal sampler
-  (profiling/sampler.py), run as its own OS process, writing
+  (tools/monitoring/profiling/sampler.py), run as its own OS process, writing
   profile/per_sample.csv.
 - begin_sentence()/set_current()/current(): per-sentence timing recorder
-  (profiling/recorder.py) used from audio_utils.py and synthesis_modules.py,
+  (tools/monitoring/profiling/recorder.py) used from audio_utils.py and synthesis_modules.py,
   appending to profile/per_sentence.jsonl.
-- profiling/join.py: offline script joining the two into
+- tools/monitoring/profiling/join.py: offline script joining the two into
   profile/per_sentence_results.csv and profile/per_stage_results.csv.
 """
 import atexit
@@ -27,9 +27,10 @@ import subprocess
 import sys
 import time
 
+import paths
 from .recorder import NullRecorder, Recorder
 
-_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PACKAGE_ROOT = str(paths.ROOT)
 
 _NULL_RECORDER = NullRecorder()
 _current_recorder = contextvars.ContextVar("current_recorder", default=_NULL_RECORDER)
@@ -141,7 +142,7 @@ def _launch_sampler(run_dir, sample_hz, pmic_hz, core, niceness, ina):
 
     proc = subprocess.Popen(
         [
-            sys.executable, "-m", "profiling.sampler",
+            sys.executable, "-m", "tools.monitoring.profiling.sampler",
             "--out", out_path,
             "--sample-hz", str(sample_hz),
             "--pmic-hz", str(pmic_hz),
