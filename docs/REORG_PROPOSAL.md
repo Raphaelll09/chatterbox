@@ -1,15 +1,18 @@
 # Chatterbox — Repository Reorganization Proposal
 
-**Status: All four phases implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified —
-see §7). The reorg described in this document is functionally complete**, pending the two things
-no session on this machine could ever resolve: real interactive GUI testing and Pi 5 hardware
-verification (see the note below — still true as of Phase 4). Every phase in §7 uses `git mv` on
-this dedicated branch when executed, each with its own validation checkpoint. Every phase surfaced
-real gaps invisible to static analysis — see each phase's notes in §7, the §6 risk items, and
-Phase 3's own notes on where its actual implementation diverged from this document's original §5
-sketch (the Synthesizer/VocoderBackend split, and why the converted backend doesn't literally
-subclass either ABC). Three items from §4 are still open, deliberately left for your sign-off
-rather than decided unilaterally — see Phase 4 in §7.
+**Status: All four phases implemented and §4's sign-off resolved (branch
+`reorg/phase-0-path-anchoring`, Windows-verified — see §7). The reorg described in this document is
+functionally complete**, pending the two things no session on this machine could ever resolve: real
+interactive GUI testing and Pi 5 hardware verification. **See `docs/REORG_VERIFICATION.md` for the
+concrete checklist to close those out** — run its Part A now on any PC as a regression check, and
+its Part B the moment Pi 5 access exists. Every phase in §7 uses `git mv` on this dedicated branch
+when executed, each with its own validation checkpoint. Every phase surfaced real gaps invisible to
+static analysis — see each phase's notes in §7, the §6 risk items, and Phase 3's own notes on where
+its actual implementation diverged from this document's original §5 sketch (the
+Synthesizer/VocoderBackend split, and why the converted backend doesn't literally subclass either
+ABC). §4's three flagged items were resolved by explicit sign-off (see §4's table) — `graphify-out/`
+and the two deprecated requirements files deleted, the `profile/` experiment-directory migration
+flagged as follow-up work, not executed.
 
 **No Pi 5 hardware access for this execution round.** Amendment #8 ("Pi 5 hardware run mandatory
 before merging each phase") is retired for now — there's no Pi 5 available to run it against. Every
