@@ -15,6 +15,37 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Fix silent --gui override by --benchmark/--p4-sweep, found via Part A verification
+
+- What: running `docs/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
+  --export-xlsx` into one command (rather than the separate commands the protocol actually lists)
+  and got the benchmark, not the GUI, with zero indication `--gui` had been ignored. Root cause:
+  `chatterbox/cli.py`'s mode dispatch is an `if args.benchmark: ... elif args.p4_sweep: ... elif
+  args.gui: ...` chain — pre-existing behavior, unchanged from the original pre-reorg `do_tts.py`,
+  not a reorg regression — but silent, so nothing told the user which mode actually ran.
+  - Added an explicit stderr warning, printed before dispatch, whenever `--gui` is combined with
+    `--benchmark` or `--p4-sweep`: `[do_tts] --gui has no effect together with --benchmark --
+    running --benchmark instead. Launch the interface on its own with \`do_tts.py --gui\`.`
+    Behavior (which mode wins) is unchanged; only the silence is fixed.
+  - Updated `--gui`'s `--help` text to document the precedence.
+  - Added a note to `docs/REORG_VERIFICATION.md` clarifying `--gui`/`--benchmark`/`--p4-sweep` are
+    mutually exclusive top-level modes, not composable flags — run each protocol step as its own
+    separate command.
+- Files: `chatterbox/cli.py`, `docs/REORG_VERIFICATION.md`.
+- Why: confusing, silent flag-precedence behavior that real testing (the exact purpose of Part A)
+  surfaced immediately — worth fixing even though it predates the reorg, since the reorg's own
+  verification protocol is what prompted testing this combination in the first place.
+- Verify: `pytest tests/` — 130 passed (no test covers CLI argument dispatch directly). Manually
+  reproduced the user's exact command (`do_tts.py --gui --benchmark --repeats 1`) — the new
+  warning now prints first, before any model loading, then the benchmark runs exactly as before.
+- Notes/gotchas: this is a UX fix (visibility), not a behavior change — `--benchmark` still wins
+  over `--gui` when both are given, matching the pre-existing, pre-reorg precedence order
+  (`--benchmark` > `--p4-sweep` > `--gui` > free-text). If that precedence itself is ever felt to
+  be wrong (e.g. `--gui` should instead error out, or the flags should be an argparse
+  mutually-exclusive group), that's a separate, larger decision — not made here.
+
+---
+
 ## 2026-07-20 — Reorg §4 sign-off: delete graphify-out/ and the two deprecated requirements files
 
 - What: `docs/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather

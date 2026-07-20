@@ -8,6 +8,14 @@ Record the outcome in `docs/context/CHANGELOG.md` (template at that file's top) 
 `docs/REORG_PROPOSAL.md`'s status line once Part B has actually run — don't just mark it done from
 Part A alone.
 
+> **`--gui`, `--benchmark`, and `--p4-sweep` are mutually exclusive top-level modes, not composable
+> flags** — run each step below as its own separate command, exactly as written, rather than
+> combining their flags into one invocation. `chatterbox/cli.py` checks `--benchmark` first, then
+> `--p4-sweep`, then `--gui`; passing more than one together silently runs only the
+> highest-priority one (as of 2026-07-20 this now prints an explicit `[do_tts] --gui has no
+> effect together with --benchmark...`-style warning instead of doing so silently, but the
+> underlying behavior — only one mode runs — is unchanged and pre-dates this reorg).
+
 ---
 
 ## Part A — PC/Windows sanity check (~5 min)
