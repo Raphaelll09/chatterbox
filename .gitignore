@@ -11,7 +11,10 @@ profile/*.csv
 profile/*.jsonl
 profile/sampler.pid
 profile/exports/
-profiling/__pycache__/
+tools/monitoring/profiling/__pycache__/
+
+# Ignore this AI-assistant tool's own knowledge-graph cache (build artifact, not project source)
+graphify-out/
 
 # Ignore dataset, models and training script in FastSpeech2
 assets/models/FastSpeech2/__pycache__/

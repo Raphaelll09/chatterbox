@@ -15,6 +15,44 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg §4 sign-off: delete graphify-out/ and the two deprecated requirements files
+
+- What: `docs/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather
+  than deciding unilaterally (Phase 4 CHANGELOG entry below); this session brought them back and
+  got answers:
+  - `git rm -r graphify-out/` (this AI-assistant tool's own knowledge-graph cache, a build
+    artifact, not project source) and added `graphify-out/` to `.gitignore` so it doesn't return.
+  - `git rm requirements.txt minimal_requirements.txt` — both fully superseded by
+    `requirements-dev.txt`/`requirements-pi.txt`, kept "for reference" only, now deleted per
+    explicit sign-off. Updated every doc that referenced them as present files: `CLAUDE.md`'s
+    "Install gotchas", `INSTALL.md`'s "Why not the old requirements.txt?" section,
+    `requirements-dev.txt`'s own header comment (also fixed stale `Waveglow/`/`FastSpeech2/` paths
+    in that comment to `assets/models/Waveglow/`/`assets/models/FastSpeech2/`, missed during
+    Phase 1 since it's a comment, not a functional import), and `README.md`'s French install
+    instructions, which were pointing at the now-deleted `requirements.txt` (a real, user-facing
+    break, not just a stale comment).
+  - The `profile/` experiment directories (17 MB, tracked only because of a shallow `.gitignore`
+    rule): decision was to move them to a separate data/results repo, but **that migration is
+    flagged as follow-up work, not executed in this pass** — extracting history and re-pointing
+    anything that reads these paths deserves its own deliberate session, not a drive-by move
+    bundled into this cleanup.
+  - Also fixed a second stale `.gitignore` entry found while touching this file:
+    `profiling/__pycache__/` (from before Phase 2 moved `profiling/` to
+    `tools/monitoring/profiling/`) → `tools/monitoring/profiling/__pycache__/`.
+- Files: `.gitignore`, `CLAUDE.md`, `INSTALL.md`, `README.md`, `requirements-dev.txt`,
+  `docs/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
+  `minimal_requirements.txt`.
+- Why: closing out `docs/REORG_PROPOSAL.md` §4's three explicitly-deferred sign-off items, the
+  last open piece of the reorg plan.
+- Verify: `pytest tests/` — 130 passed (none of these files were imported by code, so this was
+  never expected to affect tests — confirmed anyway).
+- Notes/gotchas: the `profile/` experiment-directory migration is a real, tracked follow-up, not
+  forgotten — see `docs/REORG_PROPOSAL.md` §4's table for the exact decision and reasoning. If you
+  ever need the deleted `requirements.txt`'s training-environment pins, they're recoverable from
+  git history (any commit before this one).
+
+---
+
 ## 2026-07-20 — Reorg Phase 4: assets/docs cleanup — the four-phase reorg is functionally complete
 
 - What: Phase 4 of `docs/REORG_PROPOSAL.md`'s migration plan, the last one.

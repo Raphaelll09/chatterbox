@@ -79,11 +79,12 @@ module names/paths predate the Phase 3 reorg above; cross-check against this fil
 
 - Use **`requirements-dev.txt`** (PC) or **`requirements-pi.txt`** + **`apt-packages-pi.txt`**
   (Raspberry Pi 5) — see `INSTALL.md`. The legacy `requirements.txt` / `minimal_requirements.txt`
-  are deprecated but kept for reference (deprecation note at the top of each): `requirements.txt`
-  is the one that pulls FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`,
-  `librosa` transitively, `tensor2tensor`, ...) and pins `apex==0.9.10dev`, which resolves to the
-  wrong PyPI package — despite an earlier version of this doc saying the opposite,
-  `minimal_requirements.txt` is actually the lean, working set (now `requirements-dev.txt`).
+  (deleted 2026-07-20, reorg Phase 4 sign-off — see `docs/context/CHANGELOG.md`) pulled in
+  FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`, `librosa` transitively,
+  `tensor2tensor`, ...) and pinned `apex==0.9.10dev`, which resolves to the wrong PyPI package —
+  not needed to run inference against an already-trained checkpoint. If you ever need to retrain
+  or re-preprocess FastSpeech2, recover their pins from git history rather than reconstructing them
+  by hand.
 - Pretrained weights are **not in git** — download manually from the Google Drive links in
   `README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
   `FR_V2/g_00570000`. `scripts/setup_pi.sh` automates this on a fresh Pi 5.
