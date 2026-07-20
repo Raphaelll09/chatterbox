@@ -15,6 +15,94 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg Phase 3: chatterbox/ package, class-based Synthesizer, GUI leak fix
+
+- What: Phase 3 of `docs/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
+  real behavioral refactor (module-level globals → class-owned state), not just file relocation,
+  executed in full (not scoped down) despite touching the Tkinter GUI code this session has no way
+  to test interactively (no display) — an explicit, disclosed risk tradeoff, not an oversight.
+  1. **New `chatterbox/` package.** `chatterbox/synthesis/base.py` defines two ABCs, `Synthesizer`
+     (acoustic model) and `VocoderBackend` (vocoder) — two, not one as originally sketched, because
+     `config_tts.yaml`'s `tts_models`/`vocoder_models` are independently selectable today (the
+     GUI's separate TTS/Vocoder buttons) and a single bundled `load()` would break that.
+     `chatterbox/synthesis/registry.py` exposes `BACKEND`, a singleton
+     `FastSpeech2HifiGanBackend` instance.
+  2. **`loading_modules.py` + `synthesis_modules.py` → `backend.py` + `text_pipeline.py`.**
+     `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s `FastSpeech2HifiGanBackend`
+     class owns `tts_model`/`configs`/`flaubert_model`/`flaubert_tokenizer`/`vocoder_model`/
+     `generator`/`h`/`vocoder_path` as instance attributes instead of module globals, but keeps its
+     pre-Phase-3 method names (`load_fastspeech2`, `syn_hifigan`, etc.) so `config_tts.yaml`'s
+     string-based dispatch needs zero changes. Does **not** literally subclass either ABC (Python
+     can't have one class implement two same-named `load()` methods with different signatures) —
+     the ABCs are the target shape for a future from-scratch backend (Matcha-TTS), documented in
+     `base.py`'s own docstring. `text_pipeline.py` turned out not to be purely stateless as
+     originally planned: `preprocess_styleTag()` needs the loaded FlauBERT model, and
+     `parse_params_from_text()` was **re-reading `preprocess.yaml` from disk on every
+     `<SPEAKER=name>` tag** instead of reusing the already-loaded config — the same leak
+     `gui_utils.py:355` had for the GUI's speaker list, undiscovered until this file was read in
+     full. Fixed identically in both places: pass the loaded config/model state in as explicit
+     parameters instead of re-fetching it.
+  3. **`audio_utils.py` → four files.** `chatterbox/audio/playback.py` (`play_audio()` +
+     `AUDIO_EXAMPLE`, kept as a module attribute rather than eliminated since the GUI's "Play"
+     button is a zero-argument Tkinter callback), `chatterbox/audio/denoise.py` (the inline
+     `nr.reduce_noise()` call, now a real function), `chatterbox/synthesis/subtitles.py` (the five
+     subtitle/alignment functions, unchanged), `chatterbox/cli.py` (`syn_audio()` orchestration +
+     `butter_lowpass_filter()`).
+  4. **`gui_utils.py` → `chatterbox/gui/app.py`, `keyboards.py` → `chatterbox/gui/keyboards.py`,
+     `tts_utils.py` → `chatterbox/state.py`, `audio_postprocess.py` →
+     `chatterbox/synthesis/audio_postprocess.py`.** `gui_utils.py:355`'s leak (see point 2) is
+     closed: `gui_fastspeech2()` now calls `registry.BACKEND.describe_controls()["speaker_list"]`
+     instead of re-parsing YAML.
+  5. **`do_tts.py` → `chatterbox/cli.py` + a 3-line root shim.** All argparse/dispatch logic now
+     lives in `chatterbox/cli.py:main()`; the CLI contract (every flag) is unchanged.
+  6. **`config_tts.yaml`, the three regex-rule CSVs, and `paths.py` itself** moved into
+     `chatterbox/config/` (paths.py) and `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`
+     (CSVs).
+  7. `git rm do_normalize_txt.pl` (confirmed dead, see the Phase 1 entry below / `docs/
+     REORG_PROPOSAL.md` Sec4).
+  8. Preventive fix before the big refactor started: `gui_utils.py`'s
+     `os.path.join("audio_keyboards", ...)` hardcode now routes through a new
+     `paths.AUDIO_KEYBOARDS_DIR`.
+  - **Two more gaps found while executing this phase, same failure classes as Phases 1-2:**
+    - `paths.py`'s own `ROOT = Path(__file__).resolve().parent` broke the moment `paths.py` moved
+      into `chatterbox/config/` (two levels deeper) — caught immediately after the `git mv`, before
+      it could break anything downstream, and fixed: `ROOT = Path(__file__).resolve().parents[2]`.
+    - Phase 2 left six stale `-m benchmark.*` / `import audio_utils` references in
+      `tools/measurement/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings/comments/error
+      messages, plus a stale monkeypatch target (`runner.audio_utils`) in `tests/test_benchmark.py`
+      — missed because Phase 2's cleanup checked for `-m profiling.*` patterns but not
+      `-m benchmark.*`. Found via a repo-wide grep sweep done specifically because this session was
+      asked to close out remaining Phase 2 concerns before starting Phase 3.
+- Files: new `chatterbox/` package (synthesis/{base,registry}.py,
+  synthesis/backends/fastspeech2_hifigan/{backend,text_pipeline}.py, audio/{playback,denoise}.py,
+  synthesis/{subtitles,audio_postprocess}.py, gui/{app,keyboards}.py, state.py, cli.py,
+  config/{paths,config_tts.yaml}.py, synthesis/backends/fastspeech2_hifigan/rules/*.csv); removed
+  `loading_modules.py`, `synthesis_modules.py`, `audio_utils.py`, `gui_utils.py`, `keyboards.py`,
+  `tts_utils.py`, `audio_postprocess.py`, `do_normalize_txt.pl`; `do_tts.py` reduced to a 3-line
+  shim; `tools/measurement/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
+  `tests/{test_benchmark,test_audio_postprocess,conftest}.py` updated for the new import paths.
+- Why: `docs/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
+  GUI) — the interface boundaries §5 called for, plus closing out the config-reopening leaks found
+  while implementing them.
+- Verify: `pytest tests/` — 130 passed (the `SyntaxWarning`s from `synthesis_modules.py`'s non-raw
+  regex escapes are also gone, an incidental behavior-neutral cleanup from rewriting that file with
+  raw strings). Real end-to-end runs on Windows against the fully refactored backend: plain
+  synthesis, `--benchmark --repeats 1 --export-xlsx` (benchmark → profiling → join → xlsx export in
+  one pass), and a timed `--gui` launch — no display to see it, but the entire GUI creation path
+  (model loading via the GUI buttons, the `describe_controls()`-based speaker list, every slider/
+  radio-button widget, the on-screen keyboard) ran with zero tracebacks and reached
+  `window.mainloop()`, blocking as expected until the timeout killed it.
+- Notes/gotchas: this is the strongest GUI confirmation available without an interactive display,
+  but **not equivalent to actually clicking through it** — real interactive GUI testing is still
+  owed, on top of the standing no-Pi-5-access caveat from Phases 0-2. See `docs/REORG_PROPOSAL.md`
+  Sec5 for the two design deviations (two ABCs not one; text_pipeline.py needing model state) in
+  full, and Sec7/Phase 3 for the complete checklist. One known remaining gap, not yet fixed: a
+  from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
+  `chatterbox/cli.py`'s `syn_audio()` changed to not assume one unconditionally — flagged as future
+  work for whenever a second backend actually lands.
+
+---
+
 ## 2026-07-20 — Reorg Phase 2: move benchmark/profiling into tools/, plus fixing Phase 1's open follow-up
 
 - What: Two pieces of work.

@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from scipy.signal import butter, filtfilt
 
-import audio_postprocess as app
+import chatterbox.synthesis.audio_postprocess as app
 
 FS = 22050  # matches TTS pipeline sample rate
 

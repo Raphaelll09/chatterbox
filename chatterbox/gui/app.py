@@ -28,10 +28,12 @@ else:
     from pydub import AudioSegment
     from pydub.playback import play
 
-import loading_modules
-import tts_utils
-import audio_utils
-import keyboards
+import chatterbox.synthesis.registry as registry
+import chatterbox.state as state
+import chatterbox.cli as cli
+import chatterbox.audio.playback as playback
+import chatterbox.gui.keyboards as keyboards
+import chatterbox.config.paths as paths
 
 # # Global variables to store the canvas and the circle figure
 canvas_circle = None
@@ -59,7 +61,7 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
         entry_text_keyboard = tk.Entry(master=window_keyboard, width=44, state='readonly')
     else:
         entry_text_keyboard = None  # Set to None if hidden
-    
+
     max_width_keyboard = 0
 
     for i_line, line in enumerate(keyboards.keys["Emmanuelle"]):
@@ -72,13 +74,13 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
                 # Default Case: keys adds inputs to entry
                 key_phon = key[1]
                 current_button = tk.Button(
-                    master=window_keyboard, 
+                    master=window_keyboard,
                     text=key_label,
                     font=myFont,
                     width=key_board_options["max_button_width"],  # Set the max width of each button
                     wraplength=key_board_options["max_button_width"] * 10,  # Limit the text wrapping within the button
                     command= lambda current_phon=key_phon, current_label=key_label: [
-                        entry.insert("end", "{} ".format(current_phon)), 
+                        entry.insert("end", "{} ".format(current_phon)),
                         entry_readonly_insert(entry_text_keyboard, current_label, key_board_options) if entry_text_keyboard else play_prerecorded_phone(current_label, key_board_options)
                     ]
                 )
@@ -93,7 +95,7 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
                     else:
                         args.append(globals()[key_arg])
                 current_button = tk.Button(
-                    master=window_keyboard, 
+                    master=window_keyboard,
                     text=key_label,
                     font=myFont,
                     width=key_board_options["max_button_width"],  # Set the max width of each button
@@ -123,7 +125,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global lbl_gst_infos
     global canvas_circle
     global canvas_circle_figure
-    
+
     TTS_CONFIG = tts_config
     gui_config = tts_config['GUI_config']
     main_panel_config = gui_config['main_panel']
@@ -132,7 +134,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window = tk.Tk()
     window.title(main_panel_config['name_window'])
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
-    
+
     # Add specified TTS models
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
     lbl_TTS_model_selection = tk.Label(master=window, text="TTS :").grid(row=0, column=0, pady = 2)
@@ -141,12 +143,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     list_tts_buttons = []
     for tts_model in tts_config["tts_models"]:
         tts_index += 1
-        loading_script = getattr(loading_modules, tts_model["load_script"])
+        loading_script = getattr(registry.BACKEND, tts_model["load_script"])
         gui_script = globals()[tts_model["gui_script"]]
         tts_loading_button = tk.Button(
-            master=window, 
+            master=window,
             text=tts_model["label"],
-            command= lambda current_load_script=loading_script, current_tts=tts_model, id_button=tts_index, current_gui_script=gui_script: [current_load_script(current_tts, device), select_model_from_list(id_button, list_tts_buttons), tts_utils.update_selected_tts(id_button), current_gui_script(current_tts, main_panel_config)]
+            command= lambda current_load_script=loading_script, current_tts=tts_model, id_button=tts_index, current_gui_script=gui_script: [current_load_script(current_tts, device), select_model_from_list(id_button, list_tts_buttons), state.update_selected_tts(id_button), current_gui_script(current_tts, main_panel_config)]
         )
         list_tts_buttons.append(tts_loading_button)
         tts_loading_button.grid(row=0, column=tts_index, columnspan=2, sticky=tk.NSEW)
@@ -160,15 +162,15 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     list_vocoder_buttons = []
     for vocoder_model in tts_config["vocoder_models"]:
         vocoder_index += 1
-        loading_script = getattr(loading_modules, vocoder_model["load_script"])
+        loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
         vocoder_loading_button = tk.Button(
-            master=window, 
+            master=window,
             text=vocoder_model["label"],
-            command= lambda current_load_script=loading_script, current_vocoder=vocoder_model, id_button=vocoder_index: [current_load_script(current_vocoder, device), select_model_from_list(id_button, list_vocoder_buttons), tts_utils.update_selected_vocoder(id_button)]
+            command= lambda current_load_script=loading_script, current_vocoder=vocoder_model, id_button=vocoder_index: [current_load_script(current_vocoder, device), select_model_from_list(id_button, list_vocoder_buttons), state.update_selected_vocoder(id_button)]
         )
         list_vocoder_buttons.append(vocoder_loading_button)
         vocoder_loading_button.grid(row=1, column=vocoder_index, columnspan=2, sticky=tk.NSEW)
-        
+
         if vocoder_index==(default_vocoder+1):
             vocoder_loading_button.invoke()
 
@@ -176,19 +178,19 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     ent_text_input = tk.Entry(master=window, width=main_panel_config["input_width"])
 
     btn_syn_audio = tk.Button(
-        master=window, 
+        master=window,
         text="Synthèse",
-        command= lambda is_gui=True, tts_global_conf=tts_config: audio_utils.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls())
+        command= lambda is_gui=True, tts_global_conf=tts_config: cli.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls())
     )
-    
+
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=window, text="Input Text").grid(row=7, column=0, pady = 4)
-    
+
         ent_text_input.grid(row=7, column=1)
-        ent_text_input.bind("<Return>", lambda is_gui=True, tts_global_conf=tts_config: audio_utils.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls()))
+        ent_text_input.bind("<Return>", lambda is_gui=True, tts_global_conf=tts_config: cli.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls()))
 
         btn_syn_audio.grid(row=7, column=2)
-    
+
     # Add audio infos
     if main_panel_config["add_audio_infos"]:
 
@@ -224,9 +226,9 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Add replay button
     if main_panel_config["add_play_button"]:
         btn_replay_audio = tk.Button(
-            master=window, 
+            master=window,
             text="Play",
-            command=audio_utils.play_audio
+            command=playback.play_audio
         ).grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
 
     if gui_config["add_keyboard"]:
@@ -235,7 +237,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window_keyboard.mainloop()
         else:
             window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input, window, index_gst_token)
-    
+
     window.mainloop()
 
 def update_audio_infos(audio_duration, tts_inference_duration, vocoder_inference_duration, denoiser_inference_duration):
@@ -269,9 +271,9 @@ def entry_readonly_insert(entry, insert, key_board_options):
 def play_prerecorded_phone(phone, keyboard_config):
     if keyboard_config["play_phone"]:
         # Play the preloaded audio file
-        audio_file_path = os.path.join("audio_keyboards", keyboard_config["keys"], f"{phone}.wav")
+        audio_file_path = os.path.join(str(paths.AUDIO_KEYBOARDS_DIR), keyboard_config["keys"], f"{phone}.wav")
         # Get the current OS
-        current_os = platform.system() 
+        current_os = platform.system()
         # Optionally, you can print the OS
         if current_os == "Windows":
             if _HAS_SIMPLEAUDIO:
@@ -284,7 +286,7 @@ def play_prerecorded_phone(phone, keyboard_config):
         else:
             audio = AudioSegment.from_wav(audio_file_path)
             play(audio)
-    
+
 def select_model_from_list(id_button, list_buttons):
     # Reset background of all buttons
     index_button = 0
@@ -310,12 +312,12 @@ def get_gui_controls():
     styleTag_control = ent_styleTag_input.get()
 
     result = [
-        speaker_id, 
-        pitch_control, 
-        energy_control, 
-        speed_control, 
-        pitch_control_bias, 
-        energy_control_bias, 
+        speaker_id,
+        pitch_control,
+        energy_control,
+        speed_control,
+        pitch_control_bias,
+        energy_control_bias,
         speed_control_bias,
         pause_control_bias,
         liaison_control_bias,
@@ -351,10 +353,11 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     sub_row_index = 0
     default_args = tts_config['default_args']
-    preprocess_config = yaml.load(
-        open(os.path.join(tts_config['folder'], default_args["preprocess_config"]), "r"), Loader=yaml.FullLoader
-    )
-    speakers_location = os.path.join(preprocess_config['path']['preprocessed_path'], "speakers.json")
+
+    # Speaker list read from the currently loaded backend instead of re-opening
+    # config_tts.yaml's preprocess.yaml directly (the pre-Phase-3 leak -- see
+    # docs/REORG_PROPOSAL.md Sec5/Sec7).
+    speaker_list = registry.BACKEND.describe_controls()["speaker_list"]
 
     # Create Options Frame with Scrollbar
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
@@ -369,31 +372,28 @@ def gui_fastspeech2(tts_config, main_panel_config):
     canvas.configure(yscrollcommand=vsb.set)
     frame_options = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame_options, anchor='nw')
-    
+
     # ~ lbl_tts_options_selection = tk.Label(master=frame_options, text="TTS options :", font='Helvetica 15 underline').grid(row=0, column=0, rowspan = 4)
-    
+
     # Select default values
     speaker_selection = tk.IntVar(frame)
     speaker_selection.set(default_args['speaker_id'])
-
-    with open(speakers_location, "r") as f:
-        speaker_list = json.load(f)
 
     # Speaker radio buttons
     lbl_speaker_selection = tk.Label(master=frame_options, text="Speaker :").grid(row=sub_row_index, column=0)
     index_speaker = 0
     for speaker in speaker_list:
         tk_radio_button_speaker = tk.Radiobutton(
-            master=frame_options, 
-            text=speaker, 
-            variable=speaker_selection, 
-            value=index_speaker, 
-            command=None, 
+            master=frame_options,
+            text=speaker,
+            variable=speaker_selection,
+            value=index_speaker,
+            command=None,
         )
         tk_radio_button_speaker.grid(row=sub_row_index, column=1+index_speaker)
         index_speaker += 1
     sub_row_index += 1
-    
+
     # Select default values
     gst_token_selection = tk.IntVar(frame)
     gst_token_selection.set(default_args['gst_token_index'])
@@ -408,7 +408,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # GST token radio buttons
     if tts_config['gui_style_control']:
         lbl_gst_token_selection = tk.Label(master=frame_options, text="Style :").grid(row=sub_row_index, column=0)
-    
+
         index_gst_token = 0
         for gst_token in [*tts_config['gst_token_list']]:
             # print(gst_token)
@@ -459,7 +459,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     speed_bias_slider = tk.Scale(frame_options, from_=0.5, to=1.5, orient=tk.HORIZONTAL, resolution=0.1)
     speed_bias_slider.set(default_args['duration_control_bias'])
     sub_row_index += 1
-    
+
     # Pause Bias Slider
     pause_bias_slider = tk.Scale(frame_options, from_=-2, to=2, orient=tk.HORIZONTAL, resolution=0.1)
     pause_bias_slider.set(default_args['pause_control_bias'])
@@ -482,7 +482,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
         lbl_speed_selection = tk.Label(master=frame_options, text="Pause Bias:").grid(row=sub_row_index, column=0)
         pause_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
-        
+
         lbl_speed_selection = tk.Label(master=frame_options, text="Liaison Bias:").grid(row=sub_row_index, column=0)
         liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
@@ -495,17 +495,17 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
     canvas.bind('<Leave>', unbound_to_mouse_wheel)
-    
+
 def bound_to_mouse_wheel(event):
     canvas.bind_all('<Button-4>', mouse_wheel_up)
     canvas.bind_all('<Button-5>', mouse_wheel_down)
-    
+
 def unbound_to_mouse_wheel(event):
     canvas.unbind_all('<Button-4>')
     canvas.unbind_all('<Button-5>')
-    
+
 def mouse_wheel_up(event):
     canvas.yview_scroll(-1, 'units')
-    
+
 def mouse_wheel_down(event):
     canvas.yview_scroll(1, 'units')

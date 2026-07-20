@@ -1,11 +1,12 @@
 # Chatterbox — Repository Reorganization Proposal
 
-**Status: Phases 0–2 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
-Phases 3–4 are still analysis only — no further directories moved, renamed, or deleted beyond
-Phases 1–2's moves. Every phase in §7 uses `git mv` on this dedicated branch when executed, each
-with its own validation checkpoint. Phases 1 and 2 each surfaced real gaps invisible to static
-analysis — see their notes in §7 and the two new §6 risk items (gitignored FastSpeech2 config
-YAMLs, now **fixed**; and a directory-depth-assumption bug pattern to watch for in Phase 3).
+**Status: Phases 0–3 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
+Phase 4 is still analysis only. Every phase in §7 uses `git mv` on this dedicated branch when
+executed, each with its own validation checkpoint. Every phase so far has surfaced real gaps
+invisible to static analysis — see each phase's notes in §7, the §6 risk items, and Phase 3's own
+notes on where its actual implementation diverged from this document's original §5 sketch (the
+Synthesizer/VocoderBackend split, and why the converted backend doesn't literally subclass either
+ABC).
 
 **No Pi 5 hardware access for this execution round.** Amendment #8 ("Pi 5 hardware run mandatory
 before merging each phase") is retired for now — there's no Pi 5 available to run it against. Every
@@ -332,85 +333,114 @@ its siblings are inferred comparison pairs by naming symmetry, not confirmed dea
 
 ## 5. Interface boundaries
 
-Two boundaries need to exist that don't today: a **Synthesizer** abstraction (so Matcha-TTS or
-FastSpeech2s can be a second backend instead of a rewrite), and a **GUI↔synthesis** API (so the GUI
-never imports `loading_modules` or any backend module directly).
+**✅ Implemented in Phase 3, with two amendments below.** Two boundaries needed to exist that didn't
+before: a **Synthesizer** abstraction (so Matcha-TTS or FastSpeech2s can be a second backend instead
+of a rewrite), and a **GUI↔synthesis** API (so the GUI never imports the backend's model-loading
+internals directly). Both now exist — but the actual implementation diverged from this section's
+original sketch in two ways, discovered only once the real code (not just its function signatures)
+was read closely. Both are disclosed here rather than silently substituted.
 
-### Synthesizer abstraction
+### Deviation 1 — two ABCs, not one, and the concrete backend doesn't literally subclass either
+
+The original sketch below was a single `Synthesizer` with one `load(model_config, device)`. That
+doesn't fit the real system: `config_tts.yaml`'s `tts_models` and `vocoder_models` are two
+**independently selectable** lists today — the GUI has separate TTS and Vocoder buttons, and
+`do_tts.py --default_tts`/`--default_vocoder` pick each independently. A single bundled `load()`
+would force them to always change together, breaking a feature that actually works today. So
+`chatterbox/synthesis/base.py` has **two** ABCs, `Synthesizer` (acoustic model) and
+`VocoderBackend` (vocoder) — and neither is literally subclassed by
+`chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s `FastSpeech2HifiGanBackend`,
+because Python can't have one class implement two same-named abstract `load()` methods with
+different signatures. The ABCs are the target shape for a **new, from-scratch** backend (Matcha-TTS);
+the *converted* FastSpeech2+HiFi-GAN backend keeps its pre-Phase-3 method names
+(`load_fastspeech2`/`load_hifigan`/`load_waveglow`/`tts`/`vocoder`/`syn_fastspeech2`/`syn_hifigan`/
+`syn_waveglow`) so `config_tts.yaml`'s `load_script`/`syn_script` string dispatch needs zero
+changes — see `chatterbox/synthesis/base.py`'s own docstring for the full reasoning.
 
 ```python
-# chatterbox/synthesis/base.py
+# chatterbox/synthesis/base.py (as implemented)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any, Optional
 
 @dataclass
 class SynthesisRequest:
     text: str
-    speaker: str | None = None
-    style: str | None = None            # GST emotion token name
+    speaker: Optional[str] = None
+    style: Optional[str] = None
     style_intensity: float = 1.0
-    style_tag: str | None = None        # free-text, FlauBERT-conditioned
-    control_bias: dict[str, float] = field(default_factory=dict)
+    style_tag: Optional[str] = None
+    control_bias: dict = field(default_factory=dict)
+    linking_utt: bool = False
 
 @dataclass
 class SynthesisResult:
     mel_path: str
-    au_path: str | None                 # facial/visual animation params -- optional per backend
-    sample_rate: int
+    au_path: Optional[str]              # facial/visual animation params -- optional per backend
+    sample_rate: Optional[int] = None
 
 class Synthesizer(ABC):
-    """One instance == one loaded (acoustic model, vocoder) pair."""
-
+    """One instance == one loaded acoustic-model (text -> mel) backend."""
     @abstractmethod
-    def load(self, model_config: dict, device) -> None: ...
-
+    def load(self, model_config: dict, device: Any) -> None: ...
     @abstractmethod
-    def synthesize(self, request: SynthesisRequest) -> SynthesisResult: ...
-
-    @abstractmethod
-    def vocode(self, result: SynthesisResult) -> str: ...     # -> wav path
-
+    def synthesize(self, request: SynthesisRequest, model_config: dict) -> SynthesisResult: ...
     def describe_controls(self) -> dict:
-        """GUI renders sliders/buttons off this instead of special-casing
-        the backend by name (kills gui_utils.py's gui_fastspeech2()-style
-        branching)."""
-        raise NotImplementedError
+        return {}
 
-
-# chatterbox/synthesis/registry.py -- same load_script/syn_script string
-# pattern config_tts.yaml already uses, just formalized as an import path
-# instead of a getattr() lookup on a flat module.
-BACKENDS = {
-    "fastspeech2_hifigan": "chatterbox.synthesis.backends.fastspeech2_hifigan:Backend",
-    "matcha_tts":           "chatterbox.synthesis.backends.matcha_tts:Backend",   # future
-}
+class VocoderBackend(ABC):
+    """One instance == one loaded vocoder (mel -> wav) backend, swapped independently."""
+    @abstractmethod
+    def load(self, vocoder_config: dict, device: Any) -> None: ...
+    @abstractmethod
+    def vocode(self, result: SynthesisResult, vocoder_config: dict) -> str: ...
 ```
 
-This is a smaller change than it looks: `config_tts.yaml`'s `load_script`/`syn_script`/`gui_script`
-strings are already a config-driven registry in spirit (`getattr(loading_modules,
-entry["load_script"])`). The work is consolidating three free functions per backend into one class
-that owns its own globals instead of stashing them on the `loading_modules` module object — which
-also directly fixes the "keep this in mind before refactoring toward passed-in objects" warning
-already in `ARCHITECTURE.md`.
+```python
+# chatterbox/synthesis/registry.py (as implemented) -- a singleton instance, not a name->path
+# dict: getattr(registry.BACKEND, tts_model["load_script"]) replaces getattr(loading_modules, ...)
+# one-for-one, config_tts.yaml unchanged.
+from chatterbox.synthesis.backends.fastspeech2_hifigan.backend import FastSpeech2HifiGanBackend
+BACKEND = FastSpeech2HifiGanBackend()
+```
+
+### Deviation 2 — text_pipeline.py needs loaded model state, not just pure functions
+
+The original plan (§2's mapping table) described `text_pipeline.py` as pure text-processing
+functions with no model dependency. Reading `synthesis_modules.py` in full showed this was wrong:
+`preprocess_styleTag()` needs the loaded FlauBERT model/tokenizer, and `parse_params_from_text()`
+needs the loaded preprocessed-config path to resolve a `<SPEAKER=name>` tag — the **original code
+re-read `preprocess.yaml` from disk from scratch on every call** to get that path, instead of
+reusing the config already loaded at model-load time. This is the exact same leak
+`gui_utils.py:355` had (re-opening a config YAML just to get one path already sitting in loaded
+state) — just undiscovered until this file was read line-by-line. Fixed the same way in both
+places: `chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py`'s functions now take
+the already-loaded `configs`/`flaubert_model`/`flaubert_tokenizer` as explicit parameters from
+`backend.py`, and `chatterbox/gui/app.py`'s `gui_fastspeech2()` calls
+`registry.BACKEND.describe_controls()["speaker_list"]` instead of re-parsing YAML.
 
 ### How Matcha-TTS would slot in
 
-A new `chatterbox/synthesis/backends/matcha_tts/backend.py` implementing `Synthesizer`, a new
-`tts_models` entry in `config_tts.yaml` pointing `load_script`/`syn_script` at it, and nothing else
-changes — `do_tts.py`'s `load_models()`, the GUI, and the benchmark runner all already dispatch by
-config string, not by hardcoded model name. The one piece that needs to exist first: Matcha-TTS
-doesn't produce the `.AU` facial-animation channel FastSpeech2 does, so `SynthesisResult.au_path`
-needs to already be `Optional` (as sketched above) before a second backend can land — today's code
-assumes an AU file unconditionally in a few places in `audio_utils.py`.
+A new `chatterbox/synthesis/backends/matcha_tts/backend.py` implementing `Synthesizer` directly (a
+real subclass, unlike the converted FastSpeech2 one — see Deviation 1), a new `tts_models` entry in
+`config_tts.yaml` pointing `load_script`/`syn_script` at it, and nothing else changes — `chatterbox/
+cli.py`'s `load_models()`, the GUI, and the benchmark runner all already dispatch by config string,
+not by hardcoded model name. `SynthesisResult.au_path` is already `Optional` for exactly this case:
+Matcha-TTS doesn't produce the `.AU` facial-animation channel FastSpeech2 does. One real gap
+remains, not yet fixed: `chatterbox/cli.py`'s `syn_audio()` still assumes an `.AU` file
+unconditionally in several places (reading `audio_file.AU`, visual smoothing, subtitle timing from
+`audio_file_duration.npy`) — a from-scratch backend without visual output would need those made
+conditional. Flagged as a real follow-up for whenever a second backend actually lands, not
+attempted speculatively now.
 
-### GUI ↔ synthesis API
+### GUI ↔ synthesis API — ✅ implemented
 
-`chatterbox/gui/app.py` (today's `gui_utils.py`) should hold a `Synthesizer` instance and call
-`describe_controls()` / `.synthesize()` / `.vocode()` — never `import
-chatterbox.synthesis.backends.fastspeech2_hifigan` directly, and never reach into a backend's
-globals the way `gui_utils.py:355` currently re-opens `tts_config['folder']`'s YAML files itself to
-read GST token names for the style picker. That one call site is the GUI's only real
-synthesis-internals leak today; folding token metadata into `describe_controls()` closes it.
+`chatterbox/gui/app.py` (was `gui_utils.py`) now goes through `chatterbox.synthesis.registry.BACKEND`
+for both model dispatch (`getattr(registry.BACKEND, tts_model["load_script"])`, same string-dispatch
+pattern as before, just retargeted from a module to an instance) and control metadata
+(`describe_controls()`), and through `chatterbox.state` (was `tts_utils.py`) for the selected-index
+globals. It never imports `chatterbox.synthesis.backends.fastspeech2_hifigan` directly. The
+`gui_utils.py:355` leak is closed (Deviation 2, above).
 
 ### Monitoring as a decoupled, optional add-on
 
@@ -689,31 +719,81 @@ not available this round** (see the note at the top of §7) — the sampler subp
 is the one change in this phase that Windows genuinely cannot exercise (the sampler no-ops
 off-Linux before ever reaching that code), so it remains the highest-risk item to merge blind.
 
-### Phase 3 — Introduce the Synthesizer abstraction, move orchestration code into chatterbox/
+### Phase 3 — Introduce the Synthesizer abstraction, move orchestration code into chatterbox/ — ✅ done (same branch)
 
-*Goals 2 & 3 (swappable model, swappable GUI).*
+*Goals 2 & 3 (swappable model, swappable GUI). By far the largest and riskiest phase — a real
+behavioral refactor (global state → class-owned state), not just file relocation, touching the
+Tkinter GUI code this session has no way to test interactively. Executed in full per an explicit
+choice to accept that risk rather than water down the scope; see §5 for the two design deviations
+found while implementing it.*
 
-- Create `chatterbox/synthesis/base.py` + `registry.py` (§5).
-- `git mv loading_modules.py synthesis_modules.py` into
-  `chatterbox/synthesis/backends/fastspeech2_hifigan/`, refactor into the `Synthesizer` shape.
-- `git mv config_tts.yaml chatterbox/config/config_tts.yaml`; update `do_tts.py`/`chatterbox/cli.py`'s
-  `--config` default path.
-- `git mv custom_regex_rules.csv symbols_regex_rules.csv url_regex_rules.csv` into
-  `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`; update their `paths.py` entries
-  (anchored in Phase 0) to the new location in the same commit.
-- `git mv audio_utils.py gui_utils.py keyboards.py tts_utils.py audio_postprocess.py` into their
-  target `chatterbox/` subpackages; split `audio_utils.syn_audio()`'s responsibilities per the
-  mapping table (four targets: `playback.py`, `denoise.py`, `subtitles.py`, `cli.py` — see §2).
-- Replace `do_tts.py`'s contents with `chatterbox/cli.py` plus a 3-line root shim.
-- Fix the `gui_utils.py:355` config-reopening leak (§5) as part of this move, not after.
-- `git rm do_normalize_txt.pl` (confirmed dead — see §4; no sign-off gate needed, unlike the other
-  §4 flags).
+- [x] Created `chatterbox/synthesis/base.py` (`Synthesizer` + `VocoderBackend` ABCs — two, not one,
+  see §5 Deviation 1) and `chatterbox/synthesis/registry.py` (`BACKEND` singleton).
+- [x] `git rm loading_modules.py synthesis_modules.py`; their logic now lives in
+  `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py` (a class,
+  `FastSpeech2HifiGanBackend`, owning `tts_model`/`configs`/`flaubert_model`/`flaubert_tokenizer`/
+  `vocoder_model`/`generator`/`h`/`vocoder_path` as instance attributes instead of module globals)
+  and `text_pipeline.py` (pure-ish text processing — see §5 Deviation 2 for why "pure" needed
+  correcting).
+- [x] `git mv config_tts.yaml chatterbox/config/config_tts.yaml`; `git mv paths.py
+  chatterbox/config/paths.py` (also planned for this phase, per §2's tree); updated `do_tts.py`'s
+  (now `chatterbox/cli.py`'s) `--config` default. **`paths.py`'s own `ROOT` had to be fixed in the
+  same move** — see the new gap below, found before it could bite anything downstream.
+- [x] `git mv custom_regex_rules.csv symbols_regex_rules.csv url_regex_rules.csv` into
+  `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`; updated their `paths.py` entries.
+- [x] Split `audio_utils.py` into `chatterbox/audio/playback.py` (`play_audio()`, the
+  `AUDIO_EXAMPLE`-holding module — kept as a module attribute rather than eliminated, since the
+  GUI's "Play" button is wired as a zero-argument Tkinter callback that can't easily take the clip
+  as a parameter), `chatterbox/audio/denoise.py` (the inline `nr.reduce_noise()` call, now a real
+  function), `chatterbox/synthesis/subtitles.py` (the five subtitle/alignment functions, unchanged
+  internally), and `chatterbox/cli.py` (the `syn_audio()` orchestration + `butter_lowpass_filter()`).
+- [x] `git mv tts_utils.py chatterbox/state.py`, `git mv audio_postprocess.py
+  chatterbox/synthesis/audio_postprocess.py` (both trivial — no internal changes needed).
+- [x] `git mv keyboards.py chatterbox/gui/keyboards.py`, `git rm -f gui_utils.py` (its edits from
+  the Phase 3 preventive-fix pass were already carried into the new file) with its content rewritten
+  as `chatterbox/gui/app.py` — retargeted every `loading_modules`/`tts_utils`/`audio_utils`/
+  `keyboards` reference to `registry`/`state`/`cli`+`playback`/`chatterbox.gui.keyboards`, and fixed
+  the `gui_utils.py:355` config-reopening leak (§5 Deviation 2).
+- [x] Replaced `do_tts.py`'s contents with a 3-line shim (`import chatterbox.cli as cli; ...
+  cli.main()`); all its former logic (argparse, `load_models()`, `_warmup_synthesis()`, the mode
+  dispatch) now lives in `chatterbox/cli.py:main()`.
+- [x] `git rm do_normalize_txt.pl` (confirmed dead — see §4; no sign-off gate needed).
+- [x] **Preventive fix, done before the big refactor started:** `gui_utils.py`'s
+  `os.path.join("audio_keyboards", ...)` hardcode (found via a targeted audit before touching this
+  file, since it was about to move) now routes through a new `paths.AUDIO_KEYBOARDS_DIR` — harmless
+  today (the directory hasn't moved), but ready for Phase 4's `assets/audio/prompts/` relocation.
 
-**Verify:** free-text mode, `--gui`, and `--benchmark` all run unchanged on Windows; `python3
-do_tts.py --help` output is byte-identical to before the reorg. **Pi 5 hardware verification is
-owed, not available this round** (see the note at the top of §7) — this phase moves the regex-rule
-CSVs and `config_tts.yaml` off their CWD-relative bare-filename opens, which is exactly the kind of
-silent path break Windows dev testing alone can miss (§6).
+**Two more gaps found while executing this phase (same failure classes as Phases 1–2, not new
+categories):**
+
+1. **`paths.py`'s own `ROOT` broke when `paths.py` itself moved.** `ROOT = Path(__file__).resolve()
+   .parent` was correct when `paths.py` sat at the repo root; moving it to `chatterbox/config/
+   paths.py` (two levels deeper) meant that same line would silently resolve to `chatterbox/config/`
+   instead of the repo root — the exact bug pattern flagged after Phase 2's `_PACKAGE_ROOT` incident,
+   caught here by design (checking it immediately after the `git mv`, before doing anything else)
+   rather than by a test failure. Fixed: `ROOT = Path(__file__).resolve().parents[2]`, with a
+   docstring note to check this first if the file ever moves again.
+2. **Phase 2 left six stale `-m benchmark.*` / `import audio_utils` references inside
+   `tools/measurement/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings, comments, and one
+   error message**, plus a monkeypatch target (`runner.audio_utils`) in `tests/test_benchmark.py` —
+   all missed because Phase 2's cleanup checked for `-m profiling.*` and `import profiling`/
+   `import benchmark` patterns but not `-m benchmark.*` specifically. Found via a repo-wide grep
+   sweep before considering Phase 3 complete (prompted directly by being asked to close out
+   remaining Phase 2 concerns first) and fixed alongside this phase's own reference updates.
+
+**Verify:** `pytest tests/` — 130 passed (the `SyntaxWarning`s from `synthesis_modules.py`'s
+non-raw regex escapes are also gone now — an incidental, behavior-neutral cleanup from rewriting
+that file into `text_pipeline.py` with raw strings). Exercised every code path directly on Windows
+against the fully refactored, class-based backend: plain synthesis, `--benchmark --repeats 1
+--export-xlsx` (exercising benchmark → profiling → join → xlsx export in one pass), and a timed
+`--gui` launch — no display to see it, but the *entire* GUI creation path (FlauBERT/TTS/vocoder
+loading via the GUI's buttons, `describe_controls()`-based speaker list, every slider/radio-button
+widget, the on-screen keyboard) ran with zero tracebacks and reached `window.mainloop()`, which
+blocked as expected until the timeout killed it. This is the strongest confirmation available
+without an interactive display, but it is **not equivalent to actually clicking through the GUI** —
+treat this phase as needing real interactive GUI testing before considering it fully verified, on
+top of the standing **Pi 5 hardware verification owed, not available this round** (see the note at
+the top of §7).
 
 ### Phase 4 — Docs, assets, cleanup sign-off
 

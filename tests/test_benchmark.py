@@ -1,5 +1,5 @@
-"""Pytest tests for benchmark/runner.py's pure logic (sentence loading and
-call ordering). Does not exercise real synthesis - audio_utils.syn_audio is
+"""Pytest tests for tools/measurement/benchmark/runner.py's pure logic (sentence loading and
+call ordering). Does not exercise real synthesis - chatterbox.cli.syn_audio is
 monkeypatched, since that needs loaded TTS/vocoder models.
 """
 import time
@@ -47,7 +47,7 @@ def test_run_benchmark_order_and_ref_anchor(monkeypatch, tmp_path):
         calls.append((sentence_id, complexity_tag, text, play))
 
     sleeps = []
-    monkeypatch.setattr(runner.audio_utils, "syn_audio", fake_syn_audio)
+    monkeypatch.setattr(runner.cli, "syn_audio", fake_syn_audio)
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
 
     runner.run_benchmark({}, sentences_path=str(path), play=False, repeats=1)
@@ -69,7 +69,7 @@ def test_run_benchmark_repeats(monkeypatch, tmp_path):
 
     calls = []
     monkeypatch.setattr(
-        runner.audio_utils, "syn_audio",
+        runner.cli, "syn_audio",
         lambda use_gui, tts_config, text, sentence_id=None, complexity_tag=None, play=True: calls.append(sentence_id),
     )
     monkeypatch.setattr(time, "sleep", lambda s: None)

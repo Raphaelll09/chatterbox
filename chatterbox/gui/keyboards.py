@@ -5,8 +5,8 @@ Created on Thu Jul 21 14:29:50 2022
 
 @author: lengletm
 """
-import audio_utils
-import gui_utils
+import chatterbox.cli as cli
+import chatterbox.gui.app as app
 
 keys = {
     "Emmanuelle": [
@@ -31,8 +31,8 @@ keys = {
 def play_and_clear(args):
     is_gui=True
     tts_global_conf=args[0]
-    # ~ audio_utils.syn_audio(is_gui, tts_global_conf)
-    audio_utils.syn_audio(is_gui, tts_global_conf, gui_control=gui_utils.get_gui_controls())
+    # ~ cli.syn_audio(is_gui, tts_global_conf)
+    cli.syn_audio(is_gui, tts_global_conf, gui_control=app.get_gui_controls())
     args[1].delete(0, 'end')
 
     clear(args[1:3])
