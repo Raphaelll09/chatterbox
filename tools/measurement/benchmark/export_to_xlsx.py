@@ -62,7 +62,7 @@ def load_per_sentence_rows(profile_dir):
     if not os.path.exists(path):
         raise SystemExit(
             "[export_to_xlsx] {} not found. Run `python3 do_tts.py --benchmark --profile "
-            "--join` first, or `python -m profiling.join --profile-dir {}` if that run "
+            "--join` first, or `python -m tools.monitoring.profiling.join --profile-dir {}` if that run "
             "already has per_sample.csv/per_sentence.jsonl but was never joined.".format(
                 path, profile_dir,
             )
@@ -254,13 +254,13 @@ def _resolve_profile_dir(base_dir, explicit):
     if run_id and _run_has_results(base_dir, run_id):
         return os.path.join(base_dir, run_id)
 
-    import profiling
+    import tools.monitoring.profiling as profiling
     candidates = [r for r in profiling.list_run_dirs(base_dir) if _run_has_results(base_dir, r)]
     if not candidates:
         raise SystemExit(
             "[export_to_xlsx] no run under {}/ has a per_sentence_results.csv yet - run "
             "`python3 do_tts.py --benchmark --profile --join` first, or `python -m "
-            "profiling.join --profile-dir <run>` on an existing run.".format(base_dir)
+            "tools.monitoring.profiling.join --profile-dir <run>` on an existing run.".format(base_dir)
         )
 
     print("[export_to_xlsx] profile/latest isn't usable (missing, or that run was never "

@@ -5,7 +5,7 @@ paired against an external USB-C meter reading at that same steady state.
 
 Usage (run from embedded_tts/, as a package submodule so its relative
 import resolves):
-    python -m profiling.calibrate [--seconds 30] [--interval 0.5]
+    python -m tools.monitoring.profiling.calibrate [--seconds 30] [--interval 0.5]
 
 Run this at a few steady states (idle, mid-load, ...), noting the printed
 average alongside the external meter's reading at that same state, then fit

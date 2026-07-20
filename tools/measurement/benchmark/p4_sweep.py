@@ -26,9 +26,9 @@ import time
 import numpy as np
 
 import audio_utils
-import profiling
-from profiling.join import run_join, join_full_session
-from benchmark.runner import load_sentences, DEFAULT_SENTENCES_PATH
+import tools.monitoring.profiling as profiling
+from tools.monitoring.profiling.join import run_join, join_full_session
+from tools.measurement.benchmark.runner import load_sentences, DEFAULT_SENTENCES_PATH
 
 SUMMARY_COLUMNS = [
     "cadence_requested", "cadence_achieved", "duration_s", "n_utterances",
@@ -384,7 +384,7 @@ def _join_cadence_point(cadence, cadence_dir):
     is never created -- Recorder only writes it from finalize(), never called
     with zero utterances. run_join()'s load_sentences() treats a missing
     per_sentence.jsonl as a hard error (SystemExit) by design, for the
-    standalone `python -m profiling.join` case where that really does mean
+    standalone `python -m tools.monitoring.profiling.join` case where that really does mean
     "nothing was profiled". Here it's the expected, correct state of the idle
     point, so skip the (sentence-only) join for it -- join_full_session()
     (called separately) doesn't touch per_sentence.jsonl at all, so the

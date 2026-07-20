@@ -5,18 +5,18 @@ per-stage energy/CPU results. Not time-critical - run this after a batch of
 synthesis, not during it.
 
 Each profiled run writes into its own profile/run_YYYYMMDD_HHMMSS/ directory
-(see profiling/__init__.py's start_session()); profile/latest points at the
-most recent one.
+(see tools/monitoring/profiling/__init__.py's start_session()); profile/latest
+points at the most recent one.
 
 Usage:
-    python3 -m profiling.join                       # profile/latest
-    python3 -m profiling.join --profile-dir DIR      # a specific run dir
-    python3 -m profiling.join --export-xlsx          # also export to xlsx
+    python3 -m tools.monitoring.profiling.join                       # profile/latest
+    python3 -m tools.monitoring.profiling.join --profile-dir DIR      # a specific run dir
+    python3 -m tools.monitoring.profiling.join --export-xlsx          # also export to xlsx
 
 Writes <profile-dir>/per_sentence_results.csv and per_stage_results.csv.
 Applies a PMIC->external-meter calibration (scale, offset) from
 profile/calibration.json (the base dir, shared across runs) if present
-(identity otherwise) - see profiling/calibrate.py and the README "Profiling"
+(identity otherwise) - see tools/monitoring/profiling/calibrate.py and the README "Profiling"
 section.
 """
 import argparse
@@ -361,7 +361,7 @@ def main():
     profile_dir = args.profile_dir or _resolve_default_profile_dir("profile")
     run_join(profile_dir)
     if args.export_xlsx:
-        from benchmark.export_to_xlsx import export as export_xlsx
+        from tools.measurement.benchmark.export_to_xlsx import export as export_xlsx
         export_xlsx(profile_dir)
 
 

@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-import benchmark.runner as runner
+import tools.measurement.benchmark.runner as runner
 
 
 def test_default_sentence_file_has_ten_entries_ref_first():

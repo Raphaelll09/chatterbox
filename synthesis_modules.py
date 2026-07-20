@@ -15,7 +15,7 @@ import json
 import re
 
 import loading_modules
-import profiling
+import tools.monitoring.profiling as profiling
 import paths
 from scipy.io import loadmat
 

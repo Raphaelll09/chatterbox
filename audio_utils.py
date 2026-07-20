@@ -36,7 +36,7 @@ from pydub.playback import play
 import gui_utils
 import tts_utils
 import synthesis_modules
-import profiling
+import tools.monitoring.profiling as profiling
 
 def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
               sentence_id=None, complexity_tag=None, play=True):

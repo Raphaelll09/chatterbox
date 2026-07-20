@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Background PMIC/CPU/thermal sampler.
 
-Runs as its own OS process (`python -m profiling.sampler ...`) so it can be
+Runs as its own OS process (`python -m tools.monitoring.profiling.sampler ...`) so it can be
 pinned to one core and de-prioritised without touching the main synthesis
 process. Only does raw reads + one CSV row append per tick - no parsing or
 analysis - to keep its own footprint (and thus its contribution to the PMIC
