@@ -14,24 +14,24 @@ profile/exports/
 profiling/__pycache__/
 
 # Ignore dataset, models and training script in FastSpeech2
-FastSpeech2/__pycache__/
-FastSpeech2/config/
-FastSpeech2/output/
-FastSpeech2/preprocessed_data/
-FastSpeech2/save_preprocessed_data/
-FastSpeech2/*.mat
+assets/models/FastSpeech2/__pycache__/
+assets/models/FastSpeech2/config/
+assets/models/FastSpeech2/output/
+assets/models/FastSpeech2/preprocessed_data/
+assets/models/FastSpeech2/save_preprocessed_data/
+assets/models/FastSpeech2/*.mat
 
 # Ignore models in Hifi-GAN
-hifi-gan-master/__pycache__/
-hifi-gan-master/FR_V2/
+assets/models/hifi-gan-master/__pycache__/
+assets/models/hifi-gan-master/FR_V2/
 
 # Ignore models in Waveglow
-Waveglow/__pycache__/
-Waveglow/waveglow_NEB.pt
-Waveglow/*.txt
+assets/models/Waveglow/__pycache__/
+assets/models/Waveglow/waveglow_NEB.pt
+assets/models/Waveglow/*.txt
 
 # Ignore models in FlauBERT
-flaubert/flaubert_large_cased/pytorch_model.bin
+assets/models/flaubert/flaubert_large_cased/pytorch_model.bin
 
 # Ignore Virtual Env
 python3.11.1_embedded_tts/

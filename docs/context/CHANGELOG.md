@@ -15,6 +15,53 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg Phase 1: move vendored model repos + weights under `assets/models/`
+
+- What: Phase 1 of `docs/REORG_PROPOSAL.md`'s migration plan.
+  - `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/` — all four vendored
+    dirs, including their gitignored weight files (~3.7 GB: FlauBERT `pytorch_model.bin`,
+    Waveglow's `waveglow_NEB.pt`, HiFi-GAN's `g_00570000`), which the directory rename carried
+    along automatically (confirmed present at the new paths after the move).
+  - Re-pointed `config_tts.yaml`'s `folder` values (both TTS/vocoder entries and the
+    commented-out Waveglow one), `scripts/setup_pi.sh`'s `fetch_and_unzip` targets/sentinels,
+    `paths.py`'s vendored-dir + FlauBERT constants, and `.gitignore`'s FastSpeech2/hifi-gan-master/
+    Waveglow/flaubert patterns to the new `assets/models/…` prefix.
+  - Found and fixed two gaps only visible by actually running the pipeline post-move (not caught
+    by the original static-analysis audit):
+    1. `synthesis_modules.py` had a fourth CWD-relative `sys.path.insert(1,
+       './Waveglow/tacotron2')` that Phase 0's checklist missed (it only named the three inserts
+       in `loading_modules.py`). Post-move this broke `pytest tests/` collection with
+       `ModuleNotFoundError: No module named 'audio_processing'` — the exact "same-named modules
+       / sys.path insertion order" fragility already flagged in the proposal's §6, tripped for
+       real. Fixed: routed through `paths.WAVEGLOW_DIR / "tacotron2"`.
+    2. `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
+       (`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each
+       hardcode a literal `"FastSpeech2/…"` string, read as CWD-relative by
+       `FastSpeech2/model/modules.py` / `utils/model.py`. These YAMLs are **gitignored**
+       (downloaded from the Google Drive archives in `README.md`, never committed) — patched on
+       this checkout only, to unblock verification. **Not a real fix**: a fresh
+       `scripts/setup_pi.sh` run re-downloads the same stale-path archive and will hit this again.
+       Left as an open follow-up in `docs/REORG_PROPOSAL.md` §6 (needs a decision: patch
+       `scripts/setup_pi.sh` to `sed` these keys post-unzip, or make the FastSpeech2 code resolve
+       them relative to `paths.FASTSPEECH2_DIR` instead of trusting them as full paths).
+- Files: `paths.py`, `synthesis_modules.py`, `config_tts.yaml`, `scripts/setup_pi.sh`,
+  `.gitignore`, plus the `git mv` of `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/`
+  into `assets/models/`. (Also two gitignored, untracked local edits — see above — that do not
+  show up in `git status` and are not part of this commit.)
+- Why: `docs/REORG_PROPOSAL.md` Phase 1 — code vs. non-code separation (Goal 5), lowest
+  coupling-risk directory move in the reorg.
+- Verify: `pytest tests/` — 130 passed (after fix 1). Real end-to-end smoke test on this Windows
+  checkout (after fix 2): FlauBERT, FastSpeech2 (`assets/models/FastSpeech2/390000`), and HiFi-GAN
+  (`assets/models/hifi-gan-master/FR_V2/g_00570000`) all loaded via the moved paths;
+  `audio_file.wav` produced with normal per-stage timing.
+- Notes/gotchas: no Pi 5 hardware access this round — Windows-verified only, per
+  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. The config-YAML issue (gap 2 above) is the
+  one item in this phase that isn't actually resolved yet, just worked around locally — flag it
+  before Phase 4 closes the reorg out, since it will bite a fresh Pi provisioning run exactly the
+  same way it bit this one.
+
+---
+
 ## 2026-07-20 — Reorg Phase 0: repo-root-anchored path resolution (`paths.py`)
 
 - What: Phase 0 of `docs/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
