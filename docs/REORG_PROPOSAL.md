@@ -1,12 +1,15 @@
 # Chatterbox — Repository Reorganization Proposal
 
-**Status: Phases 0–3 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
-Phase 4 is still analysis only. Every phase in §7 uses `git mv` on this dedicated branch when
-executed, each with its own validation checkpoint. Every phase so far has surfaced real gaps
-invisible to static analysis — see each phase's notes in §7, the §6 risk items, and Phase 3's own
-notes on where its actual implementation diverged from this document's original §5 sketch (the
-Synthesizer/VocoderBackend split, and why the converted backend doesn't literally subclass either
-ABC).
+**Status: All four phases implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified —
+see §7). The reorg described in this document is functionally complete**, pending the two things
+no session on this machine could ever resolve: real interactive GUI testing and Pi 5 hardware
+verification (see the note below — still true as of Phase 4). Every phase in §7 uses `git mv` on
+this dedicated branch when executed, each with its own validation checkpoint. Every phase surfaced
+real gaps invisible to static analysis — see each phase's notes in §7, the §6 risk items, and
+Phase 3's own notes on where its actual implementation diverged from this document's original §5
+sketch (the Synthesizer/VocoderBackend split, and why the converted backend doesn't literally
+subclass either ABC). Three items from §4 are still open, deliberately left for your sign-off
+rather than decided unilaterally — see Phase 4 in §7.
 
 **No Pi 5 hardware access for this execution round.** Amendment #8 ("Pi 5 hardware run mandatory
 before merging each phase") is retired for now — there's no Pi 5 available to run it against. Every
@@ -254,7 +257,7 @@ apt-packages-pi.txt
 The root demo WAVs previously listed here as delete-candidates have been reclassified — see
 "Audio assets" below and §4.
 
-#### Audio assets (reinstated category — reference WAVs, keyboard prompts)
+#### Audio assets (reinstated category — reference WAVs, keyboard prompts) — ✅ moved in Phase 4
 
 The original brief's hypothesis included an `assets/audio/` category for "registered test signals,
 reference and generated WAVs." An earlier pass of this proposal dissolved it — keyboard prompts
@@ -795,29 +798,41 @@ treat this phase as needing real interactive GUI testing before considering it f
 top of the standing **Pi 5 hardware verification owed, not available this round** (see the note at
 the top of §7).
 
-### Phase 4 — Docs, assets, cleanup sign-off
+### Phase 4 — Docs, assets, cleanup sign-off — ✅ done (same branch)
 
 *Goal 1 (30-second clarity) + closing the loop on §4.*
 
-- `git mv La_Bise_Neutre_NEB_opti.wav La_bise_Neutre_NEB.wav La_bise_Neutre_NEB_phon.wav la_bise_NORMAL_AD.wav la_bise_NORMAL_AD_opti.wav assets/audio/reference/`
-  (reclassified from delete-candidates to kept reference assets — see §2 "Audio assets").
-- `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; update the keyboard-prompt
-  path resolution in `chatterbox/gui/keyboards.py` (via `paths.py`, per the Phase 0 invariant).
-- `git mv tts_gui.png docs/assets/`, update the README image link.
-- Create `hardware/.gitkeep` (or a stub `hardware/README.md`) — git doesn't track empty
-  directories, so this ensures the placeholder survives the commit.
-- Rewrite `CLAUDE.md`'s repo map, `docs/context/ARCHITECTURE.md`, `README.md`, `INSTALL.md` for the
-  new paths.
-- Bring the remaining §4 flagged items back to you individually for a delete/keep decision
-  (`graphify-out/`, the `profile/` experiment directories, the two deprecated requirements files) —
-  the demo WAVs are no longer on this list; they're relocated as kept reference assets above, not
-  deleted.
+- [x] `git mv La_Bise_Neutre_NEB_opti.wav La_bise_Neutre_NEB.wav La_bise_Neutre_NEB_phon.wav
+  la_bise_NORMAL_AD.wav la_bise_NORMAL_AD_opti.wav assets/audio/reference/` (reclassified from
+  delete-candidates to kept reference assets — see §2 "Audio assets").
+- [x] `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; updated
+  `chatterbox/config/paths.py`'s `AUDIO_KEYBOARDS_DIR` to the new location — no code change needed
+  in `chatterbox/gui/app.py` itself (not `keyboards.py` as originally noted here; the
+  `play_prerecorded_phone()` function that reads this path actually lives in `app.py`, a small
+  correction from this section's original text), since it already routed through `paths.py` per
+  the Phase 0 invariant.
+- [x] `git mv tts_gui.png docs/assets/tts_gui.png`; updated the README image link.
+- [x] Created `hardware/.gitkeep`.
+- [x] Rewrote `CLAUDE.md`'s repo map (done in Phase 3, since it's auto-loaded every session and a
+  stale map there has an ongoing cost — verified accurate again now), a full rewrite of
+  `docs/context/ARCHITECTURE.md` (deferred until now as planned — every module path, function
+  name, and stale `profiling/`/`benchmark/`/`FastSpeech2/` reference updated, technical substance
+  preserved), and `README.md`'s path-bearing lines (Google Drive install targets, the `tts_gui.png`
+  link, every `profiling/`/`benchmark/`/`audio_utils.py` mention in the French user docs).
+  `INSTALL.md` needed no changes — it never hardcoded the paths that moved, only described the
+  PC/Pi split generically and pointed at `scripts/setup_pi.sh` (already correct since Phase 1).
+- [x] Brought the three remaining §4 flagged items back for your sign-off (see the question this
+  turn) rather than deciding unilaterally: `graphify-out/`, the `profile/` experiment directories,
+  the two deprecated requirements files. The demo WAVs are no longer on this list — relocated as
+  kept reference assets above, not deleted.
 
-**Verify:** a fresh clone + `scripts/setup_pi.sh` run on a real Pi 5, succeeding end-to-end from git
-clone to a spoken sentence and matching the pre-reorg baseline timing, is the final confirmation
-that every `paths.py` re-pointing across Phases 1–3 actually composed correctly — **this is the one
-step in the whole plan that cannot be waived**, since it's the only check that ever exercises the
-Pi-only code paths (Phases 1–2) at all. Until Pi access exists, treat Phases 1–3 as merged-but-unverified
-on the actual target hardware, and prioritize getting Pi access before compounding further phases on
-top. Also confirm, once on the Pi, that the on-screen keyboard (`--gui`) still finds its
-phoneme-prompt WAVs at the new path.
+**Verify:** `pytest tests/` — 130 passed. Confirmed `paths.AUDIO_KEYBOARDS_DIR` resolves to the new
+`assets/audio/prompts/` location and the sample phoneme file exists there. Real end-to-end
+synthesis smoke test on Windows, unchanged. **A fresh clone + `scripts/setup_pi.sh` run on a real
+Pi 5, succeeding end-to-end from git clone to a spoken sentence and matching the pre-reorg baseline
+timing, remains the final confirmation that every `paths.py` re-pointing across all four phases
+actually composed correctly — this is the one step in the whole plan that cannot be waived**, and
+it still hasn't happened: no Pi 5 access was available for any phase of this reorg. Treat the
+whole reorg as **implemented and Windows-verified, but Pi-unverified**, and prioritize a real Pi
+run before trusting it in the field. The on-screen keyboard's phoneme-prompt path is one of the
+specific things to check once that's possible.

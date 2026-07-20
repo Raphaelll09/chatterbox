@@ -15,6 +15,47 @@ state before starting new work.
 
 ---
 
+## 2026-07-20 — Reorg Phase 4: assets/docs cleanup — the four-phase reorg is functionally complete
+
+- What: Phase 4 of `docs/REORG_PROPOSAL.md`'s migration plan, the last one.
+  - `git mv` the five root demo WAVs (reclassified from delete-candidates to kept reference assets
+    in an earlier review pass) into `assets/audio/reference/`.
+  - `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; updated
+    `chatterbox/config/paths.py`'s `AUDIO_KEYBOARDS_DIR` constant to the new location — no code
+    change needed in `chatterbox/gui/app.py` (the actual home of `play_prerecorded_phone()`,
+    correcting `docs/REORG_PROPOSAL.md`'s original text which said `keyboards.py`), since it
+    already read this path via `paths.py`.
+  - `git mv tts_gui.png docs/assets/tts_gui.png`; updated the README image link.
+  - Created `hardware/.gitkeep` (git doesn't track empty directories).
+  - Full rewrite of `docs/context/ARCHITECTURE.md` (deferred since Phase 0's stale-banner
+    workaround) — every module path, function name, and `profiling/`/`benchmark/`/`FastSpeech2/`
+    reference updated to the post-reorg `chatterbox/`/`tools/`/`assets/models/` layout, technical
+    substance (pipeline stages, control-tag mini-language, profiling/benchmark design) preserved
+    unchanged. `README.md`'s path-bearing lines fixed the same way (Google Drive install targets,
+    profiling/benchmark module paths, the image link). `CLAUDE.md` needed no further changes
+    (already rewritten in Phase 3, verified still accurate). `INSTALL.md` needed no changes at all
+    — it never hardcoded the paths that moved.
+  - Brought the three items `docs/REORG_PROPOSAL.md` §4 flagged but didn't resolve
+    (`graphify-out/`, the `profile/` experiment directories, the two deprecated requirements files)
+    back to the user for an explicit keep/delete decision rather than deciding unilaterally.
+- Files: `assets/audio/{reference,prompts}/` (new, via `git mv`), `chatterbox/config/paths.py`,
+  `docs/assets/tts_gui.png` (new, via `git mv`), `hardware/.gitkeep` (new),
+  `docs/context/ARCHITECTURE.md`, `README.md`, `docs/REORG_PROPOSAL.md`.
+- Why: `docs/REORG_PROPOSAL.md` Phase 4 (Goal 1: 30-second clarity) — the last phase of the
+  four-phase reorg plan.
+- Verify: `pytest tests/` — 130 passed. Confirmed `paths.AUDIO_KEYBOARDS_DIR` resolves to the new
+  location and a sample phoneme WAV exists there. Real end-to-end synthesis smoke test on Windows,
+  unchanged from Phase 3.
+- Notes/gotchas: **the reorg described across all four phases is now functionally complete**, but
+  two things remain genuinely unverified because no session on this machine could ever check them:
+  real interactive GUI testing (only a non-interactive, no-display `--gui` launch was possible —
+  see the Phase 3 entry) and Pi 5 hardware verification (no Pi access at any point across all four
+  phases). Treat the whole reorg as implemented and Windows-verified, not field-verified, until a
+  real Pi 5 run happens — this is explicitly called out in `docs/REORG_PROPOSAL.md` §7 as the one
+  verification step that can't be waived.
+
+---
+
 ## 2026-07-20 — Reorg Phase 3: chatterbox/ package, class-based Synthesizer, GUI leak fix
 
 - What: Phase 3 of `docs/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
