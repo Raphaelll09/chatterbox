@@ -149,18 +149,18 @@ fetch_and_unzip() {
 WEIGHTS_OK=1
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing" \
-    "$WORKING_ROOT/FastSpeech2" \
-    "$WORKING_ROOT/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/FastSpeech2" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased" \
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing" \
-    "$WORKING_ROOT/hifi-gan-master" \
-    "$WORKING_ROOT/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/hifi-gan-master" \
+    "$WORKING_ROOT/assets/models/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
 
 STEP_WEIGHTS_OK=$WEIGHTS_OK
 echo

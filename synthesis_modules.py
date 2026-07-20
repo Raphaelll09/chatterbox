@@ -27,7 +27,7 @@ from dataset import load_free_styleTags_embedding
 #sys.path.insert(1, "./hifi-gan-master")
 from inference_e2e import inference
 
-sys.path.insert(1, './Waveglow/tacotron2')
+sys.path.insert(1, str(paths.WAVEGLOW_DIR / "tacotron2"))
 from inference import main as inference_main
 
 audio_file_name = "audio_file"

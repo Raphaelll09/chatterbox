@@ -10,10 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-FASTSPEECH2_DIR = ROOT / "FastSpeech2"
-HIFIGAN_DIR = ROOT / "hifi-gan-master"
-WAVEGLOW_DIR = ROOT / "Waveglow"
-FLAUBERT_DIR = ROOT / "flaubert" / "flaubert_large_cased"
+FASTSPEECH2_DIR = ROOT / "assets" / "models" / "FastSpeech2"
+HIFIGAN_DIR = ROOT / "assets" / "models" / "hifi-gan-master"
+WAVEGLOW_DIR = ROOT / "assets" / "models" / "Waveglow"
+FLAUBERT_DIR = ROOT / "assets" / "models" / "flaubert" / "flaubert_large_cased"
 
 CUSTOM_REGEX_RULES = ROOT / "custom_regex_rules.csv"
 SYMBOLS_REGEX_RULES = ROOT / "symbols_regex_rules.csv"

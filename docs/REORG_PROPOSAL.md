@@ -1,9 +1,11 @@
 # Chatterbox — Repository Reorganization Proposal
 
-**Status: Phase 0 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see
-Phase 0 in §7).** Phases 1–4 are still analysis only — no directories moved, renamed, or deleted.
-Every phase in §7 uses `git mv` on this dedicated branch when executed, each with its own
-validation checkpoint.
+**Status: Phases 0–1 implemented (branch `reorg/phase-0-path-anchoring`, Windows-verified — see §7).**
+Phases 2–4 are still analysis only — no directories moved, renamed, or deleted yet beyond Phase 1's
+vendored-model move. Every phase in §7 uses `git mv` on this dedicated branch when executed, each
+with its own validation checkpoint. Phase 1 surfaced two real gaps invisible to static analysis —
+see Phase 1's notes and the new §6 risk item on gitignored FastSpeech2 config YAMLs, which is an
+**open follow-up**, not yet resolved.
 
 **No Pi 5 hardware access for this execution round.** Amendment #8 ("Pi 5 hardware run mandatory
 before merging each phase") is retired for now — there's no Pi 5 available to run it against. Every
@@ -455,13 +457,35 @@ should import its vendored dependencies via `importlib.util.spec_from_file_locat
 own subtree, or vendor each model repo as a proper installable subpackage, instead of mutating
 global `sys.path`. Worth doing regardless of whether the broader reorg proceeds.
 
+**High — gitignored FastSpeech2 config YAMLs hardcode their own repo-root-relative paths,
+discovered during Phase 1.** `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
+(`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each contain
+a literal `"FastSpeech2/…"` string, read directly by `FastSpeech2/model/modules.py` and
+`FastSpeech2/utils/model.py` as a path relative to the process's CWD — a third hardcoding mechanism
+alongside `sys.path.insert` and the Python-level hardcodes already in this table, and the one that
+slipped through the original audit (no leading `./`, so the grep pattern that caught everything
+else in this table didn't match it). These YAMLs are **gitignored** — downloaded from the Google
+Drive archives named in `README.md`, never committed — so fixing the local copy (done for Phase 1's
+own verification) does not fix anything for a fresh `scripts/setup_pi.sh` run, which re-downloads
+and re-unzips the same stale-path archive. *Fix, not yet done:* either (a) have
+`scripts/setup_pi.sh` `sed`-patch these two YAML keys immediately after unzipping (mirrors the
+"flatten nested archive dir" post-processing it already does in `fetch_and_unzip()`), or (b) change
+`FastSpeech2/model/modules.py`/`utils/model.py` to resolve these config values relative to
+`paths.FASTSPEECH2_DIR` rather than trusting them as CWD-relative literals, treating the YAML values
+as filenames within the FastSpeech2 tree rather than full repo-root-relative paths. Needs a decision
+before Phase 4 closes this reorg out, since a fresh Pi provisioning run will hit this exact break
+otherwise.
+
 ### Hardcoded paths
 
 | Location | What's hardcoded | Fix |
 |---|---|---|
-| `FastSpeech2/utils/model.py:16` | `modelname = './flaubert/flaubert_large_cased'` — CWD-relative, bypasses `config_tts.yaml` entirely | route through `chatterbox/config/paths.py`; this is the single worst offender since it's not even reachable from config today |
-| `synthesis_modules.py` (regex_file, symbols_regex_file, url_regex_file) | bare CWD-relative filenames for the three rule CSVs | resolve via the same path module when the files move under `rules/` |
-| `loading_modules.py` (tts_model["folder"], vocoder_model["folder"]) | already config-driven from `config_tts.yaml`, but the base is CWD-relative, not repo-root-anchored | same fix as above — one shared root-anchoring utility covers all three |
+| `FastSpeech2/utils/model.py:16` | `modelname = './flaubert/flaubert_large_cased'` — CWD-relative, bypassed `config_tts.yaml` entirely | ✅ fixed in Phase 0 — routed through `paths.FLAUBERT_DIR` |
+| `loading_modules.py`'s three `sys.path.insert` calls | `"./FastSpeech2"`, `"./hifi-gan-master"`, `"./Waveglow"` — CWD-relative | ✅ fixed in Phase 0 — routed through `paths.py` |
+| `synthesis_modules.py`'s `sys.path.insert(1, './Waveglow/tacotron2')` | a **fourth** CWD-relative insert Phase 0 missed (only the three in `loading_modules.py` were in its checklist) | ✅ fixed during Phase 1 verification, after it broke `pytest` collection post-move — routed through `paths.WAVEGLOW_DIR / "tacotron2"` |
+| `synthesis_modules.py` (regex_file, symbols_regex_file, url_regex_file) | bare CWD-relative filenames for the three rule CSVs | ✅ fixed in Phase 0 — routed through `paths.py` |
+| `loading_modules.py` (tts_model["folder"], vocoder_model["folder"]) | config-driven from `config_tts.yaml`, base was CWD-relative | ✅ fixed in Phase 1 — `config_tts.yaml`'s `folder` values now read `assets/models/…` |
+| `FastSpeech2/config/ALL_corpus/{preprocess,train}.yaml` (`preprocessed_path`, `output_syn_path`, `ckpt_path`) | literal `"FastSpeech2/…"` strings inside **gitignored** config files (downloaded, never committed) | **not fixed** — see the new §6 risk item above; local checkout patched for verification only, fresh downloads will still break |
 | `audio_utils.py:268` | `shutil.copy(path_au, "./")` — copies the AU file to CWD explicitly | make explicit once a real output directory exists, rather than implicitly "wherever you launched from" |
 | GPIO / amp-mute, ALSA device selection | **not found** — no GPIO or amp-mute code exists anywhere in the current tree | the starting hypothesis's `config/` description assumes hardware-control code that hasn't been written yet; treat as aspirational, not a migration item |
 
@@ -552,30 +576,54 @@ hardware access this round** (see the note at the top of §7) — this phase is 
 Pi-unverified; the `sys.path` rewrite touches the exact import-ordering mechanism flagged in §6 as
 having zero test coverage, so a real Pi run is still owed before this is considered fully safe.
 
-### Phase 1 — Move vendored model repos + weights
+### Phase 1 — Move vendored model repos + weights — ✅ done (same branch)
 
 *Goal 5 (code vs. non-code), lowest coupling-risk move.*
 
-- `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/`
-- Update the three folder paths in `config_tts.yaml` and `scripts/setup_pi.sh`'s `fetch_and_unzip`
+- [x] `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/`
+- [x] Updated the three folder paths in `config_tts.yaml` (including the commented-out Waveglow
+  entry, for consistency if it's ever re-enabled) and `scripts/setup_pi.sh`'s `fetch_and_unzip`
   targets/sentinels.
-- Update the vendored-dir entries in `paths.py` (the `sys.path` code-import targets for
-  `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`) from `ROOT/<dir>` to `ROOT/assets/models/<dir>`
-  — these are the code-import paths Phase 0 anchored, distinct from the weight-folder paths in
-  `config_tts.yaml`, and they point at the same directories now moving.
-- Update the **FlauBERT** path entry in `paths.py`. Phase 0 routed the
-  `./flaubert/flaubert_large_cased` hardcode (`FastSpeech2/utils/model.py:16`) through `paths.py`;
-  FlauBERT isn't in `config_tts.yaml`, so the `config_tts.yaml` update above doesn't cover it — this
-  needs its own explicit step or FlauBERT silently fails to load post-move.
-- Update `.gitignore` patterns that reference these paths.
-- On an **existing** checkout (Pi or otherwise), confirm the gitignored weight files physically
-  relocated with the directory rename (see §6's gitignored-weights caveat) — not needed on a fresh
-  clone.
+- [x] Updated the vendored-dir entries in `paths.py` (`FASTSPEECH2_DIR`, `HIFIGAN_DIR`,
+  `WAVEGLOW_DIR`) and the **FlauBERT** entry (`FLAUBERT_DIR`) from `ROOT/<dir>` to
+  `ROOT/assets/models/<dir>`.
+- [x] Updated `.gitignore` patterns (`FastSpeech2/…` → `assets/models/FastSpeech2/…`, etc.).
+- [x] Confirmed on this (existing, Windows) checkout that the gitignored weight files — including
+  the 1.4 GB FlauBERT and 1.3 GB Waveglow binaries — physically relocated with the `git mv`
+  directory rename, per §6's gitignored-weights caveat.
 
-**Verify:** `--benchmark` runs end-to-end against real weights on Windows. **Pi 5 hardware
+**Two additional fixes, found only by actually running the pipeline post-move (not by static
+analysis — flagging this as a gap in the original §6 audit, not a new problem introduced here):**
+
+1. **A fourth CWD-relative `sys.path.insert` that Phase 0 missed.** Phase 0's checklist only
+   named the three inserts in `loading_modules.py`; `synthesis_modules.py` has its own
+   `sys.path.insert(1, './Waveglow/tacotron2')` (feeding the disabled-by-default Waveglow path) that
+   Phase 0 didn't touch. Post-move it inserted a now-nonexistent path, which meant `Waveglow/tacotron2`'s
+   bare-imported sibling modules (`audio_processing`, `layers`, ...) resolved to nothing —
+   `ModuleNotFoundError: No module named 'audio_processing'` on `pytest tests/` collection. This is
+   the exact "same-named modules / sys.path insertion order" fragility §6 already flagged as
+   zero-test-coverage — it just took this move to actually trip it. Fixed: that insert now uses
+   `str(paths.WAVEGLOW_DIR / "tacotron2")`.
+2. **Gitignored FastSpeech2 config YAMLs hardcode their own repo-root-relative paths, independent
+   of `paths.py` and `config_tts.yaml`.** `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
+   (`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each
+   contained a literal `"FastSpeech2/…"` string — invisible to the original audit because it had no
+   leading `./` (the grep pattern that surfaced every other hardcode in §6 only matched
+   `"./`/`'./` prefixes). These files are gitignored (downloaded from the Google Drive archives,
+   never committed), so fixing them on this checkout does **not** fix them for anyone else: a fresh
+   `scripts/setup_pi.sh` run re-downloads and re-unzips the same archives, restoring the same stale
+   value. **This is an open follow-up, not resolved by this phase** — see the new §6 risk item.
+   Fixed on this checkout only (edited the two YAML values directly to the `assets/models/…` paths)
+   so verification below could complete.
+
+**Verify:** `pytest tests/` — 130 passed (after fix 1 above). Real end-to-end smoke test on Windows
+against the now-relocated weights (after fix 2 above): FlauBERT, FastSpeech2
+(`assets/models/FastSpeech2/390000`), and HiFi-GAN (`assets/models/hifi-gan-master/FR_V2/g_00570000`)
+all loaded, and `audio_file.wav` was produced with normal per-stage timing. **Pi 5 hardware
 verification is owed, not available this round** (see the note at the top of §7) — when Pi access
-exists, confirm the weights are found at the new path without re-downloading, per the CLAUDE.md
-testing convention.
+exists, confirm the weights are found at the new path without re-downloading, *and* pay specific
+attention to the config-YAML issue above, since a fresh Pi provisioning run will hit it fresh
+(nothing on the Pi side has been patched).
 
 ### Phase 2 — Move research/measurement tooling
 
