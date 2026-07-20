@@ -8,12 +8,14 @@ from model import FastSpeech2, ScheduledOptim
 
 from transformers import FlaubertModel, FlaubertTokenizer
 
+import paths
+
 def get_model(args, configs, device, train=False, mode_batch=False, use_bert=False):
     (preprocess_config, model_config, train_config) = configs
 
     if use_bert:
         # Load FlauBERT pre-trained model
-        modelname = './flaubert/flaubert_large_cased'
+        modelname = str(paths.FLAUBERT_DIR)
 
         print("Loading of FlauBERT")
         # Load pretrained model and tokenizer

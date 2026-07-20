@@ -143,6 +143,17 @@ prefers `simpleaudio`, falling back to `sounddevice`/`soundfile` if unavailable;
 - FlauBERT: `flaubert/flaubert_large_cased/`.
 - Waveglow (disabled by default): `Waveglow/waveglow_NEB.pt`.
 
+Added 2026-07-20: `paths.py` (repo root) anchors all of the above to its own file location
+(`Path(__file__).resolve().parent`), not the process's current working directory. `loading_modules.py`'s
+three `sys.path.insert` calls (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`),
+`synthesis_modules.py`'s three regex-rule CSV paths, and `FastSpeech2/utils/model.py`'s FlauBERT
+path all resolve through it now, instead of bare CWD-relative strings — see
+`docs/REORG_PROPOSAL.md` §6/Phase 0 for why (a future package move only needs `paths.py`'s
+constants updated, not every scattered `"./FastSpeech2"`-style string). `do_tts.py` must still be
+launched with the repo as the working directory today; this only removes the *hidden* CWD
+dependency in the vendored-import machinery, it doesn't yet make the entry point
+location-independent (that's a later phase).
+
 ## Profiling subsystem (profiling/)
 
 Added 2026-07-08. Optional, off by default (`CHATTERBOX_PROFILE=1` env var, `do_tts.py --profile`,

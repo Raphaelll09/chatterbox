@@ -12,14 +12,16 @@ import sys
 import torch
 import json
 
-sys.path.insert(1, "./FastSpeech2")
+import paths
+
+sys.path.insert(1, str(paths.FASTSPEECH2_DIR))
 from utils.model import get_model
 
-sys.path.insert(1, "./hifi-gan-master")
+sys.path.insert(1, str(paths.HIFIGAN_DIR))
 from env import AttrDict
 from models import Generator
 
-sys.path.insert(1, "./Waveglow")
+sys.path.insert(1, str(paths.WAVEGLOW_DIR))
 
 def load_fastspeech2(tts_model, device):
     global TTS_MODEL
