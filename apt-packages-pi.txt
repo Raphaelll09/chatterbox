@@ -36,3 +36,12 @@ python3-tk
 # i2c-1 @ 0x40 (and doesn't collide with the IQaudio DAC at 0x4c) before a --benchmark --play run;
 # see embedded_tts/README.md "Profilage" / "Capteur INA226".
 i2c-tools
+
+# Kiosk compositor (deploy/systemd/chatterbox-gui.service, docs/kiosk/KIOSK.md) -- cage is a
+# minimal Wayland kiosk compositor that runs a single app fullscreen; Tk itself only speaks X11,
+# so xwayland is required alongside it. If cage fails to acquire the seat when launched as a
+# systemd service (TTYPath=/dev/tty1 + PAMName=login), the usual fix is installing `seatd` as a
+# fallback seat manager -- not pre-installed here speculatively, only flagged as a troubleshooting
+# step in docs/kiosk/KIOSK.md, since systemd-logind (already present) is normally sufficient.
+cage
+xwayland
