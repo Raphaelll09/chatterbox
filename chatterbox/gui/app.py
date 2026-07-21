@@ -479,6 +479,16 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # has to stay: it's part of the switch-driven NavRing (chatterbox/gui/input.py), which the
     # menu bar isn't reachable from at all.
     menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
+    if main_panel_config["add_audio_infos"]:
+        # Show/hide the synthesis timing-breakdown labels (real-hardware request: "capacity to
+        # hide the synthesis data") -- a menu checkbutton rather than a main-window button so it
+        # doesn't add another row to a screen that's already tight on vertical space. Wired here
+        # (before the labels themselves exist, further down in this function) the same way
+        # _build_advanced_settings is: the command only actually runs on a later user click, by
+        # which point the labels are long since created.
+        audio_info_visible = tk.BooleanVar(value=True)
+        menubar.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
+                                 command=lambda: _toggle_audio_info_visibility(audio_info_visible))
     menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
     menubar.add_command(label=i18n.t("menu_language"), state="disabled")
     window.config(menu=menubar)
@@ -596,6 +606,17 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         lbl_audio_infos_denoiser_duration.grid(row=11, column=0, columnspan=max_buttons+2)
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
+
+        def _toggle_audio_info_visibility(visible_var):
+            labels = (lbl_audio_infos_audio_duration, lbl_audio_infos_tts_duration,
+                      lbl_audio_infos_vocoder_duration, lbl_audio_infos_denoiser_duration,
+                      lbl_audio_infos_synthesis_duration)
+            if visible_var.get():
+                for lbl in labels:
+                    lbl.grid()
+            else:
+                for lbl in labels:
+                    lbl.grid_remove()
 
     # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- always
     # present, empty text outside the error state.
