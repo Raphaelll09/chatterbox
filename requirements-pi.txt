@@ -50,3 +50,12 @@ openpyxl>=3.1.5  # optional: benchmark/export_to_xlsx.py (--export-xlsx), so the
                   # sheet can be produced right after a --benchmark --join run on the Pi itself.
                   # Imported lazily, guarded by try/except — absent package just prints an install
                   # hint instead of crashing the benchmark run.
+gpiozero>=2.0.1  # chatterbox-powerd (chatterbox/power/): amp SD-line control and optional physical
+                  # switches. Imported lazily inside chatterbox/power/{amp,inputs}.py (try/except
+                  # ImportError), same pattern as smbus2 above — a PC dev checkout without it still
+                  # imports chatterbox.power.* cleanly, just with amp/switch control disabled.
+lgpio>=0.2.2.0   # gpiozero's Pi 5 GPIO backend. NOT RPi.GPIO — RPi.GPIO does not support the Pi 5's
+                  # RP1 I/O chip; lgpio is gpiozero's recommended native Pi 5 pin factory.
+evdev>=1.7.1     # chatterbox-powerd: touchscreen/keyboard activity detection for the idle timers
+                  # (chatterbox/power/inputs.py). Imported lazily, same guarded pattern as gpiozero
+                  # above. Linux-only (uses /dev/input directly) — do not add to requirements-dev.txt.

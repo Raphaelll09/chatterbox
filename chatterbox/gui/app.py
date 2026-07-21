@@ -8,6 +8,8 @@ Created on Thu Jul 21 14:29:50 2022
 
 import os
 import json
+import queue
+import time
 import yaml
 import platform
 import tkinter as tk
@@ -34,10 +36,46 @@ import chatterbox.cli as cli
 import chatterbox.audio.playback as playback
 import chatterbox.gui.keyboards as keyboards
 import chatterbox.config.paths as paths
+import chatterbox.power.client as power_client
 
 # # Global variables to store the canvas and the circle figure
 canvas_circle = None
 canvas_circle_figure = None
+
+# Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4) -- a true no-op whenever
+# powerd isn't reachable (any PC dev checkout, or a Pi before powerd is set up). No FSM/backlight/
+# amp logic lives here, only client calls, per the spec's explicit instruction.
+_power_client = None
+_power_event_queue = queue.Queue()
+_last_activity_sent_ts = 0.0
+_ACTIVITY_THROTTLE_S = 1.0  # avoid flooding the socket with an "activity" ping per keystroke/click
+
+
+def _on_activity_event(event):
+    global _last_activity_sent_ts
+    now = time.monotonic()
+    if now - _last_activity_sent_ts >= _ACTIVITY_THROTTLE_S:
+        _last_activity_sent_ts = now
+        _power_client.send_activity()
+
+
+def handle_power_input(action):
+    """Called (on the Tk thread, via _poll_power_events) for every switch press powerd forwards.
+    Stub for now -- the actual switch-press -> GUI-action dispatcher is a separately specced
+    component (chatterbox-powerd_spec_v0.1.md Sec9.4 "input dispatcher"), not yet implemented."""
+    print("[gui] power input action received: {}".format(action))
+
+
+def _poll_power_events():
+    """Drains _power_event_queue (filled from the powerd client's background thread via
+    set_input_handler) on the Tk thread -- Tk widgets must only ever be touched from this thread."""
+    while True:
+        try:
+            action = _power_event_queue.get_nowait()
+        except queue.Empty:
+            break
+        handle_power_input(action)
+    window.after(100, _poll_power_events)
 
 def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=0):
     global lbl_text_keyboard
@@ -125,6 +163,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global lbl_gst_infos
     global canvas_circle
     global canvas_circle_figure
+    global _power_client
 
     TTS_CONFIG = tts_config
     gui_config = tts_config['GUI_config']
@@ -134,6 +173,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window = tk.Tk()
     window.title(main_panel_config['name_window'])
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
+
+    # Power-daemon client: forward user interaction as "activity" (resets powerd's idle clock),
+    # receive forwarded switch presses via handle_power_input(). No-op if powerd isn't reachable.
+    _power_client = power_client.get_client()
+    _power_client.set_input_handler(lambda action: _power_event_queue.put(action))
+    window.bind_all("<ButtonPress>", _on_activity_event)
+    window.bind_all("<KeyPress>", _on_activity_event)
+    window.after(100, _poll_power_events)
 
     # Add specified TTS models
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
@@ -230,6 +277,16 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             text="Play",
             command=playback.play_audio
         ).grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
+
+    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
+    # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
+    # the keyboard regardless of add_play_button/add_GST_infos.
+    if main_panel_config.get("add_put_away_button", True):
+        btn_put_away = tk.Button(
+            master=window,
+            text="Ranger",
+            command=lambda client=_power_client: client.send_put_away()
+        ).grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
 
     if gui_config["add_keyboard"]:
         if gui_config["detach_keyboard"]:

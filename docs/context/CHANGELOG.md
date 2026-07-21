@@ -15,6 +15,57 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Implement chatterbox-powerd (kiosk power-state daemon)
+
+- What: built the `chatterbox-powerd` daemon per `chatterbox-powerd_spec_v0.1.md` §9's build task
+  — a new `chatterbox/power/` package (FSM, backlight, amp+watchdog, evdev/switch inputs, unix-
+  socket IPC server+client, config loader, `daemon.py` entry point), wired into the existing
+  pipeline at two points: `chatterbox/audio/playback.py`'s `play_audio()` now runs an amp-on→ack→
+  settle+preroll→play→tail→amp-off handshake around the existing platform playback, and
+  `chatterbox/gui/app.py` sends `activity`/`put_away` and receives forwarded switch presses (via a
+  logging-stub `handle_power_input()` — the real dispatcher is a separately specced, not-yet-
+  written component). Both integration points go through one shared `chatterbox.power.client`
+  singleton that degrades to a permanent silent no-op if powerd isn't reachable.
+  Also added: `deploy/systemd/{chatterbox-powerd,chatterbox-gui}.service`, a `scripts/setup_pi.sh`
+  install step (units + socket group, non-fatal if it fails), an `INSTALL.md` section, and
+  `docs/power/POWERD.md` (run/configure/test).
+- Files: new `chatterbox/power/{__init__,config,fsm,backlight,amp,inputs,ipc,client,daemon}.py`,
+  `chatterbox/config/user_prefs.yaml`, `deploy/systemd/*.service`, `docs/power/POWERD.md`,
+  `tests/test_power_{fsm,config,backlight,amp,ipc}.py`; modified `chatterbox/config/paths.py`
+  (+`USER_PREFS_PATH`), `chatterbox/audio/playback.py`, `chatterbox/gui/app.py`,
+  `chatterbox/config/config_tts.yaml` (+`add_put_away_button`), `requirements-pi.txt`
+  (+gpiozero/lgpio/evdev), `scripts/setup_pi.sh`, `INSTALL.md`, `CLAUDE.md`,
+  `docs/context/ARCHITECTURE.md`.
+- Why: `chatterbox-powerd_spec_v0.1.md` — an unattended AAC kiosk needs the display/amp to sleep
+  and the amp to never be left silently drawing power, without adding failure modes to the TTS
+  pipeline itself.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 193 passed, 1 skipped (the one live unix-
+  socket test in `test_power_ipc.py`, `skipif`'d on Windows). Manually confirmed on this Windows
+  checkout: all `chatterbox.power.*` submodules import cleanly with no `gpiozero`/`evdev`
+  installed and degrade to logged no-ops (`amp.Amp._device is None`,
+  `backlight.Backlight.node is None`); `PowerdClient.request_amp()` returns `False` in ~15 ms (not
+  a blocking hang) when powerd isn't running; `playback.play_audio()` end-to-end with a synthetic
+  clip completes with no exception and no added latency versus before this change.
+- Notes/gotchas: **nothing here has been run on real Pi 5 hardware** — GPIO/backlight/evdev/
+  systemd/halt behavior (spec §5/§8/§10) is implemented per spec but entirely unverified; that
+  needs the spec's own §10 test pass on actual hardware (see `docs/context/ARCHITECTURE.md` "Not
+  yet implemented"). Deliberate deviations from the spec's literal text, all flagged in code
+  comments where they land: no real `chatterbox-powerd` console script (this repo has no
+  packaging, so it's `python -m chatterbox.power.daemon`, matching the spec's own systemd
+  `ExecStart`); both systemd units' `ExecStart` was changed from the spec's `/usr/bin/python3` to
+  the venv `scripts/setup_pi.sh` actually creates (`~/chatterbox/venv/bin/python3`) — the bare
+  system interpreter has none of `requirements-pi.txt` installed; the spec's prose "settle 80ms +
+  silence pre-roll"/"tail" are implemented as configurable sleeps
+  (`amp.settle_ms`/`preroll_ms`/`tail_ms` in `user_prefs.yaml`, not in the spec's original YAML
+  schema) rather than literal silence-audio injection; EEPROM/`config.txt` changes are documented
+  in `INSTALL.md` only, never auto-applied (boot-config edits carry a brick-on-mistake risk this
+  repo's tooling avoids elsewhere too); the client does not auto-reconnect after a connection
+  drop (v0.1 scope — restart the GUI/CLI process). The companion `GUI_Power_Controller_Architecture`
+  doc and the switch-press→GUI-action input dispatcher this spec references are not part of this
+  session — `handle_power_input()` in `chatterbox/gui/app.py` is a logging stub for that boundary.
+
+---
+
 ## 2026-07-20 — Fix silent --gui override by --benchmark/--p4-sweep, found via Part A verification
 
 - What: running `docs/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
