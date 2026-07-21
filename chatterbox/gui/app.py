@@ -468,15 +468,16 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window.title(main_panel_config['name_window'])
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
 
-    # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres"/"À propos" are wired to the
-    # existing settings dialog / a static about box; "Thème"/"Langue" are visible-but-disabled
-    # stubs -- there's no second theme or locale table to switch to yet (see chatterbox/gui/i18n.py),
-    # so a clickable-but-fake entry would be worse than an honestly-disabled one. This is additive:
-    # the physical "Réglages" button keeps working exactly as before.
+    # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "À propos" is wired to a static about
+    # box; "Thème"/"Langue" are visible-but-disabled stubs -- there's no second theme or locale
+    # table to switch to yet (see chatterbox/gui/i18n.py), so a clickable-but-fake entry would be
+    # worse than an honestly-disabled one.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
-    menubar.add_command(label=i18n.t("menu_settings"),
-                         command=lambda: settings.open_settings(window, build_advanced_section=_build_advanced_settings))
+    # No "Paramètres" menu entry: it opened the exact same dialog as the physical "Réglages"
+    # button below (real-hardware bug report -- redundant). The physical button is the one that
+    # has to stay: it's part of the switch-driven NavRing (chatterbox/gui/input.py), which the
+    # menu bar isn't reachable from at all.
     menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
     menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
     menubar.add_command(label=i18n.t("menu_language"), state="disabled")
