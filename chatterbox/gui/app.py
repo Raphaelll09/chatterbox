@@ -532,6 +532,34 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         else:
             window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input, window, index_gst_token)
 
+            # Portrait-first + landscape reflow (cc_prompt_gui_refactor.md Phase 1 item 2): the
+            # panel's native orientation is portrait (single column, keyboard below the main
+            # controls, as create_keyboard() already grids it) -- maintenance happens in landscape,
+            # where the keyboard moves beside the main controls in a second column instead. Only
+            # re-grids on an actual portrait<->landscape flip (not on every resize pixel).
+            keyboard_portrait_grid = {"row": 17 + index_gst_token, "column": 0, "columnspan": 3,
+                                       "sticky": tk.NSEW}
+            landscape_keyboard_column = max_buttons + 3
+            layout_state = {"is_landscape": None}
+
+            def _on_window_configure(event, _state=layout_state, _kb=window_keyboard,
+                                      _portrait=keyboard_portrait_grid,
+                                      _col=landscape_keyboard_column):
+                landscape = window.winfo_width() > window.winfo_height()
+                if landscape == _state["is_landscape"]:
+                    return
+                _state["is_landscape"] = landscape
+                if landscape:
+                    window.grid_columnconfigure(_col, weight=1)
+                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NSEW)
+                else:
+                    _kb.grid(**_portrait)
+                    window.grid_columnconfigure(_col, weight=0)
+
+            window.bind("<Configure>", _on_window_configure)
+            window.update_idletasks()
+            _on_window_configure(None)
+
     # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
     # it doesn't delay the first paint. Runs on the busy/worker machinery above.
     window.after(50, _start_warmup)
