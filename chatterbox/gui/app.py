@@ -9,6 +9,7 @@ Created on Thu Jul 21 14:29:50 2022
 import os
 import json
 import queue
+import re
 import sys
 import threading
 import time
@@ -729,17 +730,71 @@ def gui_fastspeech2(tts_config, main_panel_config):
         ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
         sub_row_index += 1
 
-    # GST token radio buttons
+    # GST token chip grid (cc_prompt_gui_refactor.md Phase 1 item 4): wrapped grid of chip-style
+    # toggle buttons instead of a one-per-row radio column -- fewer rows, larger touch targets,
+    # same gst_token_selection IntVar so the underlying synthesis control (get_gui_controls()'s
+    # gst_token_index) is unchanged. Unnamed placeholder tokens (config_tts.yaml's "TOKEN13".."16"
+    # -- not yet trained/named LST directions) start hidden behind an "Styles avances" toggle
+    # instead of cluttering the default picker; toggling shows/hides them via grid()/grid_remove()
+    # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
     if tts_config['gui_style_control']:
-        lbl_gst_token_selection = tk.Label(master=frame_options, text="Style :").grid(row=sub_row_index, column=0)
+        lbl_gst_token_selection = tk.Label(master=frame_options, text="Style :")
+        lbl_gst_token_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
 
+        chip_frame = tk.Frame(master=frame_options)
+        chip_frame.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.EW)
+
+        _CHIPS_PER_ROW = 4
+        _placeholder_re = re.compile(r"^TOKEN\d+$")
+        all_gst_tokens = [*tts_config['gst_token_list']]
+        advanced_chips = []
         index_gst_token = 0
-        for gst_token in [*tts_config['gst_token_list']]:
-            # print(gst_token)
-            tk_radio_button_gst_token = tk.Radiobutton(master=frame_options, text=gst_token, variable=gst_token_selection, value=index_gst_token, command=None)
-            tk_radio_button_gst_token.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        chip_row = chip_col = 0
+        for gst_token in all_gst_tokens:
+            chip = tk.Radiobutton(
+                master=chip_frame,
+                text=gst_token,
+                variable=gst_token_selection,
+                value=index_gst_token,
+                indicatoron=0,
+                selectcolor="#ffd54f",
+                width=11,
+                padx=4,
+                pady=10,
+                command=None,
+            )
+            chip.grid(row=chip_row, column=chip_col, padx=3, pady=3, sticky=tk.NSEW)
+            chip_frame.grid_columnconfigure(chip_col, weight=1)
+            if _placeholder_re.match(gst_token):
+                chip.grid_remove()
+                advanced_chips.append(chip)
             index_gst_token += 1
-            sub_row_index += 1
+            chip_col += 1
+            if chip_col >= _CHIPS_PER_ROW:
+                chip_col = 0
+                chip_row += 1
+        chip_rows_used = chip_row + (1 if chip_col else 0)
+
+        if advanced_chips:
+            advanced_visible = tk.BooleanVar(value=False)
+
+            def _toggle_advanced_chips(_chips=advanced_chips, _var=advanced_visible):
+                for _chip in _chips:
+                    if _var.get():
+                        _chip.grid()
+                    else:
+                        _chip.grid_remove()
+
+            btn_advanced_toggle = tk.Checkbutton(
+                master=chip_frame, text="Styles avancés", variable=advanced_visible,
+                command=_toggle_advanced_chips,
+            )
+            btn_advanced_toggle.grid(row=chip_rows_used, column=0, columnspan=_CHIPS_PER_ROW,
+                                      sticky=tk.W, pady=(4, 0))
+
+        # chip_frame is a single cell in frame_options' own grid -- its internal multi-row chip
+        # layout doesn't change frame_options' row count regardless of how many chip rows exist.
+        sub_row_index += 1
 
     # Style Intensity Slider
     style_intensity_slider = tk.Scale(frame_options, from_=0, to=1, orient=tk.HORIZONTAL, resolution=0.05)
