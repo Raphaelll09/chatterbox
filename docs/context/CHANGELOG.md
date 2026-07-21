@@ -15,6 +15,34 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — PC-GUI feedback: menu reorg, settings auto-size, style/speaker defaults
+
+- What: five corrections from user testing on PC (not the Pi):
+  1. Moved "Réglages" from a physical main-window button (sat directly above the keyboard area)
+     into a "Paramètres" menu entry -- drops Settings from the switch-driven NavRing, deemed
+     acceptable since physical switches aren't wired/validated on any real deployment yet.
+  2. "À propos" moved to the far right (last) of the menu bar.
+  3. Removed the settings dialog's hardcoded `win.geometry("420x420")` -- didn't scale to actual
+     content (worse once the "Avancé" model-picker section existed); Tk now auto-sizes it.
+  4. Reordered `config_tts.yaml`'s `gst_token_list` so NEUTRE sits at index 6 (middle of the 3x4
+     chip grid) instead of 8, chosen to not disturb `keyboards.py`'s hardcoded mood-shortcut
+     indices; `default_args.gst_token_index` 8->6 to keep pointing at NEUTRE.
+  5. Confirmed (no change needed) that the default speaker (AD, `speaker_id: 4`) and default style
+     (NEUTRE) were already correct, against `assets/models/FastSpeech2/preprocessed_data/
+     ALL_corpus/speakers.json`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/gui/settings.py`,
+  `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after testing the real-hardware-bugfix session's GUI on PC.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. A mocked
+  `create_gui()` smoke run confirmed: menu order/labels, no physical Réglages button, settings
+  dialog auto-sizes (562x461 observed vs. the old fixed 420x420), NEUTRE chip position + default
+  selection, AD default selection.
+- Notes/gotchas: item 1 is a deliberate accessibility trade-off (Settings no longer reachable via
+  the physical switch-driven NavRing) -- revisit if `user_prefs.yaml`'s `switches:` list is ever
+  populated for a real deployment.
+
+---
+
 ## 2026-07-21 — Battery percentage display (DFRobot FIT0992 UPS HAT)
 
 - What: new `chatterbox/power/battery.py` reads battery voltage/percentage over I2C (i2c-1 @
