@@ -15,6 +15,43 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — GUI real-hardware bug-report fixes (post Phase 3)
+
+- What: seven fixes from user testing of the Phase 3 refactor (below) on real Pi 5 hardware:
+  1. Column-weight loop covered one column past the widest actual content (max_buttons+2, not
+     +1), so a dead column soaked up width in landscape that should've gone to the options panel.
+  2. Speaker picker was still a single unwrapped row (only the GST style picker got the chip-grid
+     treatment) -- overflowed the canvas viewport with more than 2-3 speakers, no horizontal
+     scrollbar to reach the rest. Same wrapped chip-grid treatment as the style picker now.
+  3. Replay/Ranger/Réglages sat in grid rows *after* `keyboard_area` (16/18/19 vs its 17) -- on a
+     screen too short to show every row, they fell off-screen below the (now taller, two-
+     keyboards-in-one) keyboard, in both orientations. Reordered so keyboard_area is last.
+  4. Removed the menu's "Paramètres" entry (opened the identical dialog the physical "Réglages"
+     button already does; that button has to stay regardless -- it's in the switch-driven
+     `NavRing`, which the menu bar isn't reachable from).
+  5. Renamed "Ranger" -> "Mettre en veille" (states what it actually does: powerd put-away/dim).
+  6. `config_tts.yaml`'s `add_play_button` was `False` -- the earlier replay-button crash fix was
+     invisible since the button never showed up. Flipped to `True`.
+  7. Added a menu checkbutton to hide/show the 5 synthesis-duration labels (reclaims vertical
+     space; the status circle stays visible regardless, separate from the timing breakdown).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user bug reports after testing the Phase 3 refactor's 7 commits on a real Pi 5 --
+  landscape crop, missing buttons in both orientations, duplicate settings entry point, an
+  unclear button label, and an invisible feature toggle.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 227 passed/1 skipped, unchanged. Each fix
+  had a one-off mocked-`create_gui()` smoke script (real Tk, no pretrained weights) run manually
+  during the session confirming the specific claim (dead column gone, speakers wrap into 2+ rows,
+  Replay/Ranger/Réglages rows all precede keyboard_area's row, menu entry counts/labels, toggle
+  visibility) -- not checked into `tests/`, same carve-out as the rest of `docs/gui/GUI.md`.
+- Notes/gotchas: none of these seven has been re-verified on the Pi yet as of this entry (the
+  session ended mid-verification) -- flagged for the next session/user check. A separate,
+  not-yet-started request came in mid-session: a battery-percentage display for a DFRobot
+  FIT0xxx UPS/fuel-gauge HAT reportedly installed on the Pi 5 -- blocked on the user providing the
+  exact SKU (register map/vendor library unknown, didn't want to guess and send wrong I2C
+  commands to real hardware).
+
+---
+
 ## 2026-07-21 — GUI responsive/accessible refactor (cc_prompt_gui_refactor.md, Phase 3)
 
 - What: seven incremental commits against `cc_prompt_gui_refactor.md`'s Phase 1 audit list (Phase
