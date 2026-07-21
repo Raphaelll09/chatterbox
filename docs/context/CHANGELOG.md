@@ -15,6 +15,41 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Fix the first free-text prompt going invisible (warmup()'s stdout redirect race)
+
+- What: on real Pi 5 hardware, `python3 do_tts.py` (free-text mode) loaded models fine but then
+  looked hung — no `"Input Text (Ctrl+C to exit): "` prompt appeared. Typing blind and pressing
+  Enter worked anyway, and every prompt *after* the first one displayed correctly, which pinned
+  it down: a race between the background warm-up thread (started right before the first
+  `input()` call, per the existing "overlap warm-up with the user's first keystrokes" design) and
+  `input()`'s own prompt-printing. `warmup()` wraps its throwaway synthesis in
+  `contextlib.redirect_stdout(io.StringIO())` to keep it quiet -- but `sys.stdout` is one
+  process-wide object, not per-thread. If that redirect is still active (likely: warm-up takes
+  ~0.2-0.5s, and starts a hair before the main thread reaches `input()`) at the moment `input()`
+  writes its prompt, the prompt text lands in warm-up's throwaway buffer instead of the terminal.
+  `input()`'s stdin read is unaffected by stdout redirection, which is why blind-typing still
+  worked and why every subsequent prompt (warm-up long since finished) was fine.
+  Fix: print the prompt to `sys.__stdout__` (the real stdout stream, captured once at interpreter
+  startup -- `contextlib.redirect_stdout` only ever reassigns `sys.stdout`, never touches this)
+  instead of through `input()`'s own prompt argument, then call bare `input()` to read the line.
+- Files: `chatterbox/cli.py` (free-text loop in `main()`).
+- Why: bug report from real Pi 5 usage (once the earlier FastSpeech2-weights setup issue was
+  cleared) -- this predates this session's GUI/powerd work (same `contextlib.redirect_stdout`
+  pattern existed in the pre-refactor `_warmup_synthesis` closure too) but only actually got
+  exercised/noticed now.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` still 227 passed/1 skipped (no test exercises
+  the free-text interactive loop directly). The fix itself follows directly from documented Python
+  semantics (`sys.__stdout__` is never reassigned by `contextlib.redirect_stdout`/`sys.stdout =
+  ...`), not empirically re-tested against the race on real hardware from this session -- **not
+  re-run on the Pi**, no SSH access.
+- Notes/gotchas: **this fix is on `reorg/phase-0-path-anchoring`, not `master`** -- the Pi that
+  reported this bug is running `master`, which has none of this session's power-daemon/GUI-refactor
+  work and still has the pre-refactor `_warmup_synthesis` closure (same bug, different code shape).
+  This fix needs to reach `master` separately (either a small standalone fix there, or merging this
+  branch) before the Pi actually sees it — flagged to the user, not resolved unilaterally.
+
+---
+
 ## 2026-07-21 — Harden setup_pi.sh's FastSpeech2 weight check (single-sentinel gave a false PASS)
 
 - What: on real Pi 5 hardware, `python3 do_tts.py` (and `--benchmark`) failed at model load with
