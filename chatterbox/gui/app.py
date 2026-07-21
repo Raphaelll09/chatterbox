@@ -343,6 +343,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 
     # Add specified TTS models
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
+
+    # Responsive layout (cc_prompt_gui_refactor.md Phase 1 item 1): column 0 stays a narrow label
+    # column; the button/entry/options-panel columns and the options-panel row (2, the tallest
+    # element) grow with the window instead of staying pinned to the 440x800 default geometry.
+    for _col in range(1, max_buttons + 3):
+        window.grid_columnconfigure(_col, weight=1)
+    window.grid_rowconfigure(2, weight=1)
+
     lbl_TTS_model_selection = tk.Label(master=window, text="TTS :").grid(row=0, column=0, pady = 2)
 
     tts_index = 0
@@ -391,7 +399,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=window, text="Input Text").grid(row=7, column=0, pady = 4)
 
-        ent_text_input.grid(row=7, column=1)
+        ent_text_input.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
         btn_syn_audio.grid(row=7, column=2)
@@ -604,10 +612,9 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     # Create Options Frame with Scrollbar
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
-    frame.grid(row=2, column=0, columnspan=3, sticky='nw')
+    frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)
-    frame.grid_propagate(False)
     canvas = tk.Canvas(frame)
     canvas.grid(row=0, column=0, sticky='news')
     vsb = tk.Scrollbar(frame, orient='vertical', command=canvas.yview)
@@ -729,11 +736,11 @@ def gui_fastspeech2(tts_config, main_panel_config):
         lbl_speed_selection = tk.Label(master=frame_options, text="Liaison Bias:").grid(row=sub_row_index, column=0)
         liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-    # Add scrollbar
+    # Add scrollbar. control_width/control_height are only an initial sizing hint for the canvas
+    # viewport now -- responsive layout (item 1) lets the surrounding frame grow with the window
+    # instead of pinning it via grid_propagate(False).
     frame_options.update_idletasks()
-    width_canvas = main_panel_config["control_width"]
-    height_canvas = main_panel_config["control_height"]
-    frame.config(width=width_canvas + vsb.winfo_width(), height=height_canvas)
+    canvas.config(width=main_panel_config["control_width"], height=main_panel_config["control_height"])
     canvas.config(scrollregion=canvas.bbox("all"))
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
