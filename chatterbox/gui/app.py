@@ -70,6 +70,9 @@ busy = False
 dispatch = None
 nav = None
 
+# Only set (to a real tk.Button) when main_panel_config["add_play_button"] is True.
+btn_replay_audio = None
+
 
 def post(fn):
     """Callable from ANY thread -- queues a widget-safe closure to run on the Tk thread."""
@@ -144,9 +147,43 @@ def on_speak():
 
     busy = True
     _set_ui_state("synthesising")
-    btn_syn_audio.config(state="disabled")
+    _set_action_buttons_state("disabled")
     _power_client.send_activity()
     threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control), daemon=True).start()
+
+
+def on_replay():
+    """REPLAY action handler -- Tk thread. Replays the last synthesized clip via the existing
+    playback path with no re-synthesis. Runs on the same worker/busy-guard machinery as on_speak()
+    -- playback blocks for its real-time duration plus the powerd amp handshake, so it must not run
+    on the Tk thread either (chatterbox_gui_spec_v0.1.md Sec2's "Tk is only ever touched from the
+    Tk thread" applies just as much here as to synthesis). No-op if nothing has been synthesized
+    yet; the button itself stays disabled until then, this is defense in depth for a direct
+    Action.REPLAY dispatch (e.g. a future physical switch)."""
+    global busy
+    if busy or playback.AUDIO_EXAMPLE is None:
+        return
+    busy = True
+    _set_ui_state("playing")
+    _set_action_buttons_state("disabled")
+    _power_client.send_activity()
+    threading.Thread(target=_replay_work, daemon=True).start()
+
+
+def _replay_work():
+    """Worker thread -- NO Tk calls."""
+    try:
+        playback.play_audio()
+    except Exception as exc:  # noqa: BLE001 -- same "never crash the process" rule as _work().
+        post(lambda exc=exc: _fail(exc))
+        return
+    post(_done)
+
+
+def _set_action_buttons_state(tk_state):
+    btn_syn_audio.config(state=tk_state)
+    if btn_replay_audio is not None:
+        btn_replay_audio.config(state=tk_state)
 
 
 def _work(text, tts_idx, voc_idx, gui_control):
@@ -179,6 +216,8 @@ def _done():
     busy = False
     _set_ui_state("idle")
     btn_syn_audio.config(state="normal")
+    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
+        btn_replay_audio.config(state="normal")
 
 
 def _fail(exc):
@@ -187,6 +226,8 @@ def _fail(exc):
     print("[gui] synthesis/playback failed: {}".format(exc), file=sys.stderr)
     _set_ui_state("error", exc)
     btn_syn_audio.config(state="normal")
+    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
+        btn_replay_audio.config(state="normal")
 
 
 def _start_warmup():
@@ -321,6 +362,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global canvas_circle_figure
     global _power_client
     global btn_syn_audio
+    global btn_replay_audio
     global dispatch
     global nav
 
@@ -441,13 +483,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     else:
         index_gst_token = 0
 
-    # Add replay button
+    # Add replay button -- routed through dispatch() (worker thread + busy-guard, same as Speak)
+    # rather than calling playback.play_audio() directly: that used to run on the Tk thread with no
+    # guard, so a click before any synthesis crashed on AUDIO_EXAMPLE being None (uncaught inside a
+    # bare Tk button command), and a click during synthesis could overlap ALSA/amp-handshake calls.
+    # Disabled until on_speak()'s worker actually produces audio (_done()/_fail() re-enable it).
     if main_panel_config["add_play_button"]:
-        btn_replay_audio = tk.Button(
-            master=window,
-            text="Play",
-            command=playback.play_audio
-        ).grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_replay_audio = tk.Button(master=window, text="Play", state="disabled")
+        btn_replay_audio.grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
     # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
@@ -474,10 +517,13 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         nav=nav,
         keyboard_emit_fn=_keyboard_emit,
         back_fn=_back_action,
+        replay_fn=on_replay,
     )
     btn_syn_audio.config(command=lambda: dispatch(ginput.Action.SPEAK))
     if btn_put_away is not None:
         btn_put_away.config(command=lambda: dispatch(ginput.Action.PUT_AWAY))
+    if btn_replay_audio is not None:
+        btn_replay_audio.config(command=lambda: dispatch(ginput.Action.REPLAY))
 
     if gui_config["add_keyboard"]:
         if gui_config["detach_keyboard"]:

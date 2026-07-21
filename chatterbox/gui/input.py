@@ -22,6 +22,7 @@ from enum import Enum, auto
 
 class Action(Enum):
     SPEAK = auto()
+    REPLAY = auto()
     PUT_AWAY = auto()
     NEXT = auto()
     PREV = auto()
@@ -71,18 +72,23 @@ class NavRing:
             configure(highlightthickness=0)
 
 
-def make_dispatcher(activity_fn, speak_fn, put_away_fn, nav, keyboard_emit_fn, back_fn=None):
+def make_dispatcher(activity_fn, speak_fn, put_away_fn, nav, keyboard_emit_fn, back_fn=None,
+                     replay_fn=None):
     """Returns dispatch(action, payload=None), always invoked on the Tk thread. activity_fn is
     called on every dispatch (chatterbox_gui_spec_v0.1.md Sec4.1: "on every dispatch, and on
     synthesis start + playback start" -- the latter two are pinged separately, from the worker
-    wiring in gui/app.py)."""
+    wiring in gui/app.py). replay_fn defaults to a no-op for callers (and tests) that don't wire up
+    the optional replay button."""
     back_fn = back_fn or (lambda: None)
+    replay_fn = replay_fn or (lambda: None)
 
     def dispatch(action, payload=None):
         try:
             activity_fn()
             if action == Action.SPEAK:
                 speak_fn()
+            elif action == Action.REPLAY:
+                replay_fn()
             elif action == Action.PUT_AWAY:
                 put_away_fn()
             elif action == Action.NEXT:
