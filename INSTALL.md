@@ -76,17 +76,35 @@ them, and does **not** touch any of the following, which need a one-time manual 
    `display.backlight` (sysfs node name, or leave as `auto`). Wrong values here degrade safely
    (powerd logs and disables that one piece of hardware control rather than crashing — see
    `docs/power/POWERD.md`), but won't actually control the amp/backlight until corrected.
-3. **EEPROM / `config.txt`** (deliberately not touched by powerd or this script — a boot-config
-   edit has a brick-on-mistake risk the rest of this repo's tooling avoids elsewhere too): keep
-   `POWER_OFF_ON_HALT=0` (the default — DEEP's `systemctl halt` should leave the Pi 5's low-power
-   PMIC domain up so the power button wakes it; `POWER_OFF_ON_HALT=1` is power-cycle-only, no
-   wake). Consider `dtoverlay=disable-wifi`, `dtoverlay=disable-bt`, `arm_freq_min=500` for the
-   idle-power numbers in the spec's autonomy model.
-4. **Start the services** once 1-3 are confirmed:
+3. **Verify the stack manually first** — launch `chatterbox-powerd` and `do_tts.py --gui` in the
+   foreground (not via systemd yet) and work through
+   `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7. This is what actually catches the two
+   silent-failure hardware items (amp SD polarity, backlight sysfs node) before they corrupt every
+   later result — don't skip straight to the kiosk boot below.
+4. **Start the services manually** once you're ready to test them under systemd specifically
+   (T6 of the bring-up protocol needs this):
 
    ```bash
    sudo systemctl start chatterbox-powerd chatterbox-gui
    ```
+
+## Finalizing the kiosk (step 3 — unattended boot)
+
+Once the bring-up protocol above is fully green (including T6/T7, which need the systemd units),
+`scripts/kiosk_finalize.sh` is the one opt-in script that commits the Pi to booting straight into
+the kiosk GUI unattended — disables the console login (`getty@tty1`, which would otherwise race
+with `chatterbox-gui.service` for the same tty), applies the `config.txt`/`cmdline.txt` idle-power
+and boot-quiet tuning (backed up, idempotent — see `docs/kiosk/KIOSK.md` for exactly what and how
+to undo it), and enables+starts both services:
+
+```bash
+cd ~/chatterbox
+bash scripts/kiosk_finalize.sh
+sudo reboot   # once it reports PASS
+```
+
+Full detail, including why EEPROM writes are deliberately excluded (read-only check only) and
+what `scripts/hw_check.py` would have covered if built: `docs/kiosk/KIOSK.md`.
 
 ## Mass deployment: golden image
 

@@ -411,27 +411,45 @@ tick)` responsiveness probe running through a real synthesis+playback call (138 
 77ms across a 5.37s call — direct, quantitative proof the Tk thread never blocked). Neither script
 is checked into `tests/`.
 
+## Kiosk finalization (scripts/kiosk_finalize.sh)
+
+Added 2026-07-21, step 3 of `README_power_gui_workstream.md`'s build sequence — gated on
+`Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passing on real hardware first (they have).
+Compositor decision (open in the workstream README) is finalized: **cage** (Wayland, XWayland for
+Tk), matching `deploy/systemd/chatterbox-gui.service`. `apt-packages-pi.txt` gained `cage`+
+`xwayland`.
+
+`scripts/kiosk_finalize.sh` is the one opt-in script (not part of `setup_pi.sh`'s default run —
+that stays scoped to "get the app runnable") that commits a verified Pi to unattended kiosk boot:
+disables `getty@tty1.service` (since `chatterbox-gui.service`'s `TTYPath=/dev/tty1`+
+`PAMName=login` makes it *become* the tty1 session directly — the standard systemd kiosk pattern,
+which a stock getty on the same tty would otherwise race), tunes `config.txt`/`cmdline.txt`
+(backed up per-file, idempotent per-line append, auto-detecting `/boot/firmware/` vs `/boot/`),
+and enables+starts both systemd units. Deliberately does **not** write EEPROM (`rpi-eeprom-config`
+is read-only-checked, never edited by tooling — same "boot-config edits carry brick risk" posture
+`INSTALL.md` already established for the powerd task). See `docs/kiosk/KIOSK.md`.
+
 ## Not yet implemented
 
 - A from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
   `chatterbox/synth.py`'s `synthesize()` changed to not assume one unconditionally (reading
   `audio_file.AU`, visual smoothing, subtitle timing from `audio_file_duration.npy`) — flagged
   during the Phase 3 reorg, not attempted speculatively; see `docs/REORG_PROPOSAL.md` §5.
-- Real interactive GUI testing (a human dragging/resizing the window during synthesis) and Pi 5
-  hardware verification for the whole 2026-07-20 reorg — no Pi access or interactive display was
-  available while executing it; see `docs/REORG_PROPOSAL.md` §7 for what was verified instead (CLI
-  battery + a timed `--gui` launch reaching `window.mainloop()` with zero tracebacks). The GUI
-  refactor above (2026-07-21) adds a *scripted* responsiveness proof on top of that, which is
-  stronger evidence than before but still not a human interacting with the window.
-- chatterbox-powerd's GPIO/backlight/evdev/systemd/halt behavior on real Pi 5 hardware — implemented
-  per spec, unverified on hardware.
 - The GUI's nav ring / `Action.NEXT`/`PREV`/`SELECT`/`BACK` — implemented and unit-tested, but
   nothing currently drives them interactively: `chatterbox/config/user_prefs.yaml`'s `switches: []`
   is empty (no physical switches wired/configured yet). `Action.KEY` similarly has nothing but the
   existing on-screen keyboard driving it today.
 - The companion `GUI_Power_Controller_Architecture` doc referenced by both the powerd and GUI specs
   is not written.
+- `scripts/hw_check.py`, referenced by `Bring-up_Integration_Test_Protocol_v0.1.md` as optional
+  tooling for its T1/T2 steps — not built; those steps were done manually instead.
+- Wake→interactive boot-time measurement (needs an actual reboot with a stopwatch) to set a
+  real, measured `power.t_deep_s` rather than a placeholder.
 
-Otherwise nothing tracked here — free-text (`--gui` optional), the profiling subsystem, benchmark
-mode, chatterbox-powerd's software, and the GUI refactor above are all implemented. Update this
-section if a future session adds something new and unfinished.
+Otherwise nothing tracked here as unverified — `chatterbox-powerd`'s hardware behavior (GPIO/
+backlight/evdev/halt) and the GUI's non-blocking worker-thread refactor have now both been
+verified on real Pi 5 hardware via `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 (all
+green, per the user), superseding this doc's earlier "unverified on hardware" notes. Free-text
+(`--gui` optional), the profiling subsystem, benchmark mode, chatterbox-powerd, the GUI refactor,
+and kiosk finalization above are all implemented. Update this section if a future session adds
+something new and unfinished.

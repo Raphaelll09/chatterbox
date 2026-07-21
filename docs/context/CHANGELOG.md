@@ -15,6 +15,44 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Kiosk finalization (step 3): cage decided, opt-in unattended-boot script
+
+- What: `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passed on real Pi 5 hardware (per the
+  user) — powerd alone, GUI alone, full integration, reliability/fault-injection, and power
+  measurement all green. That's the gate for step 3 of `README_power_gui_workstream.md`'s build
+  sequence: wrapping the now-known-good stack in an actual unattended kiosk boot.
+  - Compositor decision (previously open in the workstream README): **cage**, confirmed with the
+    user, matching what `deploy/systemd/chatterbox-gui.service` already assumed. Added `cage`+
+    `xwayland` to `apt-packages-pi.txt` (were missing — the unit referenced `/usr/bin/cage` but
+    nothing installed it).
+  - New `scripts/kiosk_finalize.sh`: the one opt-in script (not part of `setup_pi.sh`'s default
+    run) that commits a verified Pi to unattended kiosk boot — read-only EEPROM
+    `POWER_OFF_ON_HALT` check, backed-up/idempotent `config.txt`/`cmdline.txt` tuning
+    (`dtoverlay=disable-wifi/-bt`, `arm_freq_min=500`, quiet-boot tokens), disables
+    `getty@tty1.service` (which would otherwise race `chatterbox-gui.service`'s
+    `TTYPath=/dev/tty1` for the same tty — the standard systemd kiosk pattern), and enables+starts
+    both systemd units. Deliberately never writes EEPROM (same boot-config brick-risk posture
+    already established for the powerd task).
+  - New `docs/kiosk/KIOSK.md` (what each step does + how to undo it); `INSTALL.md` gained a
+    "Finalizing the kiosk" section pointing at it.
+- Files: new `scripts/kiosk_finalize.sh`, `docs/kiosk/KIOSK.md`; modified `apt-packages-pi.txt`,
+  `deploy/systemd/chatterbox-gui.service` (comment only — states cage as decided, not open),
+  `INSTALL.md`, `CLAUDE.md`, `docs/context/ARCHITECTURE.md` (also updated its stale "unverified on
+  hardware" notes for powerd/GUI now that T0-T7 passed).
+- Why: the bring-up protocol's own closing line names this as the explicit next gate once T0-T7
+  are green.
+- Verify: `bash -n scripts/kiosk_finalize.sh` (syntax) + manual review of the idempotent-append
+  logic (exact-line/whole-token matching, backup-before-write, never a blind `sed`/rewrite). Not
+  runnable from this checkout — no `pytest` coverage applies (all bash/systemd/boot-config, same
+  as the powerd task's systemd units) and no SSH access to the Pi this session.
+- Notes/gotchas: **not yet run on the Pi** — the user needs to run `scripts/kiosk_finalize.sh`
+  and reboot to confirm unattended boot actually works before this is considered done end-to-end.
+  Explicitly out of scope (see `docs/kiosk/KIOSK.md`): any EEPROM *write* automation,
+  `scripts/hw_check.py` (T1/T2 tooling, already done manually), and wake→interactive boot-time
+  measurement (needs a real reboot + stopwatch, feeds `power.t_deep_s`).
+
+---
+
 ## 2026-07-21 — Fix the first free-text prompt going invisible (warmup()'s stdout redirect race)
 
 - What: on real Pi 5 hardware, `python3 do_tts.py` (free-text mode) loaded models fine but then
