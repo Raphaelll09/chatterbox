@@ -66,7 +66,8 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
     powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
 - `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
-  `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd").
+  `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd"). `chatterbox-gui.service` runs the
+  GUI under `cage` (finalized kiosk compositor choice — see `docs/kiosk/KIOSK.md`).
 - `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
   - `measurement/benchmark/` — fixed 10-sentence French benchmark set + runner (was `benchmark/`).
   - `measurement/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
@@ -79,6 +80,11 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   `test_synth.py`, `test_gui_{input,worker,settings}.py`.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
+- `scripts/kiosk_finalize.sh` — **opt-in**, run once a Pi has passed
+  `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7: disables `getty@tty1` (which would race
+  `chatterbox-gui.service` for the tty), tunes `config.txt`/`cmdline.txt` (backed up, idempotent),
+  enables+starts both systemd units. Never touches EEPROM beyond a read-only check. Not part of
+  `setup_pi.sh`'s default run. See `docs/kiosk/KIOSK.md`.
 
 ## The synthesis pipeline (4 stages)
 
