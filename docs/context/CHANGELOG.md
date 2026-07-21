@@ -15,6 +15,42 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Harden setup_pi.sh's FastSpeech2 weight check (single-sentinel gave a false PASS)
+
+- What: on real Pi 5 hardware, `python3 do_tts.py` (and `--benchmark`) failed at model load with
+  `FileNotFoundError: assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`, even though
+  `scripts/setup_pi.sh` had reported "pretrained weights present: PASS" earlier. Root cause:
+  `fetch_and_unzip()`'s FastSpeech2 call only ever checked one sentinel file
+  (`output/ckpt/ALL_corpus/390000.pth.tar`) to decide both "skip re-download" and "download
+  succeeded" — but that Drive folder bundles `output/`, `config/`, and `preprocessed_data/`
+  separately, so a `gdown --folder` run that fetched the (large) checkpoint but missed the
+  (small) config/preprocessed_data files still passed the single-sentinel check and reported
+  success, deferring the actual failure to a confusing runtime traceback deep inside
+  `backend.py:load_fastspeech2()` instead of surfacing loudly at setup time.
+  Changed `fetch_and_unzip()` to accept multiple sentinels (all must exist to skip a re-download;
+  all must exist after extraction to report success) and pass it every file
+  `load_fastspeech2()`/`describe_controls()` actually open: the checkpoint, all three
+  `config/ALL_corpus/*.yaml` files, and `preprocessed_data/ALL_corpus/speakers.json`.
+- Files: `scripts/setup_pi.sh`.
+- Why: bug report from the first real `do_tts.py --benchmark` run on Pi 5 hardware (this repo's
+  power daemon / GUI refactor work so far had only been verified on this PC dev checkout).
+- Verify: `bash -n scripts/setup_pi.sh` (syntax) + a standalone bash unit-check of the new
+  multi-sentinel skip/report logic (present/missing/all-present cases) confirmed correct exit
+  codes; `.venv/Scripts/python.exe -m pytest tests/` still 227 passed/1 skipped (unrelated to this
+  bash-only change, run as a sanity check). **Not re-run on the actual Pi** — this session has no
+  SSH access to it.
+- Notes/gotchas: this fixes the check going forward, but does **not** retroactively fix the
+  reporting user's already-partial `~/chatterbox/assets/models/FastSpeech2/` — they need to either
+  delete that directory and re-run `./scripts/setup_pi.sh` (now that the sentinel is stronger, a
+  re-run will correctly detect the incomplete config/ and retry the whole folder download), or
+  manually download the Drive folder per `README.md` and place `config/`/`preprocessed_data/`
+  under `assets/models/FastSpeech2/` themselves. `fetch_and_unzip()` re-downloads the *entire*
+  Drive folder on any missing sentinel (no incremental/partial fetch), so a retry re-pulls the
+  large checkpoint too, not just the missing pieces — acceptable for a one-time setup step, not
+  optimized further since download bandwidth wasn't the bottleneck this was fixing.
+
+---
+
 ## 2026-07-21 — Refactor the Tkinter GUI: worker thread, Tk-free synth(), input dispatcher, settings
 
 - What: per `chatterbox_gui_spec_v0.1.md` §9 (step 2 of `README_power_gui_workstream.md`'s build
