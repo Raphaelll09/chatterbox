@@ -70,6 +70,9 @@ busy = False
 dispatch = None
 nav = None
 
+# Only set (to a real tk.Button) when main_panel_config["add_play_button"] is True.
+btn_replay_audio = None
+
 
 def post(fn):
     """Callable from ANY thread -- queues a widget-safe closure to run on the Tk thread."""
@@ -144,9 +147,43 @@ def on_speak():
 
     busy = True
     _set_ui_state("synthesising")
-    btn_syn_audio.config(state="disabled")
+    _set_action_buttons_state("disabled")
     _power_client.send_activity()
     threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control), daemon=True).start()
+
+
+def on_replay():
+    """REPLAY action handler -- Tk thread. Replays the last synthesized clip via the existing
+    playback path with no re-synthesis. Runs on the same worker/busy-guard machinery as on_speak()
+    -- playback blocks for its real-time duration plus the powerd amp handshake, so it must not run
+    on the Tk thread either (chatterbox_gui_spec_v0.1.md Sec2's "Tk is only ever touched from the
+    Tk thread" applies just as much here as to synthesis). No-op if nothing has been synthesized
+    yet; the button itself stays disabled until then, this is defense in depth for a direct
+    Action.REPLAY dispatch (e.g. a future physical switch)."""
+    global busy
+    if busy or playback.AUDIO_EXAMPLE is None:
+        return
+    busy = True
+    _set_ui_state("playing")
+    _set_action_buttons_state("disabled")
+    _power_client.send_activity()
+    threading.Thread(target=_replay_work, daemon=True).start()
+
+
+def _replay_work():
+    """Worker thread -- NO Tk calls."""
+    try:
+        playback.play_audio()
+    except Exception as exc:  # noqa: BLE001 -- same "never crash the process" rule as _work().
+        post(lambda exc=exc: _fail(exc))
+        return
+    post(_done)
+
+
+def _set_action_buttons_state(tk_state):
+    btn_syn_audio.config(state=tk_state)
+    if btn_replay_audio is not None:
+        btn_replay_audio.config(state=tk_state)
 
 
 def _work(text, tts_idx, voc_idx, gui_control):
@@ -179,6 +216,8 @@ def _done():
     busy = False
     _set_ui_state("idle")
     btn_syn_audio.config(state="normal")
+    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
+        btn_replay_audio.config(state="normal")
 
 
 def _fail(exc):
@@ -187,6 +226,8 @@ def _fail(exc):
     print("[gui] synthesis/playback failed: {}".format(exc), file=sys.stderr)
     _set_ui_state("error", exc)
     btn_syn_audio.config(state="normal")
+    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
+        btn_replay_audio.config(state="normal")
 
 
 def _start_warmup():
@@ -321,6 +362,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global canvas_circle_figure
     global _power_client
     global btn_syn_audio
+    global btn_replay_audio
     global dispatch
     global nav
 
@@ -343,6 +385,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 
     # Add specified TTS models
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
+
+    # Responsive layout (cc_prompt_gui_refactor.md Phase 1 item 1): column 0 stays a narrow label
+    # column; the button/entry/options-panel columns and the options-panel row (2, the tallest
+    # element) grow with the window instead of staying pinned to the 440x800 default geometry.
+    for _col in range(1, max_buttons + 3):
+        window.grid_columnconfigure(_col, weight=1)
+    window.grid_rowconfigure(2, weight=1)
+
     lbl_TTS_model_selection = tk.Label(master=window, text="TTS :").grid(row=0, column=0, pady = 2)
 
     tts_index = 0
@@ -391,7 +441,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=window, text="Input Text").grid(row=7, column=0, pady = 4)
 
-        ent_text_input.grid(row=7, column=1)
+        ent_text_input.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
         btn_syn_audio.grid(row=7, column=2)
@@ -433,13 +483,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     else:
         index_gst_token = 0
 
-    # Add replay button
+    # Add replay button -- routed through dispatch() (worker thread + busy-guard, same as Speak)
+    # rather than calling playback.play_audio() directly: that used to run on the Tk thread with no
+    # guard, so a click before any synthesis crashed on AUDIO_EXAMPLE being None (uncaught inside a
+    # bare Tk button command), and a click during synthesis could overlap ALSA/amp-handshake calls.
+    # Disabled until on_speak()'s worker actually produces audio (_done()/_fail() re-enable it).
     if main_panel_config["add_play_button"]:
-        btn_replay_audio = tk.Button(
-            master=window,
-            text="Play",
-            command=playback.play_audio
-        ).grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_replay_audio = tk.Button(master=window, text="Play", state="disabled")
+        btn_replay_audio.grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
     # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
@@ -466,10 +517,13 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         nav=nav,
         keyboard_emit_fn=_keyboard_emit,
         back_fn=_back_action,
+        replay_fn=on_replay,
     )
     btn_syn_audio.config(command=lambda: dispatch(ginput.Action.SPEAK))
     if btn_put_away is not None:
         btn_put_away.config(command=lambda: dispatch(ginput.Action.PUT_AWAY))
+    if btn_replay_audio is not None:
+        btn_replay_audio.config(command=lambda: dispatch(ginput.Action.REPLAY))
 
     if gui_config["add_keyboard"]:
         if gui_config["detach_keyboard"]:
@@ -477,6 +531,34 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window_keyboard.mainloop()
         else:
             window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input, window, index_gst_token)
+
+            # Portrait-first + landscape reflow (cc_prompt_gui_refactor.md Phase 1 item 2): the
+            # panel's native orientation is portrait (single column, keyboard below the main
+            # controls, as create_keyboard() already grids it) -- maintenance happens in landscape,
+            # where the keyboard moves beside the main controls in a second column instead. Only
+            # re-grids on an actual portrait<->landscape flip (not on every resize pixel).
+            keyboard_portrait_grid = {"row": 17 + index_gst_token, "column": 0, "columnspan": 3,
+                                       "sticky": tk.NSEW}
+            landscape_keyboard_column = max_buttons + 3
+            layout_state = {"is_landscape": None}
+
+            def _on_window_configure(event, _state=layout_state, _kb=window_keyboard,
+                                      _portrait=keyboard_portrait_grid,
+                                      _col=landscape_keyboard_column):
+                landscape = window.winfo_width() > window.winfo_height()
+                if landscape == _state["is_landscape"]:
+                    return
+                _state["is_landscape"] = landscape
+                if landscape:
+                    window.grid_columnconfigure(_col, weight=1)
+                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NSEW)
+                else:
+                    _kb.grid(**_portrait)
+                    window.grid_columnconfigure(_col, weight=0)
+
+            window.bind("<Configure>", _on_window_configure)
+            window.update_idletasks()
+            _on_window_configure(None)
 
     # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
     # it doesn't delay the first paint. Runs on the busy/worker machinery above.
@@ -604,10 +686,9 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     # Create Options Frame with Scrollbar
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
-    frame.grid(row=2, column=0, columnspan=3, sticky='nw')
+    frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)
-    frame.grid_propagate(False)
     canvas = tk.Canvas(frame)
     canvas.grid(row=0, column=0, sticky='news')
     vsb = tk.Scrollbar(frame, orient='vertical', command=canvas.yview)
@@ -729,11 +810,11 @@ def gui_fastspeech2(tts_config, main_panel_config):
         lbl_speed_selection = tk.Label(master=frame_options, text="Liaison Bias:").grid(row=sub_row_index, column=0)
         liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-    # Add scrollbar
+    # Add scrollbar. control_width/control_height are only an initial sizing hint for the canvas
+    # viewport now -- responsive layout (item 1) lets the surrounding frame grow with the window
+    # instead of pinning it via grid_propagate(False).
     frame_options.update_idletasks()
-    width_canvas = main_panel_config["control_width"]
-    height_canvas = main_panel_config["control_height"]
-    frame.config(width=width_canvas + vsb.winfo_width(), height=height_canvas)
+    canvas.config(width=main_panel_config["control_width"], height=main_panel_config["control_height"])
     canvas.config(scrollregion=canvas.bbox("all"))
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
