@@ -17,6 +17,7 @@ import yaml
 import platform
 import tkinter as tk
 import tkinter.font as font
+import tkinter.messagebox as messagebox
 
 # Get the current OS
 current_os = platform.system()
@@ -41,6 +42,7 @@ import chatterbox.audio.playback as playback
 import chatterbox.gui.keyboards as keyboards
 import chatterbox.gui.input as ginput
 import chatterbox.gui.settings as settings
+import chatterbox.gui.i18n as i18n
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
 
@@ -123,7 +125,7 @@ def _set_ui_state(state_name, error=None):
     if canvas_circle is not None:
         update_circle_color(color, canvas_circle, canvas_circle_figure)
     if lbl_status is not None:
-        lbl_status["text"] = "" if error is None else "Erreur : {}".format(error)
+        lbl_status["text"] = "" if error is None else i18n.t("error_label", error=error)
 
 
 def _update_audio_info(result):
@@ -268,6 +270,10 @@ def _toggle_settings():
         settings.open_settings(window)
 
 
+def _show_about():
+    messagebox.showinfo(i18n.t("about_title"), i18n.t("about_body"))
+
+
 def _back_action():
     if settings.is_open():
         settings.close()
@@ -376,6 +382,19 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window.title(main_panel_config['name_window'])
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
 
+    # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres"/"À propos" are wired to the
+    # existing settings dialog / a static about box; "Thème"/"Langue" are visible-but-disabled
+    # stubs -- there's no second theme or locale table to switch to yet (see chatterbox/gui/i18n.py),
+    # so a clickable-but-fake entry would be worse than an honestly-disabled one. This is additive:
+    # the physical "Réglages" button keeps working exactly as before.
+    menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
+    # touchscreen kiosk and would otherwise shift every menu index by one.
+    menubar.add_command(label=i18n.t("menu_settings"), command=lambda: settings.open_settings(window))
+    menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
+    menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
+    menubar.add_command(label=i18n.t("menu_language"), state="disabled")
+    window.config(menu=menubar)
+
     # Power-daemon client: forward user interaction as "activity" (resets powerd's idle clock),
     # receive forwarded switch presses via _handle_power_input(). No-op if powerd isn't reachable.
     _power_client = power_client.get_client()
@@ -394,7 +413,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         window.grid_columnconfigure(_col, weight=1)
     window.grid_rowconfigure(2, weight=1)
 
-    lbl_TTS_model_selection = tk.Label(master=window, text="TTS :").grid(row=0, column=0, pady = 2)
+    lbl_TTS_model_selection = tk.Label(master=window, text=i18n.t("tts_label")).grid(row=0, column=0, pady = 2)
 
     tts_index = 0
     list_tts_buttons = []
@@ -414,7 +433,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             tts_loading_button.invoke()
 
     # Add specified Vocoder Models
-    lbl_vocoder_model_selection = tk.Label(master=window, text="Vocodeur :").grid(row=1, column=0, pady = 2)
+    lbl_vocoder_model_selection = tk.Label(master=window, text=i18n.t("vocoder_label")).grid(row=1, column=0, pady = 2)
     vocoder_index = 0
     list_vocoder_buttons = []
     for vocoder_model in tts_config["vocoder_models"]:
@@ -436,11 +455,11 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 
     btn_syn_audio = tk.Button(
         master=window,
-        text="Synthèse",
+        text=i18n.t("synthesize_button"),
     )
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
-        lbl_text_input = tk.Label(master=window, text="Input Text").grid(row=7, column=0, pady = 4)
+        lbl_text_input = tk.Label(master=window, text=i18n.t("input_text_label")).grid(row=7, column=0, pady = 4)
 
         ent_text_input.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
@@ -450,7 +469,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Add audio infos
     if main_panel_config["add_audio_infos"]:
 
-        lbl_audio_infos_audio_duration = tk.Label(master=window, text="Durée audio : 0.000s")
+        lbl_audio_infos_audio_duration = tk.Label(master=window, text=i18n.t("audio_duration_label", duration=0.0))
         lbl_audio_infos_audio_duration.grid(row=8, column=0, columnspan=max_buttons+2)
 
         # Add a Canvas next to the lbl_audio_infos_audio_duration to draw a circle
@@ -459,13 +478,13 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         # Create a circle on the canvas
         canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill="gray")  # Initial color set to gray
 
-        lbl_audio_infos_tts_duration = tk.Label(master=window, text="Durée TTS : 0.000s | 0% de la durée audio")
+        lbl_audio_infos_tts_duration = tk.Label(master=window, text=i18n.t("tts_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_tts_duration.grid(row=9, column=0, columnspan=max_buttons+2)
-        lbl_audio_infos_vocoder_duration = tk.Label(master=window, text="Durée Vocodeur : 0.000s | 0% de la durée audio")
+        lbl_audio_infos_vocoder_duration = tk.Label(master=window, text=i18n.t("vocoder_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_vocoder_duration.grid(row=10, column=0, columnspan=max_buttons+2)
-        lbl_audio_infos_denoiser_duration = tk.Label(master=window, text="Durée Denoiser : 0.000s | 0% de la durée audio")
+        lbl_audio_infos_denoiser_duration = tk.Label(master=window, text=i18n.t("denoiser_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_denoiser_duration.grid(row=11, column=0, columnspan=max_buttons+2)
-        lbl_audio_infos_synthesis_duration = tk.Label(master=window, text="Durée Totale Synthèse : 0.000s | 0% de la durée audio")
+        lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
 
     # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- always
@@ -476,7 +495,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
         lbl_gst_infos = {}
-        label_gst_title = tk.Label(master=window, text="\nGST weights\n")
+        label_gst_title = tk.Label(master=window, text=i18n.t("gst_weights_title"))
         label_gst_title.grid(row=14, column=0, columnspan=max_buttons+2)
         for index_gst_token, gst_token in enumerate([*tts_config['tts_models'][0]['gst_token_list']]):
             lbl_gst_infos[gst_token] = tk.Label(master=window, text="{}: 0.00".format(gst_token))
@@ -490,7 +509,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # bare Tk button command), and a click during synthesis could overlap ALSA/amp-handshake calls.
     # Disabled until on_speak()'s worker actually produces audio (_done()/_fail() re-enable it).
     if main_panel_config["add_play_button"]:
-        btn_replay_audio = tk.Button(master=window, text="Play", state="disabled")
+        btn_replay_audio = tk.Button(master=window, text=i18n.t("replay_button"), state="disabled")
         btn_replay_audio.grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
@@ -498,12 +517,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # the keyboard regardless of add_play_button/add_GST_infos.
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(master=window, text="Ranger")
+        btn_put_away = tk.Button(master=window, text=i18n.t("put_away_button"))
         btn_put_away.grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
 
     btn_settings = None
     if main_panel_config.get("add_settings_button", True):
-        btn_settings = tk.Button(master=window, text="Réglages", command=_toggle_settings)
+        btn_settings = tk.Button(master=window, text=i18n.t("settings_button"), command=_toggle_settings)
         btn_settings.grid(row=19+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # Action dispatcher + minimal nav ring (chatterbox_gui_spec_v0.1.md Sec3) -- built once every
@@ -570,11 +589,19 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 def update_audio_infos(audio_duration, tts_inference_duration, vocoder_inference_duration, denoiser_inference_duration):
     if main_panel_config["add_audio_infos"]:
         total_inference_duration = tts_inference_duration + vocoder_inference_duration + denoiser_inference_duration
-        lbl_audio_infos_audio_duration["text"] = "Durée audio : {:.3f}s".format(audio_duration)
-        lbl_audio_infos_tts_duration["text"] = "Durée TTS : {:.3f}s | {:.0f}% de la durée audio".format(tts_inference_duration, 100*tts_inference_duration/audio_duration)
-        lbl_audio_infos_vocoder_duration["text"] = "Durée Vocodeur : {:.3f}s | {:.0f}% de la durée audio".format(vocoder_inference_duration, 100*vocoder_inference_duration/audio_duration)
-        lbl_audio_infos_denoiser_duration["text"] = "Durée Denoiser : {:.3f}s | {:.0f}% de la durée audio".format(denoiser_inference_duration, 100*denoiser_inference_duration/audio_duration)
-        lbl_audio_infos_synthesis_duration["text"] = "Durée Totale Synthèse : {:.3f}s | {:.0f}% de la durée audio".format(total_inference_duration, 100*total_inference_duration/audio_duration)
+        lbl_audio_infos_audio_duration["text"] = i18n.t("audio_duration_label", duration=audio_duration)
+        lbl_audio_infos_tts_duration["text"] = i18n.t(
+            "tts_duration_label", duration=tts_inference_duration,
+            percent=100*tts_inference_duration/audio_duration)
+        lbl_audio_infos_vocoder_duration["text"] = i18n.t(
+            "vocoder_duration_label", duration=vocoder_inference_duration,
+            percent=100*vocoder_inference_duration/audio_duration)
+        lbl_audio_infos_denoiser_duration["text"] = i18n.t(
+            "denoiser_duration_label", duration=denoiser_inference_duration,
+            percent=100*denoiser_inference_duration/audio_duration)
+        lbl_audio_infos_synthesis_duration["text"] = i18n.t(
+            "synthesis_duration_label", duration=total_inference_duration,
+            percent=100*total_inference_duration/audio_duration)
 
 def update_GST_infos(GST_weights):
     if main_panel_config["add_GST_infos"]:
@@ -705,7 +732,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     speaker_selection.set(default_args['speaker_id'])
 
     # Speaker radio buttons
-    lbl_speaker_selection = tk.Label(master=frame_options, text="Speaker :").grid(row=sub_row_index, column=0)
+    lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label")).grid(row=sub_row_index, column=0)
     index_speaker = 0
     for speaker in speaker_list:
         tk_radio_button_speaker = tk.Radiobutton(
@@ -726,7 +753,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # Free StyleTag input field
     ent_styleTag_input = tk.Entry(master=frame_options, width=main_panel_config["input_width"])
     if tts_config['gui_styleTag_control']:
-        lbl_styleTag_input = tk.Label(master=frame_options, text="StyleTag :").grid(row=sub_row_index, column=0)
+        lbl_styleTag_input = tk.Label(master=frame_options, text=i18n.t("styletag_label")).grid(row=sub_row_index, column=0)
         ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
         sub_row_index += 1
 
@@ -738,7 +765,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # instead of cluttering the default picker; toggling shows/hides them via grid()/grid_remove()
     # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
     if tts_config['gui_style_control']:
-        lbl_gst_token_selection = tk.Label(master=frame_options, text="Style :")
+        lbl_gst_token_selection = tk.Label(master=frame_options, text=i18n.t("style_label"))
         lbl_gst_token_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
 
         chip_frame = tk.Frame(master=frame_options)
@@ -786,7 +813,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
                         _chip.grid_remove()
 
             btn_advanced_toggle = tk.Checkbutton(
-                master=chip_frame, text="Styles avancés", variable=advanced_visible,
+                master=chip_frame, text=i18n.t("advanced_styles_toggle"), variable=advanced_visible,
                 command=_toggle_advanced_chips,
             )
             btn_advanced_toggle.grid(row=chip_rows_used, column=0, columnspan=_CHIPS_PER_ROW,
@@ -798,28 +825,28 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     # Style Intensity Slider
     style_intensity_slider = tk.Scale(frame_options, from_=0, to=1, orient=tk.HORIZONTAL, resolution=0.05)
-    lbl_style_intensity = tk.Label(master=frame_options, text="Style Intensity:").grid(row=sub_row_index, column=0)
+    lbl_style_intensity = tk.Label(master=frame_options, text=i18n.t("style_intensity_label")).grid(row=sub_row_index, column=0)
     style_intensity_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
     style_intensity_slider.set(default_args['style_intensity'])
     sub_row_index += 1
 
     # Pitch Slider
     pitch_slider = tk.Scale(frame_options, from_=-15, to=15, orient=tk.HORIZONTAL, resolution=1)
-    lbl_pitch_selection = tk.Label(master=frame_options, text="Pitch (semitones):").grid(row=sub_row_index, column=0)
+    lbl_pitch_selection = tk.Label(master=frame_options, text=i18n.t("pitch_label")).grid(row=sub_row_index, column=0)
     pitch_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
     pitch_slider.set(default_args['pitch_control'])
     sub_row_index += 1
 
     # Energy Slider
     energy_slider = tk.Scale(frame_options, from_=-20, to=20, orient=tk.HORIZONTAL, resolution=1)
-    lbl_energy_selection = tk.Label(master=frame_options, text="Energy (dB):").grid(row=sub_row_index, column=0)
+    lbl_energy_selection = tk.Label(master=frame_options, text=i18n.t("energy_label")).grid(row=sub_row_index, column=0)
     energy_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
     energy_slider.set(default_args['energy_control'])
     sub_row_index += 1
 
     # Speed Slider
     speed_slider = tk.Scale(frame_options, from_=0.5, to=1.5, orient=tk.HORIZONTAL, resolution=0.1)
-    lbl_speed_selection = tk.Label(master=frame_options, text="Speed (coef):").grid(row=sub_row_index, column=0)
+    lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_label")).grid(row=sub_row_index, column=0)
     speed_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
     speed_slider.set(default_args['duration_control'])
     sub_row_index += 1
@@ -850,19 +877,19 @@ def gui_fastspeech2(tts_config, main_panel_config):
     sub_row_index += 1
 
     if tts_config['gui_control_bias']:
-        lbl_speed_selection = tk.Label(master=frame_options, text="Pitch Bias (semitones):").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pitch_bias_label")).grid(row=sub_row_index, column=0)
         pitch_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-        lbl_speed_selection = tk.Label(master=frame_options, text="Energy Bias (dB):").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("energy_bias_label")).grid(row=sub_row_index, column=0)
         energy_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-        lbl_speed_selection = tk.Label(master=frame_options, text="Speed Bias (coef):").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_bias_label")).grid(row=sub_row_index, column=0)
         speed_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-        lbl_speed_selection = tk.Label(master=frame_options, text="Pause Bias:").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pause_bias_label")).grid(row=sub_row_index, column=0)
         pause_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
-        lbl_speed_selection = tk.Label(master=frame_options, text="Liaison Bias:").grid(row=sub_row_index, column=0)
+        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("liaison_bias_label")).grid(row=sub_row_index, column=0)
         liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
 
     # Add scrollbar. control_width/control_height are only an initial sizing hint for the canvas
