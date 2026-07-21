@@ -15,6 +15,62 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Refactor the Tkinter GUI: worker thread, Tk-free synth(), input dispatcher, settings
+
+- What: per `chatterbox_gui_spec_v0.1.md` §9 (step 2 of `README_power_gui_workstream.md`'s build
+  sequence, after chatterbox-powerd). Fixed the GUI freezing the whole window for every synthesis
+  (it called `cli.syn_audio()` directly on the Tk thread, with no `try/except`):
+  - Extracted the Tk-free compute path out of `cli.py:syn_audio()` into new `chatterbox/synth.py:
+    synthesize()`; `cli.syn_audio()` (kept for CLI/benchmark, exact same signature/behavior) and
+    the GUI's worker thread both call it now.
+  - `chatterbox/gui/app.py`: synthesis+playback moved to a daemon worker thread
+    (`on_speak()`/`_work()`/`_done()`/`_fail()`), guarded by a `busy` flag and `try/except` around
+    both calls (exceptions now show an "error" UI state instead of reaching Tk's event loop). One
+    `ui_queue`/`post()`/`_pump()` marshaling queue carries both worker results *and*
+    powerd-forwarded switch input (unifying/replacing last session's bespoke
+    `_power_event_queue`).
+  - New `chatterbox/gui/input.py`: `Action` enum + dependency-injected `dispatch()` + a minimal
+    `NavRing` — the Speak button, `<Return>`, and the on-screen keyboard route through it now;
+    powerd-forwarded switch presses (`handle_power_input`'s old logging stub) are now fully wired
+    to real actions.
+  - New `chatterbox/gui/settings.py`: edits `chatterbox/config/user_prefs.yaml`'s power-timer/
+    brightness fields, range-validated, atomic `.tmp`+`os.replace` write, `powerd.reload()` on
+    save. Added `PowerdClient.send_reload()` (`chatterbox/power/client.py` had no reload method
+    yet).
+  - `cli.py`'s warm-up (previously a closure inside `main()`) is now module-level `cli.warmup()`
+    so the GUI can call it too, on startup, through the same busy/worker machinery as real
+    synthesis.
+- Files: new `chatterbox/synth.py`, `chatterbox/gui/{input,settings}.py`, `docs/gui/GUI.md`,
+  `tests/test_synth.py`, `tests/test_gui_{input,worker,settings}.py`; modified `chatterbox/cli.py`
+  (shrunk a lot), `chatterbox/gui/{app,keyboards}.py`, `chatterbox/power/client.py`
+  (+`send_reload`), `chatterbox/config/config_tts.yaml` (+`add_settings_button`), `CLAUDE.md`,
+  `docs/context/ARCHITECTURE.md`.
+- Why: the spec's own audit anchor — a hung/blocking GUI and an unguarded synthesis call are the
+  two things standing between this demonstrator and being trustworthy for unattended/AAC use.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed, 1 skipped (same platform-gated
+  powerd IPC test as before). Unlike the powerd task, this checkout has real pretrained weights, so
+  two manual real-weights checks were actually run (not just written) while building this — see
+  `docs/gui/GUI.md` "Testing" for how to reproduce:
+  1. `chatterbox.synth.synthesize()` called directly (no Tk) against loaded models — correct
+     `AudioResult`, `playback.AUDIO_EXAMPLE` set, matching the pre-refactor pipeline's output shape.
+  2. A scripted `create_gui()` run with a `window.after(50, tick)` counter running throughout a
+     real `dispatch(Action.SPEAK)` (real synthesis + playback, 5.37s total): **138 ticks, max gap
+     0.077s** — direct, quantitative proof the Tk thread never blocked during a real call. Window
+     closed cleanly afterward, no crash.
+- Notes/gotchas: found and fixed one real bug while writing `tests/test_gui_worker.py` — `except
+  Exception as exc: post(lambda: _fail(exc))` referenced `exc` from inside a lambda queued for
+  *later* execution, but Python implicitly `del`s an `except ... as name` binding at the end of the
+  except block, so the lambda raised `NameError` once actually run via `post()`/drain. Fixed with a
+  default-arg capture (`lambda exc=exc: _fail(exc)`) in both spots. Also deviated from the spec's
+  own §2.2 pseudocode, which has a `finally: post(_done)` after the playback `try/except` — taken
+  literally that re-queues `_done` right after `_fail` on the exception path, silently erasing the
+  error state ~30ms after showing it; implemented as mutually-exclusive `_done`/`_fail` posting
+  instead. Not verified on real Pi hardware (this is a PC dev checkout) or with a human physically
+  dragging/resizing the window during synthesis, or with real physical switches (none configured in
+  `user_prefs.yaml` yet) — see `docs/context/ARCHITECTURE.md` "Not yet implemented".
+
+---
+
 ## 2026-07-21 — Implement chatterbox-powerd (kiosk power-state daemon)
 
 - What: built the `chatterbox-powerd` daemon per `chatterbox-powerd_spec_v0.1.md` §9's build task

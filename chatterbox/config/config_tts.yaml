@@ -6,6 +6,7 @@ GUI_config:
     add_GST_infos: False
     add_play_button: False
     add_put_away_button: True  # sends put_away to chatterbox-powerd; no-op if powerd isn't running
+    add_settings_button: True  # opens the power-settings screen (gui/settings.py)
     # width: 800
     width: 440
     height: 800

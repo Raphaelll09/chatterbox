@@ -5,8 +5,8 @@ Created on Thu Jul 21 14:29:50 2022
 
 @author: lengletm
 """
-import chatterbox.cli as cli
 import chatterbox.gui.app as app
+import chatterbox.gui.input as ginput
 
 keys = {
     "Emmanuelle": [
@@ -29,10 +29,9 @@ keys = {
 }
 
 def play_and_clear(args):
-    is_gui=True
-    tts_global_conf=args[0]
-    # ~ cli.syn_audio(is_gui, tts_global_conf)
-    cli.syn_audio(is_gui, tts_global_conf, gui_control=app.get_gui_controls())
+    # args[0] (TTS_CONFIG) is unused now -- SPEAK reads chatterbox.gui.app.TTS_CONFIG itself --
+    # kept in the signature so the keys["Emmanuelle"] table's arg lists don't need reshaping.
+    app.dispatch(ginput.Action.SPEAK)
     args[1].delete(0, 'end')
 
     clear(args[1:3])
