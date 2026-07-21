@@ -73,6 +73,13 @@ tts_models:
     folder: "assets/models/FastSpeech2"
     checkpoint_file: "390000"
     output_location: "output/audio"
+    # Order here is the GST chip grid's display order (dict order, PyYAML/Python 3.7+ preserve
+    # insertion order). NEUTRE sits at index 6 (7th of 12, middle of the 3-row x 4-col chip grid) --
+    # PC-GUI feedback asked for the neutral/default style centered rather than tucked away at its
+    # old index 8. Indices 0-5 (COLERE..ETONNE) are UNCHANGED from before: chatterbox/gui/
+    # keyboards.py's mood-shortcut keys (":D"->3 ENTHOUSIASTE, ":("->1 DESOLE, ":p"->4 ESPIEGLE,
+    # ":O"->5 ETONNE) hardcode those indices and must not shift. default_args.gst_token_index below
+    # was 8 (NEUTRE's old index) -- updated to 6 to keep pointing at NEUTRE, not EVIDENCE.
     gst_token_list: {
         "COLERE": 1.0,
         "DESOLE": 1.0,
@@ -80,9 +87,9 @@ tts_models:
         "ENTHOUSIASTE": 1.0,
         "ESPIEGLE": 1.0,
         "ETONNE": 1.0,
+        "NEUTRE": 1.0,
         "EVIDENCE": 1.0,
         "INCREDULE": 1.0,
-        "NEUTRE": 1.0,
         "PENSIF": 1.0,
         "RECONFORTANT": 1.0,
         "SUPPLIANT": 1.0,
@@ -119,7 +126,7 @@ tts_models:
       pause_control_bias: 0.0
       liaison_control_bias: 0.0
       silence_control_bias: False
-      gst_token_index: 8
+      gst_token_index: 6  # NEUTRE -- was 8 before NEUTRE moved to index 6 in gst_token_list above
       style_intensity: 1.0
       enforce_linking_duration: True
 

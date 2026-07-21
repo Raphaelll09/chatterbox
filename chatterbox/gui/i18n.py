@@ -42,6 +42,7 @@ STRINGS = {
         "synthesis_duration_label": "Durée Totale Synthèse : {duration:.3f}s | {percent:.0f}% de la durée audio",
         "error_label": "Erreur : {error}",
         "gst_weights_title": "\nPoids GST\n",
+        "menu_settings": "Paramètres",
         "menu_about": "À propos",
         "menu_theme": "Thème (bientôt)",
         "menu_language": "Langue (bientôt)",

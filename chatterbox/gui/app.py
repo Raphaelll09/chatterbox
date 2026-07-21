@@ -473,17 +473,16 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window.title(main_panel_config['name_window'])
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
 
-    # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "À propos" is wired to a static about
-    # box; "Thème"/"Langue" are visible-but-disabled stubs -- there's no second theme or locale
-    # table to switch to yet (see chatterbox/gui/i18n.py), so a clickable-but-fake entry would be
-    # worse than an honestly-disabled one.
+    # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres" opens the settings dialog
+    # (the physical "Réglages" button was removed -- PC-GUI feedback: it sat right above the
+    # keyboard area and read as cluttered); "À propos" is last/far right, also per feedback;
+    # "Thème"/"Langue" stay visible-but-disabled stubs -- there's no second theme or locale table
+    # to switch to yet (see chatterbox/gui/i18n.py), so a clickable-but-fake entry would be worse
+    # than an honestly-disabled one.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
-    # No "Paramètres" menu entry: it opened the exact same dialog as the physical "Réglages"
-    # button below (real-hardware bug report -- redundant). The physical button is the one that
-    # has to stay: it's part of the switch-driven NavRing (chatterbox/gui/input.py), which the
-    # menu bar isn't reachable from at all.
-    menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
+    if main_panel_config.get("add_settings_button", True):
+        menubar.add_command(label=i18n.t("menu_settings"), command=_toggle_settings)
     if main_panel_config["add_audio_infos"]:
         # Show/hide the synthesis timing-breakdown labels (real-hardware request: "capacity to
         # hide the synthesis data") -- a menu checkbutton rather than a main-window button so it
@@ -496,6 +495,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                                  command=lambda: _toggle_audio_info_visibility(audio_info_visible))
     menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
     menubar.add_command(label=i18n.t("menu_language"), state="disabled")
+    menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
     window.config(menu=menubar)
 
     # Power-daemon client: forward user interaction as "activity" (resets powerd's idle clock),
@@ -678,15 +678,18 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         btn_put_away = tk.Button(master=window, text=i18n.t("put_away_button"))
         btn_put_away.grid(row=17+index_gst_token, column=0, columnspan=max_buttons+2)
 
-    btn_settings = None
-    if main_panel_config.get("add_settings_button", True):
-        btn_settings = tk.Button(master=window, text=i18n.t("settings_button"), command=_toggle_settings)
-        btn_settings.grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
+    # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
+    # area (row 18, keyboard at 19) and read as cluttered. Moved into the "Paramètres" menu entry
+    # instead (see the app-bar setup near the top of this function). Note: this drops Settings from
+    # the switch-driven NavRing below (menus aren't switch-navigable) -- physical switches aren't
+    # wired/validated on any real deployment yet (user_prefs.yaml's switches: [] is empty by
+    # default), so this trades a currently-theoretical accessibility path for a concrete usability
+    # fix; revisit if physical switches get wired up and Settings needs to be reachable from one.
 
     # Action dispatcher + minimal nav ring (chatterbox_gui_spec_v0.1.md Sec3) -- built once every
     # widget it references exists. Intentionally small (not every model button) per the spec's
     # "do NOT overbuild" scope discipline.
-    nav_widgets = [w for w in (ent_text_input, btn_syn_audio, btn_put_away, btn_settings) if w is not None]
+    nav_widgets = [w for w in (ent_text_input, btn_syn_audio, btn_put_away) if w is not None]
     nav = ginput.NavRing(nav_widgets)
     dispatch = ginput.make_dispatcher(
         activity_fn=_power_client.send_activity,

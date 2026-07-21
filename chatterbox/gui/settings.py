@@ -96,7 +96,9 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
 
     win = tk.Toplevel(parent)
     win.title("Réglages")
-    win.geometry("420x420")
+    # No fixed geometry() -- PC-GUI feedback: the hardcoded 420x420 didn't scale to the actual
+    # content (worse once the "Avancé" model-picker section was added). Tk's default behavior
+    # (no explicit geometry) is to size the window to fit its packed/gridded children exactly.
 
     t_dim_var = tk.IntVar(win, value=power_cfg["t_dim_s"])
     t_dark_var = tk.IntVar(win, value=power_cfg["t_dark_s"])
