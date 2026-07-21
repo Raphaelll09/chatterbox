@@ -15,6 +15,395 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Implement chatterbox-powerd (kiosk power-state daemon)
+
+- What: built the `chatterbox-powerd` daemon per `chatterbox-powerd_spec_v0.1.md` §9's build task
+  — a new `chatterbox/power/` package (FSM, backlight, amp+watchdog, evdev/switch inputs, unix-
+  socket IPC server+client, config loader, `daemon.py` entry point), wired into the existing
+  pipeline at two points: `chatterbox/audio/playback.py`'s `play_audio()` now runs an amp-on→ack→
+  settle+preroll→play→tail→amp-off handshake around the existing platform playback, and
+  `chatterbox/gui/app.py` sends `activity`/`put_away` and receives forwarded switch presses (via a
+  logging-stub `handle_power_input()` — the real dispatcher is a separately specced, not-yet-
+  written component). Both integration points go through one shared `chatterbox.power.client`
+  singleton that degrades to a permanent silent no-op if powerd isn't reachable.
+  Also added: `deploy/systemd/{chatterbox-powerd,chatterbox-gui}.service`, a `scripts/setup_pi.sh`
+  install step (units + socket group, non-fatal if it fails), an `INSTALL.md` section, and
+  `docs/power/POWERD.md` (run/configure/test).
+- Files: new `chatterbox/power/{__init__,config,fsm,backlight,amp,inputs,ipc,client,daemon}.py`,
+  `chatterbox/config/user_prefs.yaml`, `deploy/systemd/*.service`, `docs/power/POWERD.md`,
+  `tests/test_power_{fsm,config,backlight,amp,ipc}.py`; modified `chatterbox/config/paths.py`
+  (+`USER_PREFS_PATH`), `chatterbox/audio/playback.py`, `chatterbox/gui/app.py`,
+  `chatterbox/config/config_tts.yaml` (+`add_put_away_button`), `requirements-pi.txt`
+  (+gpiozero/lgpio/evdev), `scripts/setup_pi.sh`, `INSTALL.md`, `CLAUDE.md`,
+  `docs/context/ARCHITECTURE.md`.
+- Why: `chatterbox-powerd_spec_v0.1.md` — an unattended AAC kiosk needs the display/amp to sleep
+  and the amp to never be left silently drawing power, without adding failure modes to the TTS
+  pipeline itself.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 193 passed, 1 skipped (the one live unix-
+  socket test in `test_power_ipc.py`, `skipif`'d on Windows). Manually confirmed on this Windows
+  checkout: all `chatterbox.power.*` submodules import cleanly with no `gpiozero`/`evdev`
+  installed and degrade to logged no-ops (`amp.Amp._device is None`,
+  `backlight.Backlight.node is None`); `PowerdClient.request_amp()` returns `False` in ~15 ms (not
+  a blocking hang) when powerd isn't running; `playback.play_audio()` end-to-end with a synthetic
+  clip completes with no exception and no added latency versus before this change.
+- Notes/gotchas: **nothing here has been run on real Pi 5 hardware** — GPIO/backlight/evdev/
+  systemd/halt behavior (spec §5/§8/§10) is implemented per spec but entirely unverified; that
+  needs the spec's own §10 test pass on actual hardware (see `docs/context/ARCHITECTURE.md` "Not
+  yet implemented"). Deliberate deviations from the spec's literal text, all flagged in code
+  comments where they land: no real `chatterbox-powerd` console script (this repo has no
+  packaging, so it's `python -m chatterbox.power.daemon`, matching the spec's own systemd
+  `ExecStart`); both systemd units' `ExecStart` was changed from the spec's `/usr/bin/python3` to
+  the venv `scripts/setup_pi.sh` actually creates (`~/chatterbox/venv/bin/python3`) — the bare
+  system interpreter has none of `requirements-pi.txt` installed; the spec's prose "settle 80ms +
+  silence pre-roll"/"tail" are implemented as configurable sleeps
+  (`amp.settle_ms`/`preroll_ms`/`tail_ms` in `user_prefs.yaml`, not in the spec's original YAML
+  schema) rather than literal silence-audio injection; EEPROM/`config.txt` changes are documented
+  in `INSTALL.md` only, never auto-applied (boot-config edits carry a brick-on-mistake risk this
+  repo's tooling avoids elsewhere too); the client does not auto-reconnect after a connection
+  drop (v0.1 scope — restart the GUI/CLI process). The companion `GUI_Power_Controller_Architecture`
+  doc and the switch-press→GUI-action input dispatcher this spec references are not part of this
+  session — `handle_power_input()` in `chatterbox/gui/app.py` is a logging stub for that boundary.
+
+---
+
+## 2026-07-20 — Fix silent --gui override by --benchmark/--p4-sweep, found via Part A verification
+
+- What: running `docs/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
+  --export-xlsx` into one command (rather than the separate commands the protocol actually lists)
+  and got the benchmark, not the GUI, with zero indication `--gui` had been ignored. Root cause:
+  `chatterbox/cli.py`'s mode dispatch is an `if args.benchmark: ... elif args.p4_sweep: ... elif
+  args.gui: ...` chain — pre-existing behavior, unchanged from the original pre-reorg `do_tts.py`,
+  not a reorg regression — but silent, so nothing told the user which mode actually ran.
+  - Added an explicit stderr warning, printed before dispatch, whenever `--gui` is combined with
+    `--benchmark` or `--p4-sweep`: `[do_tts] --gui has no effect together with --benchmark --
+    running --benchmark instead. Launch the interface on its own with \`do_tts.py --gui\`.`
+    Behavior (which mode wins) is unchanged; only the silence is fixed.
+  - Updated `--gui`'s `--help` text to document the precedence.
+  - Added a note to `docs/REORG_VERIFICATION.md` clarifying `--gui`/`--benchmark`/`--p4-sweep` are
+    mutually exclusive top-level modes, not composable flags — run each protocol step as its own
+    separate command.
+- Files: `chatterbox/cli.py`, `docs/REORG_VERIFICATION.md`.
+- Why: confusing, silent flag-precedence behavior that real testing (the exact purpose of Part A)
+  surfaced immediately — worth fixing even though it predates the reorg, since the reorg's own
+  verification protocol is what prompted testing this combination in the first place.
+- Verify: `pytest tests/` — 130 passed (no test covers CLI argument dispatch directly). Manually
+  reproduced the user's exact command (`do_tts.py --gui --benchmark --repeats 1`) — the new
+  warning now prints first, before any model loading, then the benchmark runs exactly as before.
+- Notes/gotchas: this is a UX fix (visibility), not a behavior change — `--benchmark` still wins
+  over `--gui` when both are given, matching the pre-existing, pre-reorg precedence order
+  (`--benchmark` > `--p4-sweep` > `--gui` > free-text). If that precedence itself is ever felt to
+  be wrong (e.g. `--gui` should instead error out, or the flags should be an argparse
+  mutually-exclusive group), that's a separate, larger decision — not made here.
+
+---
+
+## 2026-07-20 — Reorg §4 sign-off: delete graphify-out/ and the two deprecated requirements files
+
+- What: `docs/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather
+  than deciding unilaterally (Phase 4 CHANGELOG entry below); this session brought them back and
+  got answers:
+  - `git rm -r graphify-out/` (this AI-assistant tool's own knowledge-graph cache, a build
+    artifact, not project source) and added `graphify-out/` to `.gitignore` so it doesn't return.
+  - `git rm requirements.txt minimal_requirements.txt` — both fully superseded by
+    `requirements-dev.txt`/`requirements-pi.txt`, kept "for reference" only, now deleted per
+    explicit sign-off. Updated every doc that referenced them as present files: `CLAUDE.md`'s
+    "Install gotchas", `INSTALL.md`'s "Why not the old requirements.txt?" section,
+    `requirements-dev.txt`'s own header comment (also fixed stale `Waveglow/`/`FastSpeech2/` paths
+    in that comment to `assets/models/Waveglow/`/`assets/models/FastSpeech2/`, missed during
+    Phase 1 since it's a comment, not a functional import), and `README.md`'s French install
+    instructions, which were pointing at the now-deleted `requirements.txt` (a real, user-facing
+    break, not just a stale comment).
+  - The `profile/` experiment directories (17 MB, tracked only because of a shallow `.gitignore`
+    rule): decision was to move them to a separate data/results repo, but **that migration is
+    flagged as follow-up work, not executed in this pass** — extracting history and re-pointing
+    anything that reads these paths deserves its own deliberate session, not a drive-by move
+    bundled into this cleanup.
+  - Also fixed a second stale `.gitignore` entry found while touching this file:
+    `profiling/__pycache__/` (from before Phase 2 moved `profiling/` to
+    `tools/monitoring/profiling/`) → `tools/monitoring/profiling/__pycache__/`.
+- Files: `.gitignore`, `CLAUDE.md`, `INSTALL.md`, `README.md`, `requirements-dev.txt`,
+  `docs/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
+  `minimal_requirements.txt`.
+- Why: closing out `docs/REORG_PROPOSAL.md` §4's three explicitly-deferred sign-off items, the
+  last open piece of the reorg plan.
+- Verify: `pytest tests/` — 130 passed (none of these files were imported by code, so this was
+  never expected to affect tests — confirmed anyway).
+- Notes/gotchas: the `profile/` experiment-directory migration is a real, tracked follow-up, not
+  forgotten — see `docs/REORG_PROPOSAL.md` §4's table for the exact decision and reasoning. If you
+  ever need the deleted `requirements.txt`'s training-environment pins, they're recoverable from
+  git history (any commit before this one).
+
+---
+
+## 2026-07-20 — Reorg Phase 4: assets/docs cleanup — the four-phase reorg is functionally complete
+
+- What: Phase 4 of `docs/REORG_PROPOSAL.md`'s migration plan, the last one.
+  - `git mv` the five root demo WAVs (reclassified from delete-candidates to kept reference assets
+    in an earlier review pass) into `assets/audio/reference/`.
+  - `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; updated
+    `chatterbox/config/paths.py`'s `AUDIO_KEYBOARDS_DIR` constant to the new location — no code
+    change needed in `chatterbox/gui/app.py` (the actual home of `play_prerecorded_phone()`,
+    correcting `docs/REORG_PROPOSAL.md`'s original text which said `keyboards.py`), since it
+    already read this path via `paths.py`.
+  - `git mv tts_gui.png docs/assets/tts_gui.png`; updated the README image link.
+  - Created `hardware/.gitkeep` (git doesn't track empty directories).
+  - Full rewrite of `docs/context/ARCHITECTURE.md` (deferred since Phase 0's stale-banner
+    workaround) — every module path, function name, and `profiling/`/`benchmark/`/`FastSpeech2/`
+    reference updated to the post-reorg `chatterbox/`/`tools/`/`assets/models/` layout, technical
+    substance (pipeline stages, control-tag mini-language, profiling/benchmark design) preserved
+    unchanged. `README.md`'s path-bearing lines fixed the same way (Google Drive install targets,
+    profiling/benchmark module paths, the image link). `CLAUDE.md` needed no further changes
+    (already rewritten in Phase 3, verified still accurate). `INSTALL.md` needed no changes at all
+    — it never hardcoded the paths that moved.
+  - Brought the three items `docs/REORG_PROPOSAL.md` §4 flagged but didn't resolve
+    (`graphify-out/`, the `profile/` experiment directories, the two deprecated requirements files)
+    back to the user for an explicit keep/delete decision rather than deciding unilaterally.
+- Files: `assets/audio/{reference,prompts}/` (new, via `git mv`), `chatterbox/config/paths.py`,
+  `docs/assets/tts_gui.png` (new, via `git mv`), `hardware/.gitkeep` (new),
+  `docs/context/ARCHITECTURE.md`, `README.md`, `docs/REORG_PROPOSAL.md`.
+- Why: `docs/REORG_PROPOSAL.md` Phase 4 (Goal 1: 30-second clarity) — the last phase of the
+  four-phase reorg plan.
+- Verify: `pytest tests/` — 130 passed. Confirmed `paths.AUDIO_KEYBOARDS_DIR` resolves to the new
+  location and a sample phoneme WAV exists there. Real end-to-end synthesis smoke test on Windows,
+  unchanged from Phase 3.
+- Notes/gotchas: **the reorg described across all four phases is now functionally complete**, but
+  two things remain genuinely unverified because no session on this machine could ever check them:
+  real interactive GUI testing (only a non-interactive, no-display `--gui` launch was possible —
+  see the Phase 3 entry) and Pi 5 hardware verification (no Pi access at any point across all four
+  phases). Treat the whole reorg as implemented and Windows-verified, not field-verified, until a
+  real Pi 5 run happens — this is explicitly called out in `docs/REORG_PROPOSAL.md` §7 as the one
+  verification step that can't be waived.
+
+---
+
+## 2026-07-20 — Reorg Phase 3: chatterbox/ package, class-based Synthesizer, GUI leak fix
+
+- What: Phase 3 of `docs/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
+  real behavioral refactor (module-level globals → class-owned state), not just file relocation,
+  executed in full (not scoped down) despite touching the Tkinter GUI code this session has no way
+  to test interactively (no display) — an explicit, disclosed risk tradeoff, not an oversight.
+  1. **New `chatterbox/` package.** `chatterbox/synthesis/base.py` defines two ABCs, `Synthesizer`
+     (acoustic model) and `VocoderBackend` (vocoder) — two, not one as originally sketched, because
+     `config_tts.yaml`'s `tts_models`/`vocoder_models` are independently selectable today (the
+     GUI's separate TTS/Vocoder buttons) and a single bundled `load()` would break that.
+     `chatterbox/synthesis/registry.py` exposes `BACKEND`, a singleton
+     `FastSpeech2HifiGanBackend` instance.
+  2. **`loading_modules.py` + `synthesis_modules.py` → `backend.py` + `text_pipeline.py`.**
+     `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s `FastSpeech2HifiGanBackend`
+     class owns `tts_model`/`configs`/`flaubert_model`/`flaubert_tokenizer`/`vocoder_model`/
+     `generator`/`h`/`vocoder_path` as instance attributes instead of module globals, but keeps its
+     pre-Phase-3 method names (`load_fastspeech2`, `syn_hifigan`, etc.) so `config_tts.yaml`'s
+     string-based dispatch needs zero changes. Does **not** literally subclass either ABC (Python
+     can't have one class implement two same-named `load()` methods with different signatures) —
+     the ABCs are the target shape for a future from-scratch backend (Matcha-TTS), documented in
+     `base.py`'s own docstring. `text_pipeline.py` turned out not to be purely stateless as
+     originally planned: `preprocess_styleTag()` needs the loaded FlauBERT model, and
+     `parse_params_from_text()` was **re-reading `preprocess.yaml` from disk on every
+     `<SPEAKER=name>` tag** instead of reusing the already-loaded config — the same leak
+     `gui_utils.py:355` had for the GUI's speaker list, undiscovered until this file was read in
+     full. Fixed identically in both places: pass the loaded config/model state in as explicit
+     parameters instead of re-fetching it.
+  3. **`audio_utils.py` → four files.** `chatterbox/audio/playback.py` (`play_audio()` +
+     `AUDIO_EXAMPLE`, kept as a module attribute rather than eliminated since the GUI's "Play"
+     button is a zero-argument Tkinter callback), `chatterbox/audio/denoise.py` (the inline
+     `nr.reduce_noise()` call, now a real function), `chatterbox/synthesis/subtitles.py` (the five
+     subtitle/alignment functions, unchanged), `chatterbox/cli.py` (`syn_audio()` orchestration +
+     `butter_lowpass_filter()`).
+  4. **`gui_utils.py` → `chatterbox/gui/app.py`, `keyboards.py` → `chatterbox/gui/keyboards.py`,
+     `tts_utils.py` → `chatterbox/state.py`, `audio_postprocess.py` →
+     `chatterbox/synthesis/audio_postprocess.py`.** `gui_utils.py:355`'s leak (see point 2) is
+     closed: `gui_fastspeech2()` now calls `registry.BACKEND.describe_controls()["speaker_list"]`
+     instead of re-parsing YAML.
+  5. **`do_tts.py` → `chatterbox/cli.py` + a 3-line root shim.** All argparse/dispatch logic now
+     lives in `chatterbox/cli.py:main()`; the CLI contract (every flag) is unchanged.
+  6. **`config_tts.yaml`, the three regex-rule CSVs, and `paths.py` itself** moved into
+     `chatterbox/config/` (paths.py) and `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`
+     (CSVs).
+  7. `git rm do_normalize_txt.pl` (confirmed dead, see the Phase 1 entry below / `docs/
+     REORG_PROPOSAL.md` Sec4).
+  8. Preventive fix before the big refactor started: `gui_utils.py`'s
+     `os.path.join("audio_keyboards", ...)` hardcode now routes through a new
+     `paths.AUDIO_KEYBOARDS_DIR`.
+  - **Two more gaps found while executing this phase, same failure classes as Phases 1-2:**
+    - `paths.py`'s own `ROOT = Path(__file__).resolve().parent` broke the moment `paths.py` moved
+      into `chatterbox/config/` (two levels deeper) — caught immediately after the `git mv`, before
+      it could break anything downstream, and fixed: `ROOT = Path(__file__).resolve().parents[2]`.
+    - Phase 2 left six stale `-m benchmark.*` / `import audio_utils` references in
+      `tools/measurement/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings/comments/error
+      messages, plus a stale monkeypatch target (`runner.audio_utils`) in `tests/test_benchmark.py`
+      — missed because Phase 2's cleanup checked for `-m profiling.*` patterns but not
+      `-m benchmark.*`. Found via a repo-wide grep sweep done specifically because this session was
+      asked to close out remaining Phase 2 concerns before starting Phase 3.
+- Files: new `chatterbox/` package (synthesis/{base,registry}.py,
+  synthesis/backends/fastspeech2_hifigan/{backend,text_pipeline}.py, audio/{playback,denoise}.py,
+  synthesis/{subtitles,audio_postprocess}.py, gui/{app,keyboards}.py, state.py, cli.py,
+  config/{paths,config_tts.yaml}.py, synthesis/backends/fastspeech2_hifigan/rules/*.csv); removed
+  `loading_modules.py`, `synthesis_modules.py`, `audio_utils.py`, `gui_utils.py`, `keyboards.py`,
+  `tts_utils.py`, `audio_postprocess.py`, `do_normalize_txt.pl`; `do_tts.py` reduced to a 3-line
+  shim; `tools/measurement/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
+  `tests/{test_benchmark,test_audio_postprocess,conftest}.py` updated for the new import paths.
+- Why: `docs/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
+  GUI) — the interface boundaries §5 called for, plus closing out the config-reopening leaks found
+  while implementing them.
+- Verify: `pytest tests/` — 130 passed (the `SyntaxWarning`s from `synthesis_modules.py`'s non-raw
+  regex escapes are also gone, an incidental behavior-neutral cleanup from rewriting that file with
+  raw strings). Real end-to-end runs on Windows against the fully refactored backend: plain
+  synthesis, `--benchmark --repeats 1 --export-xlsx` (benchmark → profiling → join → xlsx export in
+  one pass), and a timed `--gui` launch — no display to see it, but the entire GUI creation path
+  (model loading via the GUI buttons, the `describe_controls()`-based speaker list, every slider/
+  radio-button widget, the on-screen keyboard) ran with zero tracebacks and reached
+  `window.mainloop()`, blocking as expected until the timeout killed it.
+- Notes/gotchas: this is the strongest GUI confirmation available without an interactive display,
+  but **not equivalent to actually clicking through it** — real interactive GUI testing is still
+  owed, on top of the standing no-Pi-5-access caveat from Phases 0-2. See `docs/REORG_PROPOSAL.md`
+  Sec5 for the two design deviations (two ABCs not one; text_pipeline.py needing model state) in
+  full, and Sec7/Phase 3 for the complete checklist. One known remaining gap, not yet fixed: a
+  from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
+  `chatterbox/cli.py`'s `syn_audio()` changed to not assume one unconditionally — flagged as future
+  work for whenever a second backend actually lands.
+
+---
+
+## 2026-07-20 — Reorg Phase 2: move benchmark/profiling into tools/, plus fixing Phase 1's open follow-up
+
+- What: Two pieces of work.
+  1. Closed the one open follow-up from Phase 1 (gitignored FastSpeech2 config YAMLs hardcoding
+     `"FastSpeech2/…"` paths): `loading_modules.py` gained
+     `_repoint_legacy_fastspeech2_config_paths()`, called right after `preprocess_config`/
+     `train_config` load in `load_fastspeech2()`. It rewrites `preprocessed_path`/
+     `output_syn_path`/`ckpt_path` in memory to `ROOT/assets/models/<value>` whenever the value
+     still carries the legacy `"FastSpeech2/"` prefix — fixes this for a fresh
+     `scripts/setup_pi.sh` download, a manual install, and this checkout alike, with no YAML
+     hand-editing needed. Chosen over patching `setup_pi.sh` with a `sed` step because that would
+     only cover the Pi provisioning path, not a manual install following the same README
+     instructions.
+  2. Phase 2 of `docs/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
+     tools/measurement/benchmark/`, `git mv profiling/ tools/monitoring/profiling/`, `git mv
+     pmic_calibrate.py tools/measurement/`. Added `tools/__init__.py`,
+     `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`. Updated every
+     `import`/`from` reference to the new dotted paths across `do_tts.py`, `audio_utils.py`,
+     `synthesis_modules.py`, the moved packages' own cross-imports, and all four
+     `tests/test_*.py` files that import them (existing aliases like `as profiling`/`as p4` kept,
+     so only import lines changed).
+  3. Found and fixed a second gap of the exact same class as Phase 1's (a directory-depth
+     assumption baked into a path constant, broken by nesting the directory deeper):
+     `tools/monitoring/profiling/__init__.py`'s `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(
+     os.path.abspath(__file__)))` assumed `profiling/` sat exactly one level under the repo root.
+     Nesting it three levels deep silently broke the `subprocess.Popen(cwd=_PACKAGE_ROOT, ...)`
+     call that launches the background sampler. Fixed: `_PACKAGE_ROOT = str(paths.ROOT)`.
+- Files: `loading_modules.py`; `do_tts.py`, `audio_utils.py`, `synthesis_modules.py`; the `git mv`
+  of `benchmark/` → `tools/measurement/benchmark/` and `profiling/` → `tools/monitoring/profiling/`
+  and `pmic_calibrate.py` → `tools/measurement/pmic_calibrate.py`; new `tools/__init__.py`,
+  `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`; the moved packages' own
+  cross-imports and self-referential usage strings; `tests/test_benchmark.py`,
+  `tests/test_p4_sweep.py`, `tests/test_export_xlsx.py`, `tests/test_profiling.py`;
+  `docs/REORG_PROPOSAL.md`.
+- Why: `docs/REORG_PROPOSAL.md` Phase 2 (Goal 4, monitoring isolated as maintenance-only); the
+  config-path fix closes the one thing Phase 1 explicitly left unresolved.
+- Verify: `pytest tests/` — 130 passed. Re-verified the config-path fix by reverting the local
+  YAMLs to their original stale, as-downloaded content and re-running a synthesis — confirmed the
+  in-memory remap (not a lingering hand-edit) does the work. Exercised every Phase 2 code path
+  directly: plain synthesis, `--profile` (a real `tools.monitoring.profiling` run directory was
+  written with correct `per_sentence.jsonl`), `--benchmark --repeats 1` (all 11 sentences),
+  `--join`, and `--export-xlsx` (the trickiest cross-import, `profiling.join` →
+  `benchmark.export_to_xlsx`) — all succeeded. Deleted the test-generated `profile/run_*`
+  directories afterward rather than leaving them in the tree.
+- Notes/gotchas: no Pi 5 hardware access this round — the sampler subprocess launch string is the
+  one Phase 2 change Windows genuinely cannot exercise (the sampler no-ops off-Linux before
+  reaching that code), so it's the highest-risk item to merge blind, per
+  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. Flagging the general pattern for Phase 3
+  (nests files even deeper, under `chatterbox/synthesis/backends/fastspeech2_hifigan/...`): grep
+  for other `dirname(dirname(...))`/`Path(__file__).parents[N]`-style constants across the whole
+  tree before executing it, not just in the files being moved that phase — this is the second time
+  a directory move has broken one.
+
+---
+
+## 2026-07-20 — Reorg Phase 1: move vendored model repos + weights under `assets/models/`
+
+- What: Phase 1 of `docs/REORG_PROPOSAL.md`'s migration plan.
+  - `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/` — all four vendored
+    dirs, including their gitignored weight files (~3.7 GB: FlauBERT `pytorch_model.bin`,
+    Waveglow's `waveglow_NEB.pt`, HiFi-GAN's `g_00570000`), which the directory rename carried
+    along automatically (confirmed present at the new paths after the move).
+  - Re-pointed `config_tts.yaml`'s `folder` values (both TTS/vocoder entries and the
+    commented-out Waveglow one), `scripts/setup_pi.sh`'s `fetch_and_unzip` targets/sentinels,
+    `paths.py`'s vendored-dir + FlauBERT constants, and `.gitignore`'s FastSpeech2/hifi-gan-master/
+    Waveglow/flaubert patterns to the new `assets/models/…` prefix.
+  - Found and fixed two gaps only visible by actually running the pipeline post-move (not caught
+    by the original static-analysis audit):
+    1. `synthesis_modules.py` had a fourth CWD-relative `sys.path.insert(1,
+       './Waveglow/tacotron2')` that Phase 0's checklist missed (it only named the three inserts
+       in `loading_modules.py`). Post-move this broke `pytest tests/` collection with
+       `ModuleNotFoundError: No module named 'audio_processing'` — the exact "same-named modules
+       / sys.path insertion order" fragility already flagged in the proposal's §6, tripped for
+       real. Fixed: routed through `paths.WAVEGLOW_DIR / "tacotron2"`.
+    2. `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
+       (`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each
+       hardcode a literal `"FastSpeech2/…"` string, read as CWD-relative by
+       `FastSpeech2/model/modules.py` / `utils/model.py`. These YAMLs are **gitignored**
+       (downloaded from the Google Drive archives in `README.md`, never committed) — patched on
+       this checkout only, to unblock verification. **Not a real fix**: a fresh
+       `scripts/setup_pi.sh` run re-downloads the same stale-path archive and will hit this again.
+       Left as an open follow-up in `docs/REORG_PROPOSAL.md` §6 (needs a decision: patch
+       `scripts/setup_pi.sh` to `sed` these keys post-unzip, or make the FastSpeech2 code resolve
+       them relative to `paths.FASTSPEECH2_DIR` instead of trusting them as full paths).
+- Files: `paths.py`, `synthesis_modules.py`, `config_tts.yaml`, `scripts/setup_pi.sh`,
+  `.gitignore`, plus the `git mv` of `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/`
+  into `assets/models/`. (Also two gitignored, untracked local edits — see above — that do not
+  show up in `git status` and are not part of this commit.)
+- Why: `docs/REORG_PROPOSAL.md` Phase 1 — code vs. non-code separation (Goal 5), lowest
+  coupling-risk directory move in the reorg.
+- Verify: `pytest tests/` — 130 passed (after fix 1). Real end-to-end smoke test on this Windows
+  checkout (after fix 2): FlauBERT, FastSpeech2 (`assets/models/FastSpeech2/390000`), and HiFi-GAN
+  (`assets/models/hifi-gan-master/FR_V2/g_00570000`) all loaded via the moved paths;
+  `audio_file.wav` produced with normal per-stage timing.
+- Notes/gotchas: no Pi 5 hardware access this round — Windows-verified only, per
+  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. The config-YAML issue (gap 2 above) is the
+  one item in this phase that isn't actually resolved yet, just worked around locally — flag it
+  before Phase 4 closes the reorg out, since it will bite a fresh Pi provisioning run exactly the
+  same way it bit this one.
+
+---
+
+## 2026-07-20 — Reorg Phase 0: repo-root-anchored path resolution (`paths.py`)
+
+- What: Phase 0 of `docs/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
+  directory moves. Added a temporary root-level `paths.py` module (`ROOT =
+  Path(__file__).resolve().parent`, i.e. anchored to the file's own location, not the process's
+  CWD) and routed every CWD-relative path through it:
+  - `loading_modules.py`'s three `sys.path.insert(1, "./FastSpeech2")` / `"./hifi-gan-master"` /
+    `"./Waveglow"` calls now use `paths.FASTSPEECH2_DIR` / `paths.HIFIGAN_DIR` /
+    `paths.WAVEGLOW_DIR`.
+  - `synthesis_modules.py`'s three regex-rule file constants (`regex_file`,
+    `symbols_regex_file`, `url_regex_file`) now resolve via `paths.CUSTOM_REGEX_RULES` /
+    `paths.SYMBOLS_REGEX_RULES` / `paths.URL_REGEX_RULES` instead of bare CWD-relative filenames.
+  - `FastSpeech2/utils/model.py`'s hardcoded `modelname = './flaubert/flaubert_large_cased'`
+    (bypassed `config_tts.yaml` entirely, CWD-relative) now uses `paths.FLAUBERT_DIR`.
+  No directories moved yet — this phase only changes how existing paths are computed, so
+  `do_tts.py` still must be run with the repo as the working directory today; the payoff is that
+  Phase 1+'s directory moves become a matter of updating `paths.py`'s constants instead of hunting
+  down scattered CWD-relative strings.
+- Files: `paths.py` (new), `loading_modules.py`, `synthesis_modules.py`,
+  `FastSpeech2/utils/model.py`.
+- Why: `docs/REORG_PROPOSAL.md` §6 flagged CWD-relative `sys.path.insert` as the highest-risk item
+  in the whole reorg — every subsequent phase that moves `FastSpeech2/`, `hifi-gan-master/`,
+  `Waveglow/`, `flaubert/`, or the regex-rule CSVs would silently break without this fix landing
+  first.
+- Verify: `pytest tests/` (130 passed, unchanged). Real end-to-end smoke test on this Windows
+  checkout (real weights present locally): `printf 'Bonjour, ceci est un test.\n' | python
+  do_tts.py` — FlauBERT, FastSpeech2 (`390000`), and HiFi-GAN (`FR_V2/g_00570000`) all loaded via
+  the new anchored paths, text normalization (which reads the regex-rule CSVs) ran correctly, and
+  `audio_file.wav` was produced with normal timing (TTS 0.291s / vocoder 0.507s / denoise 0.117s
+  for the one sentence).
+- Notes/gotchas: no Pi 5 hardware access for this session, so this phase is **Windows-verified,
+  Pi-unverified** — real hardware validation is still needed before this is considered fully safe,
+  per `docs/REORG_PROPOSAL.md`'s note on the retired "Pi-mandatory" amendment. `paths.py` is
+  intentionally a temporary root-level module (not yet under a `chatterbox/` package, which doesn't
+  exist until Phase 3) — see the proposal doc for the full phased plan.
+
+---
+
 ## 2026-07-17 — Compare the two full P4 sweeps: reproducible P_idle, thermal-dependent k
 
 - What: ran a full 6-point P4 sweep twice back-to-back on real Pi 5 hardware

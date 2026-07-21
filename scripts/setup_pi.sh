@@ -33,6 +33,7 @@ STEP_PIP_OK=0
 STEP_WEIGHTS_OK=0
 STEP_SMOKE_TORCH_OK=0
 STEP_SMOKE_SYNTH_OK=0
+STEP_POWERD_OK=0
 
 echo "== Chatterbox Pi5 provisioning =="
 echo "Working root: $WORKING_ROOT"
@@ -42,7 +43,7 @@ echo
 # ---------------------------------------------------------------------------
 # 1. System (apt) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [1/7] Installing apt packages from apt-packages-pi.txt"
+echo "-- [1/8] Installing apt packages from apt-packages-pi.txt"
 APT_LIST_FILE="$WORKING_ROOT/apt-packages-pi.txt"
 if [[ ! -f "$APT_LIST_FILE" ]]; then
     echo "ERROR: $APT_LIST_FILE not found." >&2
@@ -58,7 +59,7 @@ echo
 # ---------------------------------------------------------------------------
 # 2. Python venv.
 # ---------------------------------------------------------------------------
-echo "-- [2/7] Creating/reusing venv at $VENV_DIR"
+echo "-- [2/8] Creating/reusing venv at $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"
 if [[ -f "$VENV_DIR/bin/activate" ]]; then
     echo "   venv already exists, reusing it."
@@ -73,7 +74,7 @@ echo
 # ---------------------------------------------------------------------------
 # 3. Python (pip) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [3/7] Installing requirements-pi.txt"
+echo "-- [3/8] Installing requirements-pi.txt"
 pip install --upgrade pip
 pip install -r "$WORKING_ROOT/requirements-pi.txt"
 STEP_PIP_OK=1
@@ -88,7 +89,7 @@ echo
 # demo. Link left below as a comment for anyone who wants it manually.
 #   Waveglow: https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing
 # ---------------------------------------------------------------------------
-echo "-- [4/7] Downloading pretrained weights"
+echo "-- [4/8] Downloading pretrained weights"
 pip install --quiet gdown
 
 # fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file>
@@ -149,18 +150,18 @@ fetch_and_unzip() {
 WEIGHTS_OK=1
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing" \
-    "$WORKING_ROOT/FastSpeech2" \
-    "$WORKING_ROOT/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/FastSpeech2" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased" \
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing" \
-    "$WORKING_ROOT/hifi-gan-master" \
-    "$WORKING_ROOT/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/hifi-gan-master" \
+    "$WORKING_ROOT/assets/models/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
 
 STEP_WEIGHTS_OK=$WEIGHTS_OK
 echo
@@ -168,7 +169,7 @@ echo
 # ---------------------------------------------------------------------------
 # 5. Smoke test: torch CPU sanity.
 # ---------------------------------------------------------------------------
-echo "-- [5/7] Smoke test: torch CPU tensor ops"
+echo "-- [5/8] Smoke test: torch CPU tensor ops"
 if python3 - <<'PYEOF'
 import torch
 a = torch.randn(4, 4)
@@ -188,7 +189,7 @@ echo
 # ---------------------------------------------------------------------------
 # 6. Smoke test: end-to-end synthesis (best-effort — only if weights are present).
 # ---------------------------------------------------------------------------
-echo "-- [6/7] Smoke test: end-to-end synthesis (best-effort)"
+echo "-- [6/8] Smoke test: end-to-end synthesis (best-effort)"
 if [[ "$STEP_WEIGHTS_OK" -eq 1 ]]; then
     (
         cd "$WORKING_ROOT"
@@ -210,12 +211,54 @@ echo
 # ---------------------------------------------------------------------------
 # 7. Lock file.
 # ---------------------------------------------------------------------------
-echo "-- [7/7] Writing lock file"
+echo "-- [7/8] Writing lock file"
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 ]]; then
     pip freeze > "$LOCK_FILE"
     echo "   Wrote $LOCK_FILE"
 else
     echo "   [skip] earlier required step failed, not writing lock file." >&2
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 8. chatterbox-powerd systemd units (chatterbox-powerd_spec_v0.1.md Sec8/Sec9.5).
+#
+# Non-fatal if any part of this fails (matches the weights/synth-smoke-test steps above) --
+# powerd is an optional appliance-mode feature, not required for `do_tts.py` itself to work.
+# Deliberately does NOT touch EEPROM/config.txt (POWER_OFF_ON_HALT, dtoverlay=disable-wifi/-bt,
+# arm_freq_min) -- those are boot-config edits with a brick-on-mistake risk this script avoids
+# elsewhere too; see INSTALL.md "chatterbox-powerd" for the manual steps.
+# ---------------------------------------------------------------------------
+echo "-- [8/8] Installing chatterbox-powerd systemd units"
+UNIT_SRC_DIR="$WORKING_ROOT/deploy/systemd"
+POWERD_GROUP="chatterbox"
+INSTALL_USER="${SUDO_USER:-$USER}"
+
+if [[ -f "$UNIT_SRC_DIR/chatterbox-powerd.service" && -f "$UNIT_SRC_DIR/chatterbox-gui.service" ]]; then
+    if sudo cp "$UNIT_SRC_DIR/chatterbox-powerd.service" "$UNIT_SRC_DIR/chatterbox-gui.service" \
+            /etc/systemd/system/ \
+        && sudo groupadd -f "$POWERD_GROUP" \
+        && sudo usermod -aG "$POWERD_GROUP" "$INSTALL_USER" \
+        && sudo systemctl daemon-reload \
+        && sudo systemctl enable chatterbox-powerd.service chatterbox-gui.service
+    then
+        echo "   Installed and enabled chatterbox-powerd.service + chatterbox-gui.service (not started)."
+        echo "   Added '$INSTALL_USER' to the '$POWERD_GROUP' group (log out/in, or reboot, for it to take effect)."
+        echo "   NOTE: both units reference /home/gerantos/chatterbox by default -- edit"
+        echo "         /etc/systemd/system/chatterbox-{powerd,gui}.service if your user/clone path differs,"
+        echo "         then \`sudo systemctl daemon-reload\`."
+        echo "   NOT done automatically (see INSTALL.md \"chatterbox-powerd\" for the manual steps):"
+        echo "     - EEPROM/config.txt: keep POWER_OFF_ON_HALT=0; consider dtoverlay=disable-wifi,"
+        echo "       dtoverlay=disable-bt, arm_freq_min=500."
+        echo "     - Confirm amp SD-pin polarity and the backlight sysfs node against real hardware"
+        echo "       (chatterbox/config/user_prefs.yaml: amp.sd_pin / amp.enable_active_high / display.backlight)."
+        echo "     - Start the services when ready: sudo systemctl start chatterbox-powerd chatterbox-gui"
+        STEP_POWERD_OK=1
+    else
+        echo "   WARNING: systemd unit install failed partway through -- see errors above." >&2
+    fi
+else
+    echo "   WARNING: $UNIT_SRC_DIR/*.service not found -- skipping (repo checkout out of sync?)." >&2
 fi
 echo
 
@@ -229,6 +272,7 @@ printf '%-45s %s\n' "pip install -r requirements-pi.txt:" "$([[ $STEP_PIP_OK -eq
 printf '%-45s %s\n' "pretrained weights present:"     "$([[ $STEP_WEIGHTS_OK -eq 1 ]] && echo PASS || echo "FAIL (see warnings above)")"
 printf '%-45s %s\n' "torch CPU smoke test:"            "$([[ $STEP_SMOKE_TORCH_OK -eq 1 ]] && echo PASS || echo FAIL)"
 printf '%-45s %s\n' "end-to-end synthesis smoke test:" "$([[ $STEP_SMOKE_SYNTH_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal)")"
+printf '%-45s %s\n' "chatterbox-powerd systemd units:"  "$([[ $STEP_POWERD_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
 
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "$STEP_SMOKE_TORCH_OK" -eq 1 ]]; then
     echo
@@ -236,6 +280,8 @@ if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "
     echo "Lock file: $LOCK_FILE"
     [[ "$STEP_WEIGHTS_OK" -eq 1 && "$STEP_SMOKE_SYNTH_OK" -eq 1 ]] || \
         echo "NOTE: weights and/or end-to-end synthesis need manual follow-up — see warnings above."
+    [[ "$STEP_POWERD_OK" -eq 1 ]] || \
+        echo "NOTE: chatterbox-powerd systemd units were not installed — see warnings above (optional feature)."
     exit 0
 else
     echo

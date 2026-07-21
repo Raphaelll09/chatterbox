@@ -10,8 +10,8 @@ import os
 
 import pytest
 
-import profiling.parsing as parsing
-from profiling.recorder import NullRecorder, Recorder
+import tools.monitoring.profiling.parsing as parsing
+from tools.monitoring.profiling.recorder import NullRecorder, Recorder
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ def test_recorder_phoneme_count_null_when_never_set(tmp_path):
 # join.py
 # ---------------------------------------------------------------------------
 
-import profiling.join as join
+import tools.monitoring.profiling.join as join
 
 
 def _sample(t_mono, pmic_power_w, cpu_total=50.0, temp_c=45.0, throttled=0, ina_power_w=None,
@@ -517,8 +517,8 @@ def test_resolve_default_profile_dir_follows_latest_txt_pointer(tmp_path):
     assert resolved == str(tmp_path / "run_20260716_120000")
 
 
-import profiling
-from profiling.sampler import Sampler
+import tools.monitoring.profiling as profiling
+from tools.monitoring.profiling.sampler import Sampler
 
 
 def test_new_run_dir_is_timestamped_and_isolated(tmp_path):

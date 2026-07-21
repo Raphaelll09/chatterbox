@@ -1,24 +1,27 @@
 # PC / Windows exploration environment (inference + light experimentation).
-# Supersedes minimal_requirements.txt, whose pinned set is carried over verbatim below because it
-# is the one actually confirmed to install and run on this checkout (see docs/context/CHANGELOG.md,
-# 2026-07-09 entry: full --profile / --benchmark run against real weights on this exact env).
+# Supersedes the now-deleted minimal_requirements.txt (deleted 2026-07-20, reorg Phase 4 sign-off),
+# whose pinned set is carried over verbatim below because it is the one actually confirmed to
+# install and run on this checkout (see docs/context/CHANGELOG.md, 2026-07-09 entry: full
+# --profile / --benchmark run against real weights on this exact env).
 #
 # NOT included here, on purpose: the FastSpeech2/Waveglow *training*-only stack from the legacy
-# requirements.txt (apex, tensorflow, tensor2tensor, tgt, tensorboardX, pyworld, scikit_learn).
-# Reasons:
+# requirements.txt (also deleted 2026-07-20; recover from git history if needed) -- apex,
+# tensorflow, tensor2tensor, tgt, tensorboardX, pyworld, scikit_learn. Reasons:
 #   - apex==0.9.10dev is the package that resolves to the wrong PyPI project (this is the exact
 #     "apex issue" this split exists to work around) and is only imported by Waveglow's training
-#     scripts (Waveglow/train.py, Waveglow/tacotron2/train.py) and Waveglow/inference.py — Waveglow
-#     is not part of the active pipeline (its vocoder entry is commented out in config_tts.yaml;
-#     FastSpeech2's own inference path, FastSpeech2/synthesize.py, hardcodes
-#     device = torch.device("cpu") and never imports apex).
+#     scripts (assets/models/Waveglow/train.py, assets/models/Waveglow/tacotron2/train.py) and
+#     assets/models/Waveglow/inference.py — Waveglow is not part of the active pipeline (its
+#     vocoder entry is commented out in config_tts.yaml; FastSpeech2's own inference path,
+#     assets/models/FastSpeech2/synthesize.py, hardcodes device = torch.device("cpu") and never
+#     imports apex).
 #   - tensorflow/tensor2tensor/tgt/tensorboardX/pyworld/scikit_learn are only needed for
 #     FastSpeech2's *preprocessing/training* pipeline (forced alignment, pitch/energy extraction,
 #     MFA-style corpus prep), not for running synthesize.py against an already-trained checkpoint.
-# If you need to retrain or re-preprocess FastSpeech2 on this PC, install requirements.txt's
-# training extras into a separate venv rather than merging their old pins into this file — they are
-# pinned to versions (tensor2tensor==1.15.7, tensorflow==2.9.1) old enough to conflict with the
-# numpy/torch/scipy versions below; nobody has verified that merge actually resolves.
+# If you need to retrain or re-preprocess FastSpeech2 on this PC, recover the deleted
+# requirements.txt's training extras from git history and install them into a separate venv rather
+# than merging their old pins into this file — they are pinned to versions
+# (tensor2tensor==1.15.7, tensorflow==2.9.1) old enough to conflict with the numpy/torch/scipy
+# versions below; nobody has verified that merge actually resolves.
 #
 # librosa is not listed explicitly but is pulled in transitively by noisereduce (a hard
 # Requires-Dist of the noisereduce wheel) — do not add it again with a different pin.

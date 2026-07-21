@@ -18,55 +18,83 @@ Python 3 (tested on 3.8/3.10, repo has a 3.11 `.venv`), PyTorch, PyYAML config, 
 ## Repo map
 
 This file lives at the repo root, alongside the code below — run all commands below from here.
+**Reorganized in Phase 3 of `docs/REORG_PROPOSAL.md` (2026-07-20)** — see that doc's §2 tree and §7
+for the full rationale/history; `docs/context/ARCHITECTURE.md`'s module-level detail still
+describes the pre-reorg layout and is flagged stale pending that doc's own Phase 4 rewrite.
 
-- `do_tts.py` — entry point; loads a TTS + vocoder pair from `config_tts.yaml` and runs the
-  synthesis loop (CLI or `--gui`).
-- `synthesis_modules.py` — per-utterance text parsing/normalization + calls into the acoustic model
-  and vocoder.
-- `loading_modules.py` — model loaders; stashes loaded models as module-level globals.
-- `audio_utils.py` — top-level orchestration of one synthesis call (TTS → vocoder → denoise →
-  post-process → playback).
-- `audio_postprocess.py` — standalone loudness analysis + peak-normalize/soft-limit (no other repo
-  dependencies; has its own pytest suite).
-- `gui_utils.py`, `keyboards.py` — Tkinter GUI and on-screen phonetic keyboard.
-- `tts_utils.py` — tiny globals for which TTS/vocoder index is currently selected.
-- `config_tts.yaml` — the model registry + GUI + post-processing + profiling config; see
-  `docs/context/ARCHITECTURE.md` for its structure.
-- `profiling/` — optional profiling subsystem (background PMIC/CPU/thermal sampler, per-sentence
-  timing recorder, offline join/calibration scripts); off by default. See
-  `docs/context/ARCHITECTURE.md` "Profiling subsystem" and README "Profilage".
-- `benchmark/` — fixed 10-sentence French benchmark set (`sentences_fr.jsonl`) + runner
-  (`runner.py`) reusing `audio_utils.syn_audio()`; see `docs/context/ARCHITECTURE.md` "Benchmark
-  mode" and README "Benchmark".
-- `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/` — vendored model repos (weights not
-  in git — see Install below).
-- `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`.
+- `do_tts.py` — entry point, now a 3-line shim calling `chatterbox.cli.main()` (CLI contract
+  unchanged: same flags, same `--gui`).
+- `chatterbox/` — the daily-use application package:
+  - `cli.py` — argparse/dispatch (was `do_tts.py`'s body) + `syn_audio()` orchestration (TTS →
+    vocoder → denoise → post-process → subtitles → playback), was `audio_utils.py`.
+  - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs; `registry.py` — the `BACKEND`
+    singleton, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script` strings,
+    unchanged, now resolved via `getattr(registry.BACKEND, name)` instead of a flat module).
+  - `synthesis/backends/fastspeech2_hifigan/` — `backend.py` (was `loading_modules.py` +
+    `synthesis_modules.py`'s model-calling functions, now a `FastSpeech2HifiGanBackend` class owning
+    loaded-model state as instance attributes) + `text_pipeline.py` (was `synthesis_modules.py`'s
+    text-processing functions: control-tag parsing, pronunciation/punctuation cleanup) +
+    `rules/*.csv` (the regex rule files).
+  - `synthesis/audio_postprocess.py` — unchanged from pre-reorg `audio_postprocess.py`.
+  - `synthesis/subtitles.py` — subtitle/duration-alignment file writers (was part of
+    `audio_utils.py`).
+  - `audio/playback.py`, `audio/denoise.py` — playback and noise-reduction (was part of
+    `audio_utils.py`).
+  - `gui/app.py`, `gui/keyboards.py` — Tkinter GUI and on-screen phonetic keyboard (was
+    `gui_utils.py`, `keyboards.py`).
+  - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
+  - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
+    `docs/context/ARCHITECTURE.md`, stale on paths but not on structure); `config/paths.py` —
+    repo-root-anchored path resolution for the vendored model dirs (added Phase 0);
+    `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs (below), reloadable on SIGHUP.
+  - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon
+    (ACTIVE→DIM→DARK→DEEP, backlight, amplifier SD line, physical switches/touch activity, halt-on-
+    DEEP). Run with `python3 -m chatterbox.power.daemon`; every hardware import (`gpiozero`,
+    `evdev`) is guarded so this package (and everything importing it) still loads cleanly without
+    them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
+    `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
+    powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
+- `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
+  `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd").
+- `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
+  - `measurement/benchmark/` — fixed 10-sentence French benchmark set + runner (was `benchmark/`).
+  - `measurement/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
+  - `monitoring/profiling/` — background PMIC/CPU/thermal sampler, per-sentence timing recorder,
+    offline join/calibration scripts; off by default (was `profiling/`).
+- `assets/models/` — vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`,
+  `flaubert/`; weights not in git — see Install below).
+- `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`,
+  `test_p4_sweep.py`, `test_export_xlsx.py`, `test_power_{fsm,config,backlight,amp,ipc}.py`.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
 
 ## The synthesis pipeline (4 stages)
 
-1. **FlauBERT front-end** (optional, per-utterance) — `synthesis_modules.preprocess_styleTag()`,
-   only invoked when a `<STYLE_TAG=...>` free-text tag is present in the input text.
-2. **FastSpeech2 acoustic** — `synthesis_modules.syn_fastspeech2()` → `FastSpeech2/synthesize.py`.
-   Text → mel-spectrogram + `.AU` (visual/facial animation params).
-3. **HiFi-GAN vocoder** — `synthesis_modules.syn_hifigan()` → `hifi-gan-master/inference_e2e.py`.
-   Mel → waveform.
-4. **Audio write** — `audio_utils.syn_audio()`: denoise, optional post-process
-   (`audio_postprocess.py`), visual smoothing, subtitle write, playback.
+1. **FlauBERT front-end** (optional, per-utterance) — `text_pipeline.preprocess_styleTag()`, only
+   invoked when a `<STYLE_TAG=...>` free-text tag is present in the input text.
+2. **FastSpeech2 acoustic** — `FastSpeech2HifiGanBackend.syn_fastspeech2()` →
+   `assets/models/FastSpeech2/synthesize.py`. Text → mel-spectrogram + `.AU` (visual/facial
+   animation params).
+3. **HiFi-GAN vocoder** — `FastSpeech2HifiGanBackend.syn_hifigan()` →
+   `assets/models/hifi-gan-master/inference_e2e.py`. Mel → waveform.
+4. **Audio write** — `chatterbox.cli.syn_audio()`: denoise, optional post-process
+   (`chatterbox/synthesis/audio_postprocess.py`), visual smoothing, subtitle write, playback.
 
-Full detail (globals pattern, control-tag mini-language, config-driven model registry, weights
-locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, don't assume it's loaded here.
+Full detail (globals-turned-instance-state pattern, control-tag mini-language, config-driven model
+registry, weights locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, but note its
+module names/paths predate the Phase 3 reorg above; cross-check against this file or
+`docs/REORG_PROPOSAL.md` §2 if something doesn't match.
 
 ## Install gotchas
 
 - Use **`requirements-dev.txt`** (PC) or **`requirements-pi.txt`** + **`apt-packages-pi.txt`**
   (Raspberry Pi 5) — see `INSTALL.md`. The legacy `requirements.txt` / `minimal_requirements.txt`
-  are deprecated but kept for reference (deprecation note at the top of each): `requirements.txt`
-  is the one that pulls FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`,
-  `librosa` transitively, `tensor2tensor`, ...) and pins `apex==0.9.10dev`, which resolves to the
-  wrong PyPI package — despite an earlier version of this doc saying the opposite,
-  `minimal_requirements.txt` is actually the lean, working set (now `requirements-dev.txt`).
+  (deleted 2026-07-20, reorg Phase 4 sign-off — see `docs/context/CHANGELOG.md`) pulled in
+  FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`, `librosa` transitively,
+  `tensor2tensor`, ...) and pinned `apex==0.9.10dev`, which resolves to the wrong PyPI package —
+  not needed to run inference against an already-trained checkpoint. If you ever need to retrain
+  or re-preprocess FastSpeech2, recover their pins from git history rather than reconstructing them
+  by hand.
 - Pretrained weights are **not in git** — download manually from the Google Drive links in
   `README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
   `FR_V2/g_00570000`. `scripts/setup_pi.sh` automates this on a fresh Pi 5.
@@ -80,12 +108,15 @@ locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, don't ass
   (`--postprocess`, `--target-crest-db`, `--analyze`, `--report-wav`) and the profiling flag
   (`--profile`, or `CHATTERBOX_PROFILE=1` — see below).
 - **Benchmark**: `python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FILE]`
-  — runs the fixed 10-sentence set in `benchmark/sentences_fr.jsonl` through the same
-  `audio_utils.syn_audio()` call as free-text mode, with profiling forced on. See
+  — runs the fixed 10-sentence set in `tools/measurement/benchmark/sentences_fr.jsonl` through the
+  same `chatterbox.cli.syn_audio()` call as free-text mode, with profiling forced on. See
   `docs/context/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
 - **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
   per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/context/ARCHITECTURE.md`
   "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
+- **Power daemon** (optional, separate process, Pi/Linux-only): `python3 -m chatterbox.power.daemon`
+  (or the `chatterbox-powerd` systemd unit) runs the kiosk power-state machine alongside `do_tts.py
+  --gui`. See `docs/power/POWERD.md`.
 
 ## Testing
 
@@ -98,15 +129,18 @@ On this checkout, bare `python`/`python3` resolve to the Windows Store stub, not
 venv — invoke via `.venv/Scripts/python.exe` (Windows) or activate the venv first. Tests need no
 pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profiling.py`/
 `test_benchmark.py` cover pure-parsing/call-ordering logic with synthesis monkeypatched.
+`test_power_*.py` similarly need no Pi hardware (fake-injected FSM/backlight/amp) — the one
+exception, a live unix-socket loopback test in `test_power_ipc.py`, is `skipif`'d on Windows.
 
 ## Conventions
 
 - Keep dependencies minimal — this targets an embedded Pi 5, not a dev workstation.
-- The synthesis function is shared, not duplicated — the benchmark mode (`benchmark/runner.py`)
-  calls the same `audio_utils.syn_audio()` / `synthesis_modules.tts()` path as free-text mode, not a
-  parallel copy. Any future batch mode must do the same.
+- The synthesis function is shared, not duplicated — the benchmark mode
+  (`tools/measurement/benchmark/runner.py`) calls the same `chatterbox.cli.syn_audio()` /
+  `FastSpeech2HifiGanBackend.tts()` path as free-text mode, not a parallel copy. Any future batch
+  mode must do the same.
 - Profiling/instrumentation is opt-in and off by default (mirrors the `postprocess.enabled` pattern
-  in `config_tts.yaml`) — see the `profiling/` package.
+  in `config_tts.yaml`) — see the `tools/monitoring/profiling/` package.
 
 ## Maintenance rules (IMPORTANT)
 

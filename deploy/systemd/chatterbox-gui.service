@@ -1,0 +1,28 @@
+# Chatterbox GUI kiosk unit (chatterbox-powerd_spec_v0.1.md Sec8): cage runs the Tk app fullscreen
+# via XWayland. Installed by scripts/setup_pi.sh -- see docs/power/POWERD.md.
+#
+# Same venv-path fix as chatterbox-powerd.service -- ExecStart uses the venv scripts/setup_pi.sh
+# creates, not the bare system python3. "gerantos"/uid 1000/"/home/gerantos/chatterbox" are
+# placeholders -- adjust to your actual deployment user (matching /etc/passwd's uid and
+# chatterbox-powerd.service's WorkingDirectory).
+#
+# If you prefer minimal X over cage/Wayland: autologin on tty1 + a .bash_profile `startx`, with
+# .xinitrc = `exec <venv>/bin/python3 do_tts.py --gui`, and don't install this unit. Tk needs
+# X11/XWayland either way. The GUI runs its own TTS warm-up on startup (chatterbox/cli.py).
+[Unit]
+Description=Chatterbox GUI (kiosk)
+After=chatterbox-powerd.service systemd-user-sessions.service
+Wants=chatterbox-powerd.service
+
+[Service]
+User=gerantos
+PAMName=login
+TTYPath=/dev/tty1
+WorkingDirectory=/home/gerantos/chatterbox
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/cage -s -- /home/gerantos/chatterbox/venv/bin/python3 /home/gerantos/chatterbox/do_tts.py --gui
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
