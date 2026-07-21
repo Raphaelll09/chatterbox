@@ -76,6 +76,11 @@ nav = None
 # Only set (to a real tk.Button) when main_panel_config["add_play_button"] is True.
 btn_replay_audio = None
 
+# Set once, near the top of create_gui(), to a closure that builds the Settings -> Advanced
+# model-picker widgets on demand (see create_gui()'s own comment for why this is dependency-
+# injected into settings.py rather than that module importing this one).
+_build_advanced_settings = None
+
 
 def post(fn):
     """Callable from ANY thread -- queues a widget-safe closure to run on the Tk thread."""
@@ -267,7 +272,7 @@ def _toggle_settings():
     if settings.is_open():
         settings.close()
     else:
-        settings.open_settings(window)
+        settings.open_settings(window, build_advanced_section=_build_advanced_settings)
 
 
 def _show_about():
@@ -389,7 +394,8 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # the physical "Réglages" button keeps working exactly as before.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
-    menubar.add_command(label=i18n.t("menu_settings"), command=lambda: settings.open_settings(window))
+    menubar.add_command(label=i18n.t("menu_settings"),
+                         command=lambda: settings.open_settings(window, build_advanced_section=_build_advanced_settings))
     menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
     menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
     menubar.add_command(label=i18n.t("menu_language"), state="disabled")
@@ -413,42 +419,61 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         window.grid_columnconfigure(_col, weight=1)
     window.grid_rowconfigure(2, weight=1)
 
-    lbl_TTS_model_selection = tk.Label(master=window, text=i18n.t("tts_label")).grid(row=0, column=0, pady = 2)
+    # Model selection (cc_prompt_gui_refactor.md Phase 1 item 3): demoted into Settings -> Advanced
+    # instead of two always-visible button rows -- there's exactly one TTS model and one vocoder
+    # configured today, but Matcha-TTS/FastSpeech2s are still being benchmarked, so this stays
+    # reachable rather than deleted. The default model still loads (and builds the GUI options
+    # panel via the TTS model's gui_script) unconditionally at startup, with no button click
+    # needed; _build_advanced_settings, built once here and stored globally, lets Settings build
+    # the actual picker buttons on demand each time it opens (dependency-injected into
+    # settings.open_settings() -- see that module's own docstring for why).
+    global _build_advanced_settings
 
-    tts_index = 0
-    list_tts_buttons = []
-    for tts_model in tts_config["tts_models"]:
-        tts_index += 1
+    def _select_tts_model(tts_model, id_button, list_buttons=None):
         loading_script = getattr(registry.BACKEND, tts_model["load_script"])
         gui_script = globals()[tts_model["gui_script"]]
-        tts_loading_button = tk.Button(
-            master=window,
-            text=tts_model["label"],
-            command= lambda current_load_script=loading_script, current_tts=tts_model, id_button=tts_index, current_gui_script=gui_script: [current_load_script(current_tts, device), select_model_from_list(id_button, list_tts_buttons), state.update_selected_tts(id_button), current_gui_script(current_tts, main_panel_config)]
-        )
-        list_tts_buttons.append(tts_loading_button)
-        tts_loading_button.grid(row=0, column=tts_index, columnspan=2, sticky=tk.NSEW)
+        loading_script(tts_model, device)
+        state.update_selected_tts(id_button)
+        gui_script(tts_model, main_panel_config)
+        if list_buttons is not None:
+            select_model_from_list(id_button, list_buttons)
 
-        if tts_index==(default_tts+1):
-            tts_loading_button.invoke()
-
-    # Add specified Vocoder Models
-    lbl_vocoder_model_selection = tk.Label(master=window, text=i18n.t("vocoder_label")).grid(row=1, column=0, pady = 2)
-    vocoder_index = 0
-    list_vocoder_buttons = []
-    for vocoder_model in tts_config["vocoder_models"]:
-        vocoder_index += 1
+    def _select_vocoder_model(vocoder_model, id_button, list_buttons=None):
         loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
-        vocoder_loading_button = tk.Button(
-            master=window,
-            text=vocoder_model["label"],
-            command= lambda current_load_script=loading_script, current_vocoder=vocoder_model, id_button=vocoder_index: [current_load_script(current_vocoder, device), select_model_from_list(id_button, list_vocoder_buttons), state.update_selected_vocoder(id_button)]
-        )
-        list_vocoder_buttons.append(vocoder_loading_button)
-        vocoder_loading_button.grid(row=1, column=vocoder_index, columnspan=2, sticky=tk.NSEW)
+        loading_script(vocoder_model, device)
+        state.update_selected_vocoder(id_button)
+        if list_buttons is not None:
+            select_model_from_list(id_button, list_buttons)
 
-        if vocoder_index==(default_vocoder+1):
-            vocoder_loading_button.invoke()
+    def _build_advanced_settings(parent_frame):
+        """Called by settings.open_settings() every time the dialog opens -- rebuilds the picker
+        buttons fresh (same pattern as the rest of that dialog), highlighted to match whichever
+        model is currently loaded (chatterbox.state.TTS_INDEX/VOCODER_INDEX are 0-based; button ids
+        here are 1-based, matching select_model_from_list()'s existing convention)."""
+        tk.Label(master=parent_frame, text=i18n.t("tts_label")).grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
+        list_tts_buttons = []
+        for tts_index, tts_model in enumerate(tts_config["tts_models"], start=1):
+            btn = tk.Button(
+                master=parent_frame, text=tts_model["label"],
+                command=lambda m=tts_model, i=tts_index, lb=list_tts_buttons: _select_tts_model(m, i, lb),
+            )
+            btn.grid(row=0, column=tts_index, sticky=tk.EW, padx=2, pady=2)
+            list_tts_buttons.append(btn)
+        select_model_from_list(state.TTS_INDEX + 1, list_tts_buttons)
+
+        tk.Label(master=parent_frame, text=i18n.t("vocoder_label")).grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
+        list_vocoder_buttons = []
+        for voc_index, vocoder_model in enumerate(tts_config["vocoder_models"], start=1):
+            btn = tk.Button(
+                master=parent_frame, text=vocoder_model["label"],
+                command=lambda m=vocoder_model, i=voc_index, lb=list_vocoder_buttons: _select_vocoder_model(m, i, lb),
+            )
+            btn.grid(row=1, column=voc_index, sticky=tk.EW, padx=2, pady=2)
+            list_vocoder_buttons.append(btn)
+        select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
+
+    _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
+    _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
 
     # Add input field
     ent_text_input = tk.Entry(master=window, width=main_panel_config["input_width"])
