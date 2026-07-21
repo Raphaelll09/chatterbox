@@ -496,7 +496,10 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Responsive layout (cc_prompt_gui_refactor.md Phase 1 item 1): column 0 stays a narrow label
     # column; the button/entry/options-panel columns and the options-panel row (2, the tallest
     # element) grow with the window instead of staying pinned to the 440x800 default geometry.
-    for _col in range(1, max_buttons + 3):
+    # Bound is max_buttons+2 (not +3): the widest main-window content spans columns 0..max_buttons+1
+    # (columnspan=max_buttons+2 starting at column 0) -- one column past that was weighted for
+    # nothing, stealing width from the options panel in landscape (real-hardware bug report).
+    for _col in range(1, max_buttons + 2):
         window.grid_columnconfigure(_col, weight=1)
     window.grid_rowconfigure(2, weight=1)
 
@@ -624,12 +627,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
         btn_put_away = tk.Button(master=window, text=i18n.t("put_away_button"))
-        btn_put_away.grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_put_away.grid(row=17+index_gst_token, column=0, columnspan=max_buttons+2)
 
     btn_settings = None
     if main_panel_config.get("add_settings_button", True):
         btn_settings = tk.Button(master=window, text=i18n.t("settings_button"), command=_toggle_settings)
-        btn_settings.grid(row=19+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_settings.grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # Action dispatcher + minimal nav ring (chatterbox_gui_spec_v0.1.md Sec3) -- built once every
     # widget it references exists. Intentionally small (not every model button) per the spec's
@@ -696,8 +699,11 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             # portrait (single column, keyboard_area below the main controls) -- maintenance
             # happens in landscape, where it moves beside the main controls in a second column
             # instead. Only re-grids on an actual portrait<->landscape flip (not on every resize
-            # pixel).
-            keyboard_portrait_grid = {"row": 17 + index_gst_token, "column": 0, "columnspan": 3,
+            # pixel). Row is last (19+index_gst_token, after Replay/Ranger/Réglages) -- real-
+            # hardware bug report: those three used to sit BELOW the keyboard area (rows 18/19 vs
+            # its 17), so on a screen too short to show every row, they fell off-screen first. The
+            # keyboard, not the always-needed controls, should be what runs out of room.
+            keyboard_portrait_grid = {"row": 19 + index_gst_token, "column": 0, "columnspan": 3,
                                        "sticky": tk.NSEW}
             landscape_keyboard_column = max_buttons + 3
             layout_state = {"is_landscape": None}
@@ -846,6 +852,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     sub_row_index = 0
     default_args = tts_config['default_args']
+    _CHIPS_PER_ROW = 4  # shared by the speaker and GST-style chip grids below
 
     # Speaker list read from the currently loaded backend instead of re-opening
     # config_tts.yaml's preprocess.yaml directly (the pre-Phase-3 leak -- see
@@ -871,19 +878,40 @@ def gui_fastspeech2(tts_config, main_panel_config):
     speaker_selection = tk.IntVar(frame)
     speaker_selection.set(default_args['speaker_id'])
 
-    # Speaker radio buttons
-    lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label")).grid(row=sub_row_index, column=0)
+    # Speaker chip grid (real-hardware bug report: a single unwrapped row overflowed the canvas
+    # viewport horizontally once there were more than 2-3 speakers, with no horizontal scrollbar to
+    # reach the rest -- same wrapped-chip-grid treatment as the GST style picker (item 4) instead).
+    lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
+    lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
+
+    speaker_chip_frame = tk.Frame(master=frame_options)
+    speaker_chip_frame.grid(row=sub_row_index, column=1, columnspan=3, sticky=tk.EW)
+
     index_speaker = 0
+    _speaker_chip_row = _speaker_chip_col = 0
     for speaker in speaker_list:
-        tk_radio_button_speaker = tk.Radiobutton(
-            master=frame_options,
+        chip = tk.Radiobutton(
+            master=speaker_chip_frame,
             text=speaker,
             variable=speaker_selection,
             value=index_speaker,
+            indicatoron=0,
+            selectcolor="#ffd54f",
+            width=11,
+            padx=4,
+            pady=10,
             command=None,
         )
-        tk_radio_button_speaker.grid(row=sub_row_index, column=1+index_speaker)
+        chip.grid(row=_speaker_chip_row, column=_speaker_chip_col, padx=3, pady=3, sticky=tk.NSEW)
+        speaker_chip_frame.grid_columnconfigure(_speaker_chip_col, weight=1)
         index_speaker += 1
+        _speaker_chip_col += 1
+        if _speaker_chip_col >= _CHIPS_PER_ROW:
+            _speaker_chip_col = 0
+            _speaker_chip_row += 1
+    # index_speaker ends at len(speaker_list) here (matching the pre-chip-grid loop's final value)
+    # -- downstream columnspan=1+index_speaker uses are just a "how many speakers" width heuristic,
+    # unaffected by speakers now wrapping into a grid instead of one row.
     sub_row_index += 1
 
     # Select default values
@@ -911,7 +939,6 @@ def gui_fastspeech2(tts_config, main_panel_config):
         chip_frame = tk.Frame(master=frame_options)
         chip_frame.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.EW)
 
-        _CHIPS_PER_ROW = 4
         _placeholder_re = re.compile(r"^TOKEN\d+$")
         all_gst_tokens = [*tts_config['gst_token_list']]
         advanced_chips = []
