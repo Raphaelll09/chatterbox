@@ -15,6 +15,37 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Battery percentage display (DFRobot FIT0992 UPS HAT)
+
+- What: new `chatterbox/power/battery.py` reads battery voltage/percentage over I2C (i2c-1 @
+  0x36, a Maxim/Analog-Devices MAX17048-style fuel gauge) for the DFRobot FIT0992 Raspberry Pi 5
+  UPS HAT. `gui/app.py` polls it every 30s and shows a "🔋 NN%" label (row 0 -- the space freed up
+  when model selection moved into Settings -> Advanced), red under 20%, hidden entirely whenever
+  no reading is available (no hardware/no `smbus2` -- the normal case for any other checkout).
+  New `add_battery_info` config flag (default `True`).
+- Files: new `chatterbox/power/battery.py`, `tests/test_power_battery.py`; modified
+  `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`, `requirements-pi.txt` (comment
+  only -- `smbus2` now has a second consumer), `CLAUDE.md`.
+- Why: user request, mid-session, once the exact SKU (FIT0992) was confirmed. Register
+  addresses/scaling (VCELL @ 0x02, SOC @ 0x04, byte-swap-then-scale) were verified against the
+  exact reference driver DFRobot's own FIT0992 wiki page links to
+  (github.com/suptronics/x120x/bat.py) rather than guessed -- wrong I2C register addresses sent to
+  real hardware was an explicit thing to avoid here.
+- Verify: `tests/test_power_battery.py` (byte-swap pure-function round-trip against a known value;
+  `read_battery()` degrades to `None` on this checkout, which has no `smbus2` installed -- the
+  same guarded-optional-hardware posture as `chatterbox/power/amp.py`). GUI wiring verified with a
+  mocked `create_gui()` smoke run (shortened poll interval, `battery.read_battery` monkeypatched):
+  label starts hidden, shows the right text/color for a healthy and a low reading, hides again
+  once the reading goes back to `None`. Full suite: 230 passed/1 skipped (227 + 3 new).
+- Notes/gotchas: **not yet verified against the real FIT0992 on Pi hardware** -- the register
+  map/scaling is taken on faith from the vendor-linked reference driver (same chip family,
+  different product line: X1200/X1201/X1202 UPS shields, not the FIT0992 itself), not confirmed
+  against this exact board. First real-hardware run should sanity-check the reported percentage
+  against the board's own behavior (e.g. does it read ~100% on a freshly charged cell, does it
+  track a charge/discharge cycle sensibly) before trusting it further.
+
+---
+
 ## 2026-07-21 — GUI real-hardware bug-report fixes (post Phase 3)
 
 - What: seven fixes from user testing of the Phase 3 refactor (below) on real Pi 5 hardware:

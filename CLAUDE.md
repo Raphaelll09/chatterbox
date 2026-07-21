@@ -80,6 +80,9 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
     `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
     powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
+    `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
+    DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
+    `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
 - `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
   `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd"). `chatterbox-gui.service` runs the
   GUI under `cage` (finalized kiosk compositor choice — see `docs/kiosk/KIOSK.md`).
