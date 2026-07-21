@@ -259,13 +259,35 @@ def _keyboard_emit(payload):
     """Action.KEY handler -- the same insert-into-entry + optional prerecorded-phone-playback
     logic the on-screen keyboard's regular phoneme buttons already did inline, now reachable
     through dispatch (so every keypress also pings powerd activity, and any future input source
-    that emits Action.KEY gets identical behavior)."""
+    that emits Action.KEY gets identical behavior). A ("__letter__", kind, value) payload (from the
+    Text-mode letter keyboard, cc_prompt_gui_refactor.md Phase 1 item 8) is a plain-character
+    insert with no trailing space and no mirror-entry/prerecorded-audio lookup -- those only make
+    sense for phoneme tokens, not for spelling ordinary words letter by letter."""
+    if payload[0] == "__letter__":
+        _, kind, value = payload
+        _letter_key_emit(kind, value)
+        return
     phon, label, keyboard_config = payload
     ent_text_input.insert("end", "{} ".format(phon))
     if entry_text_keyboard is not None:
         entry_readonly_insert(entry_text_keyboard, label, keyboard_config)
     else:
         play_prerecorded_phone(label, keyboard_config)
+
+
+def _letter_key_emit(kind, value):
+    if kind == "char":
+        ent_text_input.insert("end", value)
+    elif kind == "space":
+        ent_text_input.insert("end", " ")
+    elif kind == "backspace":
+        current = ent_text_input.get()
+        if current:
+            ent_text_input.delete(len(current) - 1, "end")
+    elif kind == "clear":
+        ent_text_input.delete(0, "end")
+    elif kind == "play":
+        dispatch(ginput.Action.SPEAK)
 
 
 def _toggle_settings():
@@ -286,7 +308,7 @@ def _back_action():
         ent_text_input.delete(0, 'end')
 
 
-def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=0):
+def create_keyboard(key_board_options, entry, main_window=None):
     global lbl_text_keyboard
     global entry_text_keyboard
 
@@ -299,9 +321,11 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
         window_keyboard.title(key_board_options["name_window"])
         window_keyboard.geometry("{}x{}".format(key_board_options["width"], key_board_options["height"]))
     else:
-        # If a parent is provided, use the parent window or frame to embed the keyboard
+        # If a parent is provided, use the parent window or frame to embed the keyboard. Ungridded
+        # here -- the caller grids it (create_gui() now embeds this inside a keyboard_area
+        # container shared with the letter keyboard, cc_prompt_gui_refactor.md Phase 1 item 8, not
+        # directly into main_window at a hardcoded row).
         window_keyboard = tk.Frame(master=main_window)
-        window_keyboard.grid(row=17+index_gst_token, column=0, columnspan=3, sticky=tk.NSEW)
 
     # Check if the entry text box should be shown
     if key_board_options.get("show_entry", True):
@@ -356,6 +380,63 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
         entry_text_keyboard.grid(row=0, column=0, columnspan = max_width_keyboard+1, sticky=tk.W)
         entry_text_keyboard.grid_propagate(False)
     return window_keyboard
+
+
+# Simplified AZERTY letter layout (French AAC target) for the Text-mode soft keyboard
+# (cc_prompt_gui_refactor.md Phase 1 item 8). Deliberately not the full French layout (no accents,
+# no digit row) -- large, unambiguous touch targets matter more here than completeness; text
+# normalization downstream (chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py)
+# already lowercases/cleans input.
+_LETTER_ROWS = [
+    ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
+    ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
+    ["W", "X", "C", "V", "B", "N", ",", "."],
+]
+
+
+def _create_letter_keyboard(master, key_board_options):
+    """Text-mode soft keyboard: independent of create_keyboard()/keyboards.keys on purpose -- that
+    machinery (mirror readonly entry, prerecorded-phone playback, the entry_text_keyboard/
+    lbl_text_keyboard globals it sets) is phoneme-specific and shared as module globals; building
+    a second keyboard through it would clobber the phoneme keyboard's state. This one only ever
+    inserts literal characters into ent_text_input directly (via _keyboard_emit()'s "__letter__"
+    branch), with no mirror entry and no per-key audio."""
+    my_font = "Helvetica {} bold".format(key_board_options["font_size"])
+    frame = tk.Frame(master=master)
+
+    for row_index, row in enumerate(_LETTER_ROWS):
+        tk.Grid.rowconfigure(frame, row_index, weight=1)
+        for col_index, letter in enumerate(row):
+            tk.Grid.columnconfigure(frame, col_index, weight=1)
+            btn = tk.Button(
+                master=frame, text=letter, font=my_font,
+                width=key_board_options["max_button_width"],
+                command=lambda c=letter.lower(): dispatch(ginput.Action.KEY,
+                                                            payload=("__letter__", "char", c)),
+            )
+            btn.grid(row=row_index, column=col_index, sticky=tk.NSEW,
+                      padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+
+    control_row = len(_LETTER_ROWS)
+    tk.Grid.rowconfigure(frame, control_row, weight=1)
+    tk.Button(
+        master=frame, text=i18n.t("keyboard_space"), font=my_font,
+        command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "space", None)),
+    ).grid(row=control_row, column=0, columnspan=5, sticky=tk.NSEW,
+           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    tk.Button(
+        master=frame, text=i18n.t("keyboard_backspace"), font=my_font,
+        command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "backspace", None)),
+    ).grid(row=control_row, column=5, columnspan=3, sticky=tk.NSEW,
+           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    tk.Button(
+        master=frame, text="▶", font=my_font,
+        command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "play", None)),
+    ).grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
+           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+
+    return frame
+
 
 def create_gui(tts_config, device, default_tts, default_vocoder):
     global ent_text_input
@@ -575,19 +656,53 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input)
             window_keyboard.mainloop()
         else:
-            window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input, window, index_gst_token)
+            # keyboard_area wraps a Texte/Phonèmes segmented toggle (cc_prompt_gui_refactor.md
+            # Phase 1 item 8) plus both keyboard frames, gridded on top of each other in the same
+            # cell (only the active one visible via grid()/grid_remove(), same technique as the
+            # style chip grid's advanced toggle). This is the ONE thing landscape reflow (item 2)
+            # repositions now, instead of a single fixed keyboard frame -- whichever mode is active
+            # travels with it.
+            keyboard_area = tk.Frame(master=window)
+            keyboard_area.grid_columnconfigure(0, weight=1)
+            keyboard_area.grid_columnconfigure(1, weight=1)
+            keyboard_area.grid_rowconfigure(1, weight=1)
 
-            # Portrait-first + landscape reflow (cc_prompt_gui_refactor.md Phase 1 item 2): the
-            # panel's native orientation is portrait (single column, keyboard below the main
-            # controls, as create_keyboard() already grids it) -- maintenance happens in landscape,
-            # where the keyboard moves beside the main controls in a second column instead. Only
-            # re-grids on an actual portrait<->landscape flip (not on every resize pixel).
+            keyboard_mode = tk.StringVar(value="phonemes")
+            btn_mode_text = tk.Radiobutton(
+                master=keyboard_area, text=i18n.t("keyboard_mode_text"), variable=keyboard_mode,
+                value="text", indicatoron=0, command=lambda: _set_keyboard_mode("text"))
+            btn_mode_phonemes = tk.Radiobutton(
+                master=keyboard_area, text=i18n.t("keyboard_mode_phonemes"), variable=keyboard_mode,
+                value="phonemes", indicatoron=0, command=lambda: _set_keyboard_mode("phonemes"))
+            btn_mode_text.grid(row=0, column=0, sticky=tk.EW)
+            btn_mode_phonemes.grid(row=0, column=1, sticky=tk.EW)
+
+            phoneme_kb_frame = create_keyboard(gui_config["keyboard_options"], ent_text_input, keyboard_area)
+            phoneme_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
+            letter_kb_frame = _create_letter_keyboard(keyboard_area, gui_config["keyboard_options"])
+            letter_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
+            letter_kb_frame.grid_remove()  # Phonèmes stays the default-visible mode (pre-toggle behavior)
+
+            keyboard_frames = {"text": letter_kb_frame, "phonemes": phoneme_kb_frame}
+
+            def _set_keyboard_mode(mode):
+                for name, frame in keyboard_frames.items():
+                    if name == mode:
+                        frame.grid()
+                    else:
+                        frame.grid_remove()
+
+            # Portrait-first + landscape reflow (Phase 1 item 2): the panel's native orientation is
+            # portrait (single column, keyboard_area below the main controls) -- maintenance
+            # happens in landscape, where it moves beside the main controls in a second column
+            # instead. Only re-grids on an actual portrait<->landscape flip (not on every resize
+            # pixel).
             keyboard_portrait_grid = {"row": 17 + index_gst_token, "column": 0, "columnspan": 3,
                                        "sticky": tk.NSEW}
             landscape_keyboard_column = max_buttons + 3
             layout_state = {"is_landscape": None}
 
-            def _on_window_configure(event, _state=layout_state, _kb=window_keyboard,
+            def _on_window_configure(event, _state=layout_state, _kb=keyboard_area,
                                       _portrait=keyboard_portrait_grid,
                                       _col=landscape_keyboard_column):
                 landscape = window.winfo_width() > window.winfo_height()
