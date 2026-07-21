@@ -92,18 +92,32 @@ echo
 echo "-- [4/8] Downloading pretrained weights"
 pip install --quiet gdown
 
-# fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file>
+# fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file> [sentinel-file ...]
 # Downloads every file in the Drive folder into a temp dir, unzips any archives found into
 # <extract-target-dir>, then flattens a one-level self-named nested directory if the archive's
 # top-level folder duplicates the target dir name (observed with these exact archives on the dev
 # checkout this script's paths were verified against — e.g. hifi-gan-master/FR_V2/FR_V2/...).
+#
+# Accepts one or more sentinels (not just one) because a `gdown --folder` download can succeed
+# for *some* of a Drive folder's files/archives and silently miss others — e.g. FastSpeech2's
+# Drive folder bundles output/ckpt/, config/, and preprocessed_data/ separately, and a partial
+# download that got the (large) checkpoint but not the (small) config/preprocessed_data files
+# used to still pass this check and report PASS, only to fail much later as a confusing
+# FileNotFoundError deep inside do_tts.py's backend.load_fastspeech2(). ALL given sentinels must
+# exist, both to skip a re-download and to consider a fresh download successful.
 fetch_and_unzip() {
     local drive_url="$1"
     local target_dir="$2"
-    local sentinel="$3"
+    shift 2
+    local sentinels=("$@")
 
-    if [[ -f "$sentinel" ]]; then
-        echo "   [skip] $sentinel already present."
+    local all_present=1
+    local s
+    for s in "${sentinels[@]}"; do
+        [[ -f "$s" ]] || all_present=0
+    done
+    if [[ "$all_present" -eq 1 ]]; then
+        echo "   [skip] all sentinels already present for $(basename "$target_dir")."
         return 0
     fi
 
@@ -138,20 +152,27 @@ fetch_and_unzip() {
         rm -rf "$self_nested"
     fi
 
-    if [[ -f "$sentinel" ]]; then
-        echo "   OK: $sentinel"
-        return 0
-    else
-        echo "   WARNING: expected $sentinel after extraction but did not find it — check $target_dir manually." >&2
-        return 1
-    fi
+    local missing=0
+    for s in "${sentinels[@]}"; do
+        if [[ -f "$s" ]]; then
+            echo "   OK: $s"
+        else
+            echo "   WARNING: expected $s after extraction but did not find it — check $target_dir manually, or delete $target_dir and re-run to retry the whole download." >&2
+            missing=1
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
 }
 
 WEIGHTS_OK=1
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing" \
     "$WORKING_ROOT/assets/models/FastSpeech2" \
-    "$WORKING_ROOT/assets/models/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/model.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/train.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/preprocessed_data/ALL_corpus/speakers.json" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing" \
