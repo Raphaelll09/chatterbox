@@ -8,6 +8,8 @@ GUI_config:
                            # before-first-synthesis bug (Phase 3) is only useful if it's visible
     add_put_away_button: True  # sends put_away to chatterbox-powerd; no-op if powerd isn't running
     add_settings_button: True  # opens the power-settings screen (gui/settings.py)
+    add_battery_info: True  # shows battery % from the DFRobot FIT0992 UPS HAT (chatterbox/power/
+                             # battery.py); silently hidden if that hardware/smbus2 isn't present
     # width: 800
     width: 440
     height: 800

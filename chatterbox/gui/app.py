@@ -45,11 +45,13 @@ import chatterbox.gui.settings as settings
 import chatterbox.gui.i18n as i18n
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
+import chatterbox.power.battery as battery
 
 # # Global variables to store the canvas and the circle figure
 canvas_circle = None
 canvas_circle_figure = None
 lbl_status = None
+lbl_battery = None
 
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
@@ -58,6 +60,8 @@ lbl_status = None
 _power_client = None
 _last_activity_sent_ts = 0.0
 _ACTIVITY_THROTTLE_S = 1.0  # avoid flooding the socket with an "activity" ping per keystroke/click
+
+_BATTERY_POLL_MS = 30000  # battery % changes slowly -- no need to poll faster than this
 
 # UI thread-marshaling (chatterbox_gui_spec_v0.1.md Sec2.1): the ONE queue shared by worker-thread
 # results (synthesis/playback done, warm-up done) AND powerd-forwarded socket events -- Tk is only
@@ -446,6 +450,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global lbl_audio_infos_denoiser_duration
     global lbl_audio_infos_synthesis_duration
     global lbl_status
+    global lbl_battery
     global gui_config
     global main_panel_config
     global TTS_CONFIG
@@ -513,6 +518,28 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     for _col in range(1, max_buttons + 2):
         window.grid_columnconfigure(_col, weight=1)
     window.grid_rowconfigure(2, weight=1)
+
+    # Battery percentage (DFRobot FIT0992 UPS HAT, chatterbox/power/battery.py) -- row 0, the space
+    # freed up when the TTS/vocoder model buttons moved into Settings -> Advanced. Silently hidden
+    # (grid_remove()) whenever read_battery() returns None: no hardware/smbus2 present is the
+    # normal case for any checkout without this HAT, not an error.
+    lbl_battery = None
+    if main_panel_config.get("add_battery_info", True):
+        lbl_battery = tk.Label(master=window, text="")
+        lbl_battery.grid(row=0, column=0, columnspan=max_buttons+2)
+        lbl_battery.grid_remove()
+
+        def _poll_battery():
+            reading = battery.read_battery()
+            if reading is None:
+                lbl_battery.grid_remove()
+            else:
+                lbl_battery["fg"] = "red" if reading["percent"] < 20 else "black"
+                lbl_battery["text"] = "\U0001F50B {:.0f}%".format(reading["percent"])
+                lbl_battery.grid()
+            window.after(_BATTERY_POLL_MS, _poll_battery)
+
+        window.after(500, _poll_battery)
 
     # Model selection (cc_prompt_gui_refactor.md Phase 1 item 3): demoted into Settings -> Advanced
     # instead of two always-visible button rows -- there's exactly one TTS model and one vocoder
