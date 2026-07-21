@@ -380,22 +380,58 @@ platform-independent except one live-socket loopback test in `test_power_ipc.py`
 Windows. GPIO/backlight/evdev/systemd/halt behavior itself needs real Pi 5 hardware to verify
 (spec §10) — not exercised by any automated test in this repo.
 
+## GUI refactor (chatterbox/gui/, chatterbox/synth.py)
+
+Added 2026-07-21, per `chatterbox_gui_spec_v0.1.md` (repo root) — full design there; day-to-day
+detail in `docs/gui/GUI.md`. Fixes the pre-refactor GUI running synthesis+playback directly on the
+Tk thread (freezing the window for the whole call, no `try/except` around it).
+
+- **Threading**: `chatterbox/gui/app.py`'s `on_speak()` (Tk thread) snapshots text/model-indices/
+  slider values, then runs synthesis+playback on a daemon worker thread (`_work()`, no Tk calls).
+  A `ui_queue`/`post()`/`_pump()` marshaling queue (the *same* one used for powerd-forwarded switch
+  input, not a separate mechanism) is the only path back onto the Tk thread. A `busy` flag (mutated
+  only on the Tk thread) makes overlapping Speak triggers a no-op.
+- **`chatterbox/synth.py`**: the Tk-free compute path extracted from the old
+  `cli.py:syn_audio()` — `synthesize(text, tts_idx, voc_idx, tts_config, ...) -> AudioResult |
+  None`. Both `cli.syn_audio()` (CLI/benchmark, unchanged signature/behavior) and the GUI's worker
+  call it; only `cli.syn_audio()` still touches the console, only the GUI still touches Tk.
+- **`chatterbox/gui/input.py`**: `Action` enum (shares member names with powerd's `switches:`
+  config) + `dispatch()` (dependency-injected, no import of `app.py`) + a small `NavRing`. The
+  Speak button, `<Return>`, and the on-screen keyboard all route through `dispatch()` now.
+- **`chatterbox/gui/settings.py`**: edits `chatterbox/config/user_prefs.yaml`'s power-timer/
+  brightness fields (same schema powerd reads), range-validated, atomic write, `powerd.reload()`
+  on save.
+
+Tests: `tests/test_gui_{input,worker,settings}.py`, `tests/test_synth.py` — all headless/no-models
+(fake widgets, monkeypatched `synth.synthesize`/`playback.play_audio`). Unlike the power daemon
+task, this checkout has real pretrained weights, so two real-weights checks were actually run
+(not just written) while building this — see `docs/gui/GUI.md` "Testing": `synth.synthesize()`
+called directly against loaded models, and a scripted `create_gui()` run with a `window.after(50,
+tick)` responsiveness probe running through a real synthesis+playback call (138 ticks, max gap
+77ms across a 5.37s call — direct, quantitative proof the Tk thread never blocked). Neither script
+is checked into `tests/`.
+
 ## Not yet implemented
 
 - A from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
-  `chatterbox/cli.py`'s `syn_audio()` changed to not assume one unconditionally (reading
+  `chatterbox/synth.py`'s `synthesize()` changed to not assume one unconditionally (reading
   `audio_file.AU`, visual smoothing, subtitle timing from `audio_file_duration.npy`) — flagged
   during the Phase 3 reorg, not attempted speculatively; see `docs/REORG_PROPOSAL.md` §5.
-- Real interactive GUI testing and Pi 5 hardware verification for the whole 2026-07-20 reorg — no
-  Pi access or interactive display was available while executing it; see `docs/REORG_PROPOSAL.md`
-  §7 for what was verified instead (CLI battery + a timed `--gui` launch reaching
-  `window.mainloop()` with zero tracebacks) and what remains owed.
-- chatterbox-powerd's GPIO/backlight/evdev/systemd/halt behavior on real Pi 5 hardware (immediately
-  above) — implemented per spec, unverified on hardware. Also out of scope here: the "separately
-  specced" switch-press→GUI-action input dispatcher (`chatterbox/gui/app.py`'s
-  `handle_power_input()` is a logging stub) and the companion `GUI_Power_Controller_Architecture`
-  doc referenced by the powerd spec, neither written yet.
+- Real interactive GUI testing (a human dragging/resizing the window during synthesis) and Pi 5
+  hardware verification for the whole 2026-07-20 reorg — no Pi access or interactive display was
+  available while executing it; see `docs/REORG_PROPOSAL.md` §7 for what was verified instead (CLI
+  battery + a timed `--gui` launch reaching `window.mainloop()` with zero tracebacks). The GUI
+  refactor above (2026-07-21) adds a *scripted* responsiveness proof on top of that, which is
+  stronger evidence than before but still not a human interacting with the window.
+- chatterbox-powerd's GPIO/backlight/evdev/systemd/halt behavior on real Pi 5 hardware — implemented
+  per spec, unverified on hardware.
+- The GUI's nav ring / `Action.NEXT`/`PREV`/`SELECT`/`BACK` — implemented and unit-tested, but
+  nothing currently drives them interactively: `chatterbox/config/user_prefs.yaml`'s `switches: []`
+  is empty (no physical switches wired/configured yet). `Action.KEY` similarly has nothing but the
+  existing on-screen keyboard driving it today.
+- The companion `GUI_Power_Controller_Architecture` doc referenced by both the powerd and GUI specs
+  is not written.
 
 Otherwise nothing tracked here — free-text (`--gui` optional), the profiling subsystem, benchmark
-mode, and chatterbox-powerd's software above are all implemented. Update this section if a future
-session adds something new and unfinished.
+mode, chatterbox-powerd's software, and the GUI refactor above are all implemented. Update this
+section if a future session adds something new and unfinished.

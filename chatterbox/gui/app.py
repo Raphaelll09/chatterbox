@@ -9,6 +9,8 @@ Created on Thu Jul 21 14:29:50 2022
 import os
 import json
 import queue
+import sys
+import threading
 import time
 import yaml
 import platform
@@ -33,22 +35,55 @@ else:
 import chatterbox.synthesis.registry as registry
 import chatterbox.state as state
 import chatterbox.cli as cli
+import chatterbox.synth as synth
 import chatterbox.audio.playback as playback
 import chatterbox.gui.keyboards as keyboards
+import chatterbox.gui.input as ginput
+import chatterbox.gui.settings as settings
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
 
 # # Global variables to store the canvas and the circle figure
 canvas_circle = None
 canvas_circle_figure = None
+lbl_status = None
 
-# Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4) -- a true no-op whenever
-# powerd isn't reachable (any PC dev checkout, or a Pi before powerd is set up). No FSM/backlight/
-# amp logic lives here, only client calls, per the spec's explicit instruction.
+# Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
+# Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
+# is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
+# instruction.
 _power_client = None
-_power_event_queue = queue.Queue()
 _last_activity_sent_ts = 0.0
 _ACTIVITY_THROTTLE_S = 1.0  # avoid flooding the socket with an "activity" ping per keystroke/click
+
+# UI thread-marshaling (chatterbox_gui_spec_v0.1.md Sec2.1): the ONE queue shared by worker-thread
+# results (synthesis/playback done, warm-up done) AND powerd-forwarded socket events -- Tk is only
+# ever touched from the Tk thread, everything else posts a closure here instead.
+ui_queue = queue.Queue()
+
+# Worker/busy-guard (spec Sec2.2). Mutated only on the Tk thread (on_speak() sets it True directly;
+# _done()/_fail() -- which set it False -- always run via post(), never called directly from the
+# worker thread), so there's no cross-thread race on this flag despite the worker thread existing.
+busy = False
+
+# Set once, near the end of create_gui(), once the nav ring and callbacks it wraps all exist.
+dispatch = None
+nav = None
+
+
+def post(fn):
+    """Callable from ANY thread -- queues a widget-safe closure to run on the Tk thread."""
+    ui_queue.put(fn)
+
+
+def _pump():
+    """Runs on the Tk thread. Drains ui_queue, then reschedules itself."""
+    try:
+        while True:
+            ui_queue.get_nowait()()
+    except queue.Empty:
+        pass
+    window.after(30, _pump)
 
 
 def _on_activity_event(event):
@@ -59,23 +94,144 @@ def _on_activity_event(event):
         _power_client.send_activity()
 
 
-def handle_power_input(action):
-    """Called (on the Tk thread, via _poll_power_events) for every switch press powerd forwards.
-    Stub for now -- the actual switch-press -> GUI-action dispatcher is a separately specced
-    component (chatterbox-powerd_spec_v0.1.md Sec9.4 "input dispatcher"), not yet implemented."""
-    print("[gui] power input action received: {}".format(action))
+def _handle_power_input(action_str):
+    """Runs on the Tk thread (post()-ed from the powerd client's background thread via
+    set_input_handler). Forwarded switch press -> Action lookup by name -> dispatch. Unknown
+    action names (e.g. a user_prefs.yaml typo) are logged and ignored, never raised."""
+    try:
+        action = ginput.Action[action_str]
+    except KeyError:
+        print("[gui] unknown power input action ignored: {}".format(action_str), file=sys.stderr)
+        return
+    dispatch(action)
 
 
-def _poll_power_events():
-    """Drains _power_event_queue (filled from the powerd client's background thread via
-    set_input_handler) on the Tk thread -- Tk widgets must only ever be touched from this thread."""
-    while True:
-        try:
-            action = _power_event_queue.get_nowait()
-        except queue.Empty:
-            break
-        handle_power_input(action)
-    window.after(100, _poll_power_events)
+def _set_ui_state(state_name, error=None):
+    """idle / synthesising / initialising / playing / error, reusing the existing status-circle
+    widget (chatterbox_gui_spec_v0.1.md Sec2.2's UI states) plus one status/error label."""
+    color = {
+        "idle": "gray",
+        "synthesising": "yellow",
+        "initialising": "yellow",
+        "playing": "green",
+        "error": "red",
+    }.get(state_name, "gray")
+    if canvas_circle is not None:
+        update_circle_color(color, canvas_circle, canvas_circle_figure)
+    if lbl_status is not None:
+        lbl_status["text"] = "" if error is None else "Erreur : {}".format(error)
+
+
+def _update_audio_info(result):
+    update_audio_infos(result.audio_duration_s, result.tts_duration_s,
+                        result.vocoder_duration_s, result.denoiser_duration_s)
+    if result.gst_weights is not None:
+        update_GST_infos(result.gst_weights)
+
+
+def on_speak():
+    """SPEAK action handler -- Tk thread. Snapshots everything the worker needs (text, model
+    indices, slider values) before starting the thread, so a model-button click mid-synthesis on
+    the Tk thread can't change which model an in-flight worker uses."""
+    global busy
+    if busy:
+        return
+    text = ent_text_input.get()
+    if not text.strip():
+        return
+    tts_idx, voc_idx = state.TTS_INDEX, state.VOCODER_INDEX
+    gui_control = get_gui_controls()
+
+    busy = True
+    _set_ui_state("synthesising")
+    btn_syn_audio.config(state="disabled")
+    _power_client.send_activity()
+    threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control), daemon=True).start()
+
+
+def _work(text, tts_idx, voc_idx, gui_control):
+    """Worker thread -- NO Tk calls. All UI updates go through post()."""
+    try:
+        result = synth.synthesize(text, tts_idx, voc_idx, TTS_CONFIG, gui_control=gui_control)
+    except Exception as exc:  # noqa: BLE001 -- any synthesis failure must show as the GUI's
+        # "error" state, never crash the process (spec Sec7).
+        post(lambda exc=exc: _fail(exc))
+        return
+
+    if result is None:  # empty input after normalization -- nothing to play
+        post(_done)
+        return
+
+    post(lambda: (_set_ui_state("playing"), _update_audio_info(result)))
+    _power_client.send_activity()
+
+    try:
+        playback.play_audio()
+    except Exception as exc:  # noqa: BLE001 -- same as above, for the playback half.
+        post(lambda exc=exc: _fail(exc))
+        return
+
+    post(_done)
+
+
+def _done():
+    global busy
+    busy = False
+    _set_ui_state("idle")
+    btn_syn_audio.config(state="normal")
+
+
+def _fail(exc):
+    global busy
+    busy = False
+    print("[gui] synthesis/playback failed: {}".format(exc), file=sys.stderr)
+    _set_ui_state("error", exc)
+    btn_syn_audio.config(state="normal")
+
+
+def _start_warmup():
+    """Scheduled once via window.after() right before window.mainloop() (spec Sec6) -- runs on
+    the SAME busy/worker machinery as real synthesis, so a Speak click during warm-up is naturally
+    ignored by the busy-guard above instead of needing separate handling."""
+    global busy
+    if busy:
+        return
+    busy = True
+    _set_ui_state("initialising")
+    threading.Thread(target=_warmup_work, daemon=True).start()
+
+
+def _warmup_work():
+    cli.warmup(TTS_CONFIG)  # try/except-log-and-continue already inside cli.warmup()
+    post(_done)
+
+
+def _keyboard_emit(payload):
+    """Action.KEY handler -- the same insert-into-entry + optional prerecorded-phone-playback
+    logic the on-screen keyboard's regular phoneme buttons already did inline, now reachable
+    through dispatch (so every keypress also pings powerd activity, and any future input source
+    that emits Action.KEY gets identical behavior)."""
+    phon, label, keyboard_config = payload
+    ent_text_input.insert("end", "{} ".format(phon))
+    if entry_text_keyboard is not None:
+        entry_readonly_insert(entry_text_keyboard, label, keyboard_config)
+    else:
+        play_prerecorded_phone(label, keyboard_config)
+
+
+def _toggle_settings():
+    if settings.is_open():
+        settings.close()
+    else:
+        settings.open_settings(window)
+
+
+def _back_action():
+    if settings.is_open():
+        settings.close()
+    else:
+        ent_text_input.delete(0, 'end')
+
 
 def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=0):
     global lbl_text_keyboard
@@ -109,7 +265,7 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
             tk.Grid.columnconfigure(window_keyboard,i_key,weight=1)
             key_label = key[0]
             if len(key) < 3:
-                # Default Case: keys adds inputs to entry
+                # Default Case: keys emit Action.KEY (phoneme insert + optional playback)
                 key_phon = key[1]
                 current_button = tk.Button(
                     master=window_keyboard,
@@ -117,10 +273,9 @@ def create_keyboard(key_board_options, entry, main_window=None, index_gst_token=
                     font=myFont,
                     width=key_board_options["max_button_width"],  # Set the max width of each button
                     wraplength=key_board_options["max_button_width"] * 10,  # Limit the text wrapping within the button
-                    command= lambda current_phon=key_phon, current_label=key_label: [
-                        entry.insert("end", "{} ".format(current_phon)),
-                        entry_readonly_insert(entry_text_keyboard, current_label, key_board_options) if entry_text_keyboard else play_prerecorded_phone(current_label, key_board_options)
-                    ]
+                    command=lambda current_phon=key_phon, current_label=key_label, current_kb_opts=key_board_options: dispatch(
+                        ginput.Action.KEY, payload=(current_phon, current_label, current_kb_opts)
+                    )
                 )
             else:
                 # Special Case: keys plays functions with specific entries (entries need to be in the global scope)
@@ -156,6 +311,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global lbl_audio_infos_vocoder_duration
     global lbl_audio_infos_denoiser_duration
     global lbl_audio_infos_synthesis_duration
+    global lbl_status
     global gui_config
     global main_panel_config
     global TTS_CONFIG
@@ -164,6 +320,9 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global canvas_circle
     global canvas_circle_figure
     global _power_client
+    global btn_syn_audio
+    global dispatch
+    global nav
 
     TTS_CONFIG = tts_config
     gui_config = tts_config['GUI_config']
@@ -175,12 +334,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
 
     # Power-daemon client: forward user interaction as "activity" (resets powerd's idle clock),
-    # receive forwarded switch presses via handle_power_input(). No-op if powerd isn't reachable.
+    # receive forwarded switch presses via _handle_power_input(). No-op if powerd isn't reachable.
     _power_client = power_client.get_client()
-    _power_client.set_input_handler(lambda action: _power_event_queue.put(action))
+    _power_client.set_input_handler(lambda action: post(lambda: _handle_power_input(action)))
     window.bind_all("<ButtonPress>", _on_activity_event)
     window.bind_all("<KeyPress>", _on_activity_event)
-    window.after(100, _poll_power_events)
+    window.after(30, _pump)
 
     # Add specified TTS models
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
@@ -227,14 +386,13 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     btn_syn_audio = tk.Button(
         master=window,
         text="Synthèse",
-        command= lambda is_gui=True, tts_global_conf=tts_config: cli.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls())
     )
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=window, text="Input Text").grid(row=7, column=0, pady = 4)
 
         ent_text_input.grid(row=7, column=1)
-        ent_text_input.bind("<Return>", lambda is_gui=True, tts_global_conf=tts_config: cli.syn_audio(is_gui, tts_global_conf, gui_control=get_gui_controls()))
+        ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
         btn_syn_audio.grid(row=7, column=2)
 
@@ -259,6 +417,11 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text="Durée Totale Synthèse : 0.000s | 0% de la durée audio")
         lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
 
+    # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- always
+    # present, empty text outside the error state.
+    lbl_status = tk.Label(master=window, text="", fg="red")
+    lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
+
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
         lbl_gst_infos = {}
@@ -281,12 +444,32 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
     # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
     # the keyboard regardless of add_play_button/add_GST_infos.
+    btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(
-            master=window,
-            text="Ranger",
-            command=lambda client=_power_client: client.send_put_away()
-        ).grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_put_away = tk.Button(master=window, text="Ranger")
+        btn_put_away.grid(row=18+index_gst_token, column=0, columnspan=max_buttons+2)
+
+    btn_settings = None
+    if main_panel_config.get("add_settings_button", True):
+        btn_settings = tk.Button(master=window, text="Réglages", command=_toggle_settings)
+        btn_settings.grid(row=19+index_gst_token, column=0, columnspan=max_buttons+2)
+
+    # Action dispatcher + minimal nav ring (chatterbox_gui_spec_v0.1.md Sec3) -- built once every
+    # widget it references exists. Intentionally small (not every model button) per the spec's
+    # "do NOT overbuild" scope discipline.
+    nav_widgets = [w for w in (ent_text_input, btn_syn_audio, btn_put_away, btn_settings) if w is not None]
+    nav = ginput.NavRing(nav_widgets)
+    dispatch = ginput.make_dispatcher(
+        activity_fn=_power_client.send_activity,
+        speak_fn=on_speak,
+        put_away_fn=_power_client.send_put_away,
+        nav=nav,
+        keyboard_emit_fn=_keyboard_emit,
+        back_fn=_back_action,
+    )
+    btn_syn_audio.config(command=lambda: dispatch(ginput.Action.SPEAK))
+    if btn_put_away is not None:
+        btn_put_away.config(command=lambda: dispatch(ginput.Action.PUT_AWAY))
 
     if gui_config["add_keyboard"]:
         if gui_config["detach_keyboard"]:
@@ -294,6 +477,10 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window_keyboard.mainloop()
         else:
             window_keyboard = create_keyboard(gui_config["keyboard_options"], ent_text_input, window, index_gst_token)
+
+    # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
+    # it doesn't delay the first paint. Runs on the busy/worker machinery above.
+    window.after(50, _start_warmup)
 
     window.mainloop()
 
@@ -390,7 +577,6 @@ def get_canvas_circle():
     return canvas_circle, canvas_circle_figure
 
 def update_circle_color(color, canvas_circle, canvas_circle_figure):
-    print(f"Changing circle color to {color}")
     canvas_circle.itemconfig(canvas_circle_figure, fill=color)
 
 def gui_fastspeech2(tts_config, main_panel_config):

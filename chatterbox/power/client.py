@@ -195,6 +195,16 @@ class PowerdClient:
             return
         self._loop.call_soon_threadsafe(self._send, {"type": "put_away"})
 
+    def send_reload(self):
+        """Fire-and-forget -- tells powerd to re-read user_prefs.yaml (chatterbox/gui/settings.py
+        calls this after a successful save)."""
+        if self._disabled:
+            return
+        self._ensure_started()
+        if self._loop is None or self._disabled:
+            return
+        self._loop.call_soon_threadsafe(self._send, {"type": "reload"})
+
     def get_state(self, timeout=0.2):
         """Returns the FSM state name, or None if unreachable/timed out."""
         reply = self._call_async(
