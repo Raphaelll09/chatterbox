@@ -349,7 +349,18 @@ def main():
 
             first_input = True
             while True:
-                txt_input = input("Input Text (Ctrl+C to exit): ")
+                # Print the prompt straight to sys.__stdout__ (the real stdout stream, captured
+                # once at interpreter startup) rather than through input()'s own prompt-printing,
+                # which goes via the current sys.stdout -- a single process-wide object. The
+                # warm-up thread above temporarily redirects sys.stdout globally (warmup()'s
+                # contextlib.redirect_stdout) to keep its throwaway synthesis quiet; on the very
+                # first loop iteration that redirect can still be active for the ~0.2-0.5s it
+                # takes warm-up to run, silently swallowing this prompt into warm-up's discarded
+                # buffer instead of the terminal (input() still reads stdin fine either way, so
+                # this only ever looked like a missing prompt, not a hang -- see
+                # docs/context/CHANGELOG.md 2026-07-21 "Fix the first free-text prompt...").
+                print("Input Text (Ctrl+C to exit): ", end="", flush=True, file=sys.__stdout__)
+                txt_input = input()
                 if first_input:
                     warmup_thread.join()
                     first_input = False
