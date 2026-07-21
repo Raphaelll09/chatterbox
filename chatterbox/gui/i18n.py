@@ -47,6 +47,10 @@ STRINGS = {
         "menu_theme": "Thème (bientôt)",
         "menu_language": "Langue (bientôt)",
         "about_title": "À propos de Chatterbox",
+        "keyboard_mode_text": "Texte",
+        "keyboard_mode_phonemes": "Phonèmes",
+        "keyboard_space": "Espace",
+        "keyboard_backspace": "Effacer",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
     },
