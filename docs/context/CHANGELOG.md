@@ -15,6 +15,51 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — GUI responsive/accessible refactor (cc_prompt_gui_refactor.md, Phase 3)
+
+- What: seven incremental commits against `cc_prompt_gui_refactor.md`'s Phase 1 audit list (Phase
+  0 discovery found the reliability item, #9, already solved in an earlier session — worker
+  thread + busy-guard + exception-swallowing were already in place per `docs/gui/GUI.md`):
+  1. Responsive grid: `window`/options-panel `columnconfigure`/`rowconfigure` weights replace the
+     fixed-pixel `grid_propagate(False)` pinning, so content tracks window size.
+  2. Fixed a real latent bug in the "Play" replay button (crashed on click before any synthesis,
+     ran unguarded on the Tk thread) by routing it through a new `Action.REPLAY` + `on_replay()`
+     on the same worker/busy-guard machinery as Speak.
+  3. Portrait/landscape reflow: a `<Configure>` binding moves the embedded keyboard area into a
+     second column in landscape (maintenance use) and back in portrait (native orientation).
+  4. GST-token style picker: one-radio-per-row column → a wrapped 4-per-row chip grid;
+     `TOKEN13`-`16` placeholders (unnamed/untrained LST directions) hidden behind an "Styles
+     avancés" toggle.
+  5. Added an app-bar menu (Paramètres/À propos wired up; Thème/Langue honest disabled stubs) and
+     `chatterbox/gui/i18n.py`, a French string table replacing a hardcoded French/English label
+     mix. Caught `tk.Menu()`'s default tearoff entry shifting every menu index.
+  6. Demoted the TTS/vocoder model-selector buttons out of the main window into a new "Avancé"
+     section of the settings dialog (dependency-injected via `open_settings(...,
+     build_advanced_section=...)`, mirroring `gui/input.py`'s no-import-cycle pattern) — kept
+     rather than deleted since Matcha-TTS/FastSpeech2s are still being benchmarked.
+  7. Added a Texte/Phonèmes segmented toggle and a new simplified-AZERTY soft letter keyboard
+     (`app.py:_create_letter_keyboard()`) alongside the existing phonetic grid — both keyboards
+     live in one `keyboard_area` container that landscape reflow (item 3) now repositions as a
+     unit.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/input.py`, `chatterbox/gui/settings.py`, new
+  `chatterbox/gui/i18n.py`; `CLAUDE.md` (repo map updated for the above).
+- Why: `cc_prompt_gui_refactor.md` — Objective 5 (accessible interface) of the project report,
+  which flagged the GUI as buggy/slow-to-wake/touchscreen-bound; user confirmed on real Pi 5
+  hardware mid-session that the portrait/landscape reflow (item 3) works correctly.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed/1 skipped, unchanged by every
+  commit. Each commit additionally has a one-off mocked-`create_gui()` smoke script (real Tk, no
+  pretrained weights, `registry.BACKEND` model-loading monkeypatched) run manually during the
+  session, not checked into `tests/` — same "needs real weights/Tk, not part of pytest" carve-out
+  `docs/gui/GUI.md` already documents for the worker-thread responsiveness check.
+- Notes/gotchas: manual on-hardware test checklists were given per-commit in-session; only the
+  portrait/landscape reflow (item 3) has been confirmed by the user on a real Pi 5 so far. Chip
+  grid touch-target size, French menu label accent rendering, and the new letter keyboard still
+  need real-hardware eyes-on. `docs/gui/GUI.md` itself was not updated in this session (still
+  accurate on the pre-existing worker-thread/dispatch architecture; the new pieces layer on top
+  without changing it) — flagged here in case it drifts further from `app.py`'s actual layout.
+
+---
+
 ## 2026-07-21 — Kiosk finalization (step 3): cage decided, opt-in unattended-boot script
 
 - What: `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passed on real Pi 5 hardware (per the
