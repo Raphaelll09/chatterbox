@@ -1,0 +1,26 @@
+# chatterbox-powerd systemd unit (chatterbox-powerd_spec_v0.1.md Sec8).
+#
+# Installed by scripts/setup_pi.sh into /etc/systemd/system/ -- see docs/power/POWERD.md.
+#
+# Deviates from the literal spec in one way: ExecStart/WorkingDirectory point at the venv
+# scripts/setup_pi.sh actually creates (~/chatterbox/venv), not /usr/bin/python3 -- the system
+# interpreter has none of requirements-pi.txt installed. "gerantos"/"/home/gerantos/chatterbox"
+# are placeholders matching the spec's own examples -- adjust both units together if your
+# deployment uses a different user or clone location.
+[Unit]
+Description=Chatterbox power-state daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gerantos/chatterbox
+ExecStart=/home/gerantos/chatterbox/venv/bin/python3 -m chatterbox.power.daemon
+Restart=always
+RestartSec=2
+RuntimeDirectory=chatterbox
+RuntimeDirectoryMode=0750
+User=root
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

@@ -45,7 +45,17 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
   - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
     `docs/context/ARCHITECTURE.md`, stale on paths but not on structure); `config/paths.py` —
-    repo-root-anchored path resolution for the vendored model dirs (added Phase 0).
+    repo-root-anchored path resolution for the vendored model dirs (added Phase 0);
+    `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs (below), reloadable on SIGHUP.
+  - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon
+    (ACTIVE→DIM→DARK→DEEP, backlight, amplifier SD line, physical switches/touch activity, halt-on-
+    DEEP). Run with `python3 -m chatterbox.power.daemon`; every hardware import (`gpiozero`,
+    `evdev`) is guarded so this package (and everything importing it) still loads cleanly without
+    them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
+    `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
+    powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
+- `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
+  `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd").
 - `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
   - `measurement/benchmark/` — fixed 10-sentence French benchmark set + runner (was `benchmark/`).
   - `measurement/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
@@ -54,7 +64,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
 - `assets/models/` — vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`,
   `flaubert/`; weights not in git — see Install below).
 - `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`,
-  `test_p4_sweep.py`, `test_export_xlsx.py`.
+  `test_p4_sweep.py`, `test_export_xlsx.py`, `test_power_{fsm,config,backlight,amp,ipc}.py`.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
 
@@ -104,6 +114,9 @@ module names/paths predate the Phase 3 reorg above; cross-check against this fil
 - **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
   per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/context/ARCHITECTURE.md`
   "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
+- **Power daemon** (optional, separate process, Pi/Linux-only): `python3 -m chatterbox.power.daemon`
+  (or the `chatterbox-powerd` systemd unit) runs the kiosk power-state machine alongside `do_tts.py
+  --gui`. See `docs/power/POWERD.md`.
 
 ## Testing
 
@@ -116,6 +129,8 @@ On this checkout, bare `python`/`python3` resolve to the Windows Store stub, not
 venv — invoke via `.venv/Scripts/python.exe` (Windows) or activate the venv first. Tests need no
 pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profiling.py`/
 `test_benchmark.py` cover pure-parsing/call-ordering logic with synthesis monkeypatched.
+`test_power_*.py` similarly need no Pi hardware (fake-injected FSM/backlight/amp) — the one
+exception, a live unix-socket loopback test in `test_power_ipc.py`, is `skipif`'d on Windows.
 
 ## Conventions
 

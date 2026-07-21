@@ -5,6 +5,7 @@ GUI_config:
     add_audio_infos: True
     add_GST_infos: False
     add_play_button: False
+    add_put_away_button: True  # sends put_away to chatterbox-powerd; no-op if powerd isn't running
     # width: 800
     width: 440
     height: 800

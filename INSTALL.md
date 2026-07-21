@@ -49,6 +49,44 @@ The script:
   through `do_tts.py` (non-fatal — a missing microphone/speaker or a slow first run on a fresh Pi
   shouldn't fail provisioning on its own).
 - Writes `requirements-pi-lock.txt`.
+- Installs and enables (but does not start) the `chatterbox-powerd` systemd units (below) —
+  non-fatal if this step fails; it's an optional appliance-mode feature.
+
+## chatterbox-powerd (kiosk power management)
+
+Optional always-on daemon owning the ACTIVE→DIM→DARK→DEEP power state machine, backlight,
+amplifier SD line, and physical switch/touch activity detection for an unattended kiosk
+deployment. See `chatterbox-powerd_spec_v0.1.md` for the full design and `docs/power/POWERD.md`
+for day-to-day running/configuration/testing. Not required to run `do_tts.py` normally — every
+integration point (`chatterbox/audio/playback.py`'s amp handshake, `chatterbox/gui/app.py`'s
+activity/put-away wiring) degrades to a no-op if powerd isn't running.
+
+`scripts/setup_pi.sh` installs `deploy/systemd/chatterbox-powerd.service` and
+`deploy/systemd/chatterbox-gui.service` to `/etc/systemd/system/`, creates a `chatterbox` group,
+adds the user running the script to it (needed for the GUI to connect to powerd's socket at
+`/run/chatterbox/powerd.sock`), and `systemctl enable`s both units — but does **not** `start`
+them, and does **not** touch any of the following, which need a one-time manual pass:
+
+1. **Unit file paths/user.** Both units default to `gerantos` / `/home/gerantos/chatterbox`
+   (matching `chatterbox-powerd_spec_v0.1.md`'s own examples). If your deployment uses a different
+   user or clone location, edit both files under `/etc/systemd/system/`, then
+   `sudo systemctl daemon-reload`.
+2. **Hardware confirmation** in `chatterbox/config/user_prefs.yaml` before trusting the amp/
+   backlight on a new board: `amp.sd_pin` and `amp.enable_active_high` (SD-line wiring/polarity),
+   `display.backlight` (sysfs node name, or leave as `auto`). Wrong values here degrade safely
+   (powerd logs and disables that one piece of hardware control rather than crashing — see
+   `docs/power/POWERD.md`), but won't actually control the amp/backlight until corrected.
+3. **EEPROM / `config.txt`** (deliberately not touched by powerd or this script — a boot-config
+   edit has a brick-on-mistake risk the rest of this repo's tooling avoids elsewhere too): keep
+   `POWER_OFF_ON_HALT=0` (the default — DEEP's `systemctl halt` should leave the Pi 5's low-power
+   PMIC domain up so the power button wakes it; `POWER_OFF_ON_HALT=1` is power-cycle-only, no
+   wake). Consider `dtoverlay=disable-wifi`, `dtoverlay=disable-bt`, `arm_freq_min=500` for the
+   idle-power numbers in the spec's autonomy model.
+4. **Start the services** once 1-3 are confirmed:
+
+   ```bash
+   sudo systemctl start chatterbox-powerd chatterbox-gui
+   ```
 
 ## Mass deployment: golden image
 

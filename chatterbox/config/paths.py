@@ -26,3 +26,7 @@ URL_REGEX_RULES = _RULES_DIR / "url_regex_rules.csv"
 # Moved from audio_keyboards/ to assets/audio/prompts/ in Phase 4 -- only this constant needed to
 # change (chatterbox/gui/app.py routes through it already, per the Phase 0 path-anchoring invariant).
 AUDIO_KEYBOARDS_DIR = ROOT / "assets" / "audio" / "prompts"
+
+# chatterbox-powerd's user-editable settings (chatterbox/power/config.py). Separate from
+# config_tts.yaml -- this one is reloaded at runtime on SIGHUP, config_tts.yaml is not.
+USER_PREFS_PATH = ROOT / "chatterbox" / "config" / "user_prefs.yaml"

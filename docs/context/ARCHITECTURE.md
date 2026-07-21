@@ -337,6 +337,49 @@ behavior is untouched.
 Tests: `tests/test_benchmark.py` covers sentence loading and call ordering
 (`chatterbox.cli.syn_audio` monkeypatched — real synthesis needs loaded models).
 
+## Power daemon (chatterbox/power/)
+
+Added 2026-07-21, per `chatterbox-powerd_spec_v0.1.md` (repo root) — full design/rationale there;
+day-to-day running/config/testing in `docs/power/POWERD.md`. Optional, Pi/Linux-only, a **separate
+process** from `do_tts.py` (unlike everything else in this file) communicating over a unix socket
+(`/run/chatterbox/powerd.sock`, newline-delimited JSON — `chatterbox/power/ipc.py`).
+
+- `fsm.py` — `PowerFSM`: the ACTIVE→DIM→DARK→DEEP state machine. Descent is time-driven (1 Hz
+  `on_tick()`, descent-only — never re-ascends on its own); ascent is event-driven (`on_activity()`
+  jumps straight to ACTIVE from any state). DEEP is terminal: `systemctl halt`. Pure and
+  dependency-injected (backlight/amp/broadcast/halt passed in as objects/callables) — no
+  hardware/asyncio imports, fully unit-tested with fakes (`tests/test_power_fsm.py`).
+- `backlight.py` / `amp.py` — sysfs `bl_power`/`brightness` writes, and the amplifier SD-line
+  GPIO (via `gpiozero`'s lgpio backend — not `RPi.GPIO`, which doesn't support the Pi 5's RP1 chip)
+  with a watchdog that force-offs an amp left on too long (crashed-playback backstop). Both
+  guard their hardware imports (`gpiozero` inside `amp.py`, plain file I/O in `backlight.py`) so
+  the modules import cleanly, and degrade to logged no-ops, on a checkout without the hardware.
+- `inputs.py` — evdev (touch/keyboard, the primary activity source) + optional `gpiozero.Button`
+  physical switches; gpiozero's own callback thread is bridged onto the daemon's asyncio loop via
+  `call_soon_threadsafe`.
+- `ipc.py` — `PowerdServer` (asyncio unix-socket server) + the wire protocol
+  (`chatterbox-powerd_spec_v0.1.md` §6: `activity`/`amp_on`/`amp_off`/`put_away`/`get_state`/
+  `reload` from clients; `input`/`state`/`amp_ack` broadcast to them).
+- `client.py` — `PowerdClient` / `get_client()`: the single shared client both
+  `chatterbox/audio/playback.py` (wraps `play_audio()` in an amp-on→ack→settle+preroll→play→tail→
+  amp-off handshake) and `chatterbox/gui/app.py` (sends `activity`, a "put away" button, receives
+  forwarded switch presses) use. Runs its own background thread + asyncio loop (Tkinter's mainloop
+  isn't asyncio-aware). **Degrades to a permanent silent no-op if powerd isn't reachable** (no
+  auto-reconnect in v0.1) — this is what keeps every non-Pi dev checkout, and any Pi before powerd
+  is set up, behaving exactly as before this daemon existed.
+- `config.py` — loads/validates `chatterbox/config/user_prefs.yaml` field-by-field; a missing
+  file, malformed YAML, or one bad value falls back to that field's default and logs a warning,
+  never raises (reliability requirement — an unattended kiosk must not fail to boot on a config
+  typo).
+- `daemon.py` — `python3 -m chatterbox.power.daemon` entry point (no `chatterbox-powerd` console
+  script — this repo has no `setup.py`/`pyproject.toml`; every subsystem here is `-m`-invoked).
+  Single-threaded asyncio: socket server, evdev read loops, and the 1 Hz tick task share one loop.
+
+Tests: `tests/test_power_{fsm,config,backlight,amp,ipc}.py` — all pure-logic/fake-injected and
+platform-independent except one live-socket loopback test in `test_power_ipc.py`, `skipif`'d on
+Windows. GPIO/backlight/evdev/systemd/halt behavior itself needs real Pi 5 hardware to verify
+(spec §10) — not exercised by any automated test in this repo.
+
 ## Not yet implemented
 
 - A from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
@@ -347,7 +390,12 @@ Tests: `tests/test_benchmark.py` covers sentence loading and call ordering
   Pi access or interactive display was available while executing it; see `docs/REORG_PROPOSAL.md`
   §7 for what was verified instead (CLI battery + a timed `--gui` launch reaching
   `window.mainloop()` with zero tracebacks) and what remains owed.
+- chatterbox-powerd's GPIO/backlight/evdev/systemd/halt behavior on real Pi 5 hardware (immediately
+  above) — implemented per spec, unverified on hardware. Also out of scope here: the "separately
+  specced" switch-press→GUI-action input dispatcher (`chatterbox/gui/app.py`'s
+  `handle_power_input()` is a logging stub) and the companion `GUI_Power_Controller_Architecture`
+  doc referenced by the powerd spec, neither written yet.
 
-Otherwise nothing tracked here — free-text (`--gui` optional), the profiling subsystem, and
-benchmark mode above are all implemented. Update this section if a future session adds something
-new and unfinished.
+Otherwise nothing tracked here — free-text (`--gui` optional), the profiling subsystem, benchmark
+mode, and chatterbox-powerd's software above are all implemented. Update this section if a future
+session adds something new and unfinished.
