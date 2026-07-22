@@ -15,6 +15,102 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Fifth feedback round: landscape keyboard zero-height bug, style grid rows
+
+- What: user reported "both keyboards disappeared, whatever dimension we chose" (the landscape
+  keyboard-width fraction from the fourth round) and asked for the style chip grid to use 4 rows
+  so every style fits once the keyboard takes half the screen.
+  1. Root cause of the disappearing keyboards: `grid_propagate(False)` stops Tk deriving BOTH
+     width and height from a frame's children, not just width -- the landscape reflow
+     (`_apply_current_orientation()`) only ever called `.config(width=...)`, never `height=`, so
+     `keyboard_area` silently collapsed to ~0px tall the moment propagate was turned off,
+     regardless of the configured fraction (the fraction only ever changed the width that was
+     being applied to an invisible frame). Fixed by measuring `winfo_reqheight()` with propagate
+     still on (so it reflects the actual keyboard content) immediately before locking the frame's
+     size, and passing that as an explicit `height=` alongside `width=`.
+  2. GST-style chip grid: columns-per-row was a fixed 4, giving 3 rows for the 12 named tokens --
+     real-hardware feedback was that 4-wide rows overflowed the narrower options column once the
+     landscape keyboard ate half the screen's width. Chips-per-row is now derived from the named
+     (non-`TOKEN*`-placeholder) token count via ceiling division targeting 4 rows, giving 3
+     columns x 4 rows for the current 12-token config instead of 4x3.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `gui_fastspeech2()`'s style
+  chip-grid block).
+- Why: fifth real-hardware/PC feedback round.
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk smoke test (mocked
+  model loading, no pretrained weights) confirmed: landscape `keyboard_area` height is 263px (not
+  ~0) after a resize + fraction change; the 12 named style chips land on grid rows 0-3 (4 rows)
+  across columns 0-2 (3 columns).
+- Notes/gotchas: `_CHIPS_PER_ROW` is no longer shared between the speaker dropdown and the style
+  grid -- it now only sizes the speaker dropdown's columnspan; the style grid computes its own
+  `_style_chips_per_row`. If the named-token count changes (a new style trained, or a placeholder
+  promoted to real), the column count reflows automatically to keep ~4 rows rather than needing a
+  manual constant update.
+
+---
+
+## 2026-07-21 — Power-timer presets: eliminate overlap between adjacent ranges
+
+- What: user clarified the ambiguous "timer before assombrissement" comment from the fourth
+  feedback round: the old preset ranges overlapped enough that a nonsensical combination (2min
+  dim + 30s screen-off) was directly pickable. `_DIM_PRESETS` now tops out at 2min,
+  `_DARK_PRESETS` starts at 2min and tops out at 30min, `_DEEP_PRESETS`'s shortest real option
+  (excluding "Désactivé"/0) now starts at 30min (same pattern applied to dark/deep for
+  consistency; added a 4h option since 5min/15min no longer fit that range).
+- Files: `chatterbox/gui/settings.py`.
+- Why: direct user clarification -- see the fourth feedback round's changelog entry for the
+  original ambiguous comment.
+- Verify: full test suite (233 passed/1 skipped, unchanged -- `validate_power_settings()`'s own
+  `>` check is untouched, still the actual enforcement at save time) plus a re-run of the settings
+  smoke test confirming the dark-timer dropdown reflects the new range with a custom loaded value
+  still correctly inserted ("20 min (actuel)" for 1200s).
+- Notes/gotchas: the exact boundary case (dim=2min AND dark=2min, both now valid preset picks) is
+  still only caught by save-time validation, not prevented by the preset ranges themselves --
+  narrowing how far off an accidental pick can be, not a replacement for that check.
+
+---
+
+## 2026-07-21 — Fourth feedback round: powerd reload bug, settings scroll, keyboard sizing
+
+- What: nine fixes from a fourth feedback pass, across three commits:
+  1. **Real daemon bug**: `PowerFSM.set_config()` only swapped the config dict -- brightness only
+     re-applied on the NEXT actual state transition, which might never come soon after a Settings
+     save (daemon usually already sitting in ACTIVE/DIM). Now re-runs the current state's entry
+     actions immediately (skipped in DEEP, terminal). 3 new FSM tests.
+  2. Preset-dropdown custom ("actuel") values now format in the same s/min/h units as the presets
+     (1200s showed as "1200 s (actuel)" next to "10 min"/"30 min" presets -- now "20 min (actuel)").
+  3. Settings dialog: scrollable content area + a FIXED footer (error text + Enregistrer/Annuler)
+     -- this round's added fields (timer dropdowns, percent scales, Avancé section) could push the
+     window taller than the actual screen with nothing to scroll it.
+  4. Added an inline warning when `chatterbox-powerd` isn't reachable -- "mettre en veille
+     ineffective"/"brightness doesn't change"/"enregistrer=annuler" most likely all trace to this.
+  5. Orientation radios now `indicatoron=0`+`selectcolor` (chip style) instead of a plain radio
+     dot -- likely why the current selection wasn't visibly registering.
+  6. Speaker chip grid replaced with a dropdown beside "Locuteur :" -- speakers don't change often
+     and some future backends may have only one voice; frees width for the style chip grid.
+  7. Added a "Tout effacer" (clear all) button to the letter keyboard -- only backspace existed.
+  8. **Root-caused** "keyboard huge/takes all the space" in landscape: `rowspan=20` pulled in the
+     options panel's own large weighted row height, inflating the keyboard's internal weighted
+     buttons vertically too, with no width cap at all. Replaced with natural-height/top-anchored
+     placement + an explicit pixel-width cap (`grid_propagate(False)`), now a configurable
+     Settings -> Advanced fraction (1/2 default, 2/3, 3/4), applied live.
+- Files: `chatterbox/power/fsm.py`, `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`,
+  `chatterbox/gui/i18n.py`, `tests/test_power_fsm.py`.
+- Why: direct user feedback after a fourth testing round.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 233 passed/1 skipped (230 + 3 new FSM
+  tests), unchanged otherwise. Multiple mocked smoke runs confirmed: FSM re-applies brightness
+  immediately in ACTIVE/DIM and leaves DEEP alone; settings dialog's scroll canvas and footer are
+  separate grid rows; a 1200s custom value shows as "20 min (actuel)"; the powerd warning appears
+  (this checkout has none reachable); the speaker dropdown shows AD first and updates the correct
+  underlying index; "Tout effacer" empties the entry; the landscape keyboard measures exactly
+  500px in a 1000px window at 1/2 default and exactly 750px after switching to 3/4 live.
+- Notes/gotchas: two items from this round were deliberately NOT implemented, pending user
+  input -- (a) an ambiguous "timer before assombrissement can't be lower than the time it takes
+  for the screen to dim" comment (asked the user for clarification rather than guess), and (b)
+  whether orientation override should rotate the WHOLE screen (terminal included) vs. just the
+  GUI's own layout (today's behavior) -- presented trade-offs, awaiting the user's decision.
+
+---
+
 ## 2026-07-21 — Third feedback round: settings modal bug, chip defaults, landscape crop root cause
 
 - What: six fixes from a third feedback pass, split across two commits:

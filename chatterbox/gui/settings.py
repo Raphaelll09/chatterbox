@@ -39,11 +39,29 @@ def close():
 # durations is easier to reason about and to hit reliably on a touchscreen). Chosen to fit each
 # field's actual role: dimming is the first, shortest threshold; screen-off is a middle ground;
 # deep sleep/shutdown is the last-resort, longest one (or disabled).
-_DIM_PRESETS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300)]
-_DARK_PRESETS = [("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300), ("10 min", 600),
-                  ("30 min", 1800)]
-_DEEP_PRESETS = [("Désactivé", 0), ("5 min", 300), ("15 min", 900), ("30 min", 1800), ("1 h", 3600),
-                  ("2 h", 7200)]
+#
+# The three lists deliberately do NOT overlap in range (real-hardware bug report: picking, say,
+# 2min assombrissement + 30s extinction was pickable from the old presets even though it makes no
+# sense -- the screen would go dark before it ever dimmed). Each list's max equals the next list's
+# min: DIM tops out at 2min, DARK starts at 2min and tops out at 30min, DEEP's shortest real option
+# (Désactivé/0 is exempt, it disables the check entirely) starts at 30min. The exact boundary case
+# (e.g. dim=2min AND dark=2min) is still caught by validate_power_settings()'s strict ">" check at
+# save time -- these ranges just make an obviously-wrong WIDE gap much harder to pick by accident.
+_DIM_PRESETS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("2 min", 120)]
+_DARK_PRESETS = [("2 min", 120), ("5 min", 300), ("10 min", 600), ("30 min", 1800)]
+_DEEP_PRESETS = [("Désactivé", 0), ("30 min", 1800), ("1 h", 3600), ("2 h", 7200), ("4 h", 14400)]
+
+
+def _format_duration(seconds):
+    """Same s/min/h units as the presets above, for a loaded value that isn't one of them."""
+    if seconds < 60:
+        return "{} s".format(seconds)
+    if seconds < 3600:
+        minutes, rest = divmod(seconds, 60)
+        return "{} min".format(minutes) if rest == 0 else "{} min {} s".format(minutes, rest)
+    hours, rest = divmod(seconds, 3600)
+    minutes = rest // 60
+    return "{} h".format(hours) if minutes == 0 else "{} h {} min".format(hours, minutes)
 
 
 def validate_power_settings(t_dim_s, t_dark_s, t_deep_s, brightness_active, brightness_dim):
@@ -118,6 +136,21 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # from falling through).
     win.focus_set()
 
+    # Scrollable content area + a FIXED footer (error label + Enregistrer/Annuler), not just one
+    # long column -- PC-GUI bug report: once content grew (this round added the timer dropdowns,
+    # percent scales, and the "Avancé" section), the auto-sized window could exceed the actual
+    # screen height with nothing to scroll it, leaving Enregistrer/Annuler unreachable. The footer
+    # itself never scrolls, so it's always visible regardless of how tall the field area gets.
+    win.grid_rowconfigure(0, weight=1)
+    win.grid_columnconfigure(0, weight=1)
+    scroll_canvas = tk.Canvas(win, highlightthickness=0)
+    scroll_canvas.grid(row=0, column=0, sticky=tk.NSEW)
+    scroll_vsb = tk.Scrollbar(win, orient="vertical", command=scroll_canvas.yview)
+    scroll_vsb.grid(row=0, column=1, sticky="ns")
+    scroll_canvas.configure(yscrollcommand=scroll_vsb.set)
+    content = tk.Frame(scroll_canvas)
+    scroll_canvas.create_window((0, 0), window=content, anchor="nw")
+
     t_dim_var = tk.IntVar(win, value=power_cfg["t_dim_s"])
     t_dark_var = tk.IntVar(win, value=power_cfg["t_dark_s"])
     t_deep_var = tk.IntVar(win, value=power_cfg["t_deep_s"] or 0)
@@ -140,17 +173,19 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
         options = dict(presets)
         current = int_var.get()
         if current not in options.values():
-            options["{} s (actuel)".format(current)] = current
+            # Same min/h units as the presets themselves -- real-hardware feedback: a custom
+            # 1200s value showed as "1200 s (actuel)" while every preset around it read "20 min".
+            options["{} (actuel)".format(_format_duration(current))] = current
         label_by_seconds = {v: k for k, v in options.items()}
         ordered_labels = [label_by_seconds[v] for v in sorted(label_by_seconds)]
 
-        display_var = tk.StringVar(win, value=label_by_seconds[current])
+        display_var = tk.StringVar(content, value=label_by_seconds[current])
 
         def _on_select(selected_label):
             int_var.set(options[selected_label])
 
-        tk.Label(win, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
-        tk.OptionMenu(win, display_var, *ordered_labels, command=_on_select
+        tk.Label(content, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
+        tk.OptionMenu(content, display_var, *ordered_labels, command=_on_select
                       ).grid(row=row, column=1, sticky=tk.EW, padx=8, pady=4)
         row += 1
 
@@ -158,9 +193,9 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
         """0-100% on screen; raw_var (1-255) is only read/written at the boundary (initial percent
         here, converted back in on_save()) -- the rest of the schema/powerd side is untouched."""
         nonlocal row
-        percent_var = tk.IntVar(win, value=round(raw_var.get() / 255 * 100))
-        tk.Label(win, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
-        tk.Scale(win, variable=percent_var, from_=0, to=100, orient=tk.HORIZONTAL, length=220
+        percent_var = tk.IntVar(content, value=round(raw_var.get() / 255 * 100))
+        tk.Label(content, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
+        tk.Scale(content, variable=percent_var, from_=0, to=100, orient=tk.HORIZONTAL, length=220
                  ).grid(row=row, column=1, sticky=tk.EW, padx=8, pady=4)
         row += 1
         return percent_var
@@ -168,21 +203,38 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     add_preset_dropdown("Délai avant assombrissement", t_dim_var, _DIM_PRESETS)
     add_preset_dropdown("Délai avant extinction écran", t_dark_var, _DARK_PRESETS)
     add_preset_dropdown("Délai avant veille profonde", t_deep_var, _DEEP_PRESETS)
-    tk.Checkbutton(win, text="Veille profonde manuelle uniquement", variable=deep_manual_only_var,
+    tk.Checkbutton(content, text="Veille profonde manuelle uniquement", variable=deep_manual_only_var,
                     font="Helvetica 12").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
     row += 1
     brightness_active_percent_var = add_percent_scale("Luminosité active (%)", brightness_active_var)
     brightness_dim_percent_var = add_percent_scale("Luminosité atténuée (%)", brightness_dim_var)
 
     if build_advanced_section is not None:
-        advanced_frame = tk.LabelFrame(win, text="Avancé", font="Helvetica 12")
+        advanced_frame = tk.LabelFrame(content, text="Avancé", font="Helvetica 12")
         advanced_frame.grid(row=row, column=0, columnspan=2, sticky=tk.EW, padx=8, pady=8)
         build_advanced_section(advanced_frame)
         row += 1
 
-    error_label = tk.Label(win, text="", fg="red", font="Helvetica 10", wraplength=380, justify=tk.LEFT)
-    error_label.grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
-    row += 1
+    # Fixed footer (row 1 of win, NOT inside the scrollable canvas) -- error text and
+    # Enregistrer/Annuler must always be reachable regardless of how tall the field area gets.
+    footer = tk.Frame(win)
+    footer.grid(row=1, column=0, columnspan=2, sticky=tk.EW)
+
+    footer_row = 0
+    if not power_client.get_client().is_connected():
+        # PC-GUI feedback ("mettre en veille doesn't seem effective", "brightness doesn't
+        # change", "enregistrer/annuler change nothing") all trace to the same likely cause:
+        # chatterbox-powerd isn't running/reachable, so a save here writes the file correctly but
+        # nothing applies it live. Surface that directly instead of leaving it silently confusing.
+        tk.Label(footer, text="chatterbox-powerd n'est pas joignable : les réglages seront "
+                 "enregistrés mais pas appliqués tant qu'il ne tourne pas.",
+                 fg="#b36b00", font="Helvetica 10", wraplength=380, justify=tk.LEFT
+                 ).grid(row=footer_row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=(8, 0))
+        footer_row += 1
+
+    error_label = tk.Label(footer, text="", fg="red", font="Helvetica 10", wraplength=380, justify=tk.LEFT)
+    error_label.grid(row=footer_row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
+    footer_row += 1
 
     def on_save():
         t_dim_s = t_dim_var.get()
@@ -212,10 +264,22 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
             on_saved()
         close()
 
-    btn_frame = tk.Frame(win)
-    btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
+    btn_frame = tk.Frame(footer)
+    btn_frame.grid(row=footer_row, column=0, columnspan=2, pady=10)
     tk.Button(btn_frame, text="Enregistrer", command=on_save).grid(row=0, column=0, padx=8)
     tk.Button(btn_frame, text="Annuler", command=close).grid(row=0, column=1, padx=8)
+
+    # Cap the scrollable area's height to fit the actual screen (leaving room for the footer/title
+    # bar/margins) instead of letting the window auto-size past it -- PC-GUI bug report ("no
+    # scroll bar... enregistrer/annuler outside the window"). If the content is shorter than that,
+    # the canvas just matches it exactly (no dead scroll space, no visible scrollbar-for-nothing).
+    content.update_idletasks()
+    footer.update_idletasks()
+    content_width = content.winfo_reqwidth()
+    content_height = content.winfo_reqheight()
+    max_height = max(200, win.winfo_screenheight() - footer.winfo_reqheight() - 120)
+    scroll_canvas.configure(width=content_width, height=min(content_height, max_height),
+                             scrollregion=(0, 0, content_width, content_height))
 
     win.protocol("WM_DELETE_WINDOW", close)
     _window = win

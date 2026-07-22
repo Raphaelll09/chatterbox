@@ -79,9 +79,17 @@ class PowerFSM:
         return None
 
     def set_config(self, cfg):
-        """Swap in a freshly-loaded config (used by RELOAD/SIGHUP). Takes effect on the next
-        on_tick()/on_activity() -- does not itself trigger a transition."""
+        """Swap in a freshly-loaded config (used by RELOAD/SIGHUP). Immediately re-runs the
+        CURRENT state's entry actions (real-hardware bug report: a brightness change from
+        chatterbox/gui/settings.py had no visible effect until, if ever, the FSM happened to
+        transition again -- entry actions only used to fire on an actual state change, and the
+        daemon is usually sitting in ACTIVE/DIM already when a reload arrives). Not a transition
+        itself (no broadcast, no halt_fn) -- just re-applies whatever the current state's action
+        is (backlight.brightness() in ACTIVE/DIM, harmless no-op-ish repeats of on()/off() in
+        DARK/DEEP) against the new config. DEEP is terminal (about to halt) so skipped."""
         self.cfg = cfg
+        if self.state != DEEP:
+            self._entry_actions(self.state)
 
     def on_tick(self):
         """Called at 1 Hz. DEEP is terminal -- once there, ticking is a no-op (the process is
