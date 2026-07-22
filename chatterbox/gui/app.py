@@ -458,30 +458,44 @@ def _create_letter_keyboard(master, key_board_options):
             btn.grid(row=row_index, column=col_index, sticky=tk.NSEW,
                       padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
 
+    # Control-row buttons wrap their own label to whatever width Tk actually gives them (bound to
+    # each button's own <Configure>) instead of a fixed font/width -- real-hardware bug report:
+    # "Tout effacer" rendered as "out effacer", clipped, once the landscape keyboard's width cap
+    # (Settings -> Advanced fraction) made these columns narrower than the label's natural request.
+    def _wrap_to_width(event):
+        event.widget.config(wraplength=max(1, event.width - 4))
+
     control_row = len(_LETTER_ROWS)
     tk.Grid.rowconfigure(frame, control_row, weight=1)
-    tk.Button(
+    btn_space = tk.Button(
         master=frame, text=i18n.t("keyboard_space"), font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "space", None)),
-    ).grid(row=control_row, column=0, columnspan=4, sticky=tk.NSEW,
-           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
-    tk.Button(
+    )
+    btn_space.grid(row=control_row, column=0, columnspan=4, sticky=tk.NSEW,
+                    padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    btn_backspace = tk.Button(
         master=frame, text=i18n.t("keyboard_backspace"), font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "backspace", None)),
-    ).grid(row=control_row, column=4, columnspan=2, sticky=tk.NSEW,
-           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    )
+    btn_backspace.grid(row=control_row, column=4, columnspan=2, sticky=tk.NSEW,
+                        padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
     # "Tout effacer" (clear all) -- PC-GUI feedback: only backspace (delete last letter) existed;
     # _letter_key_emit()'s "clear" kind was already wired for dispatch, just never had a button.
-    tk.Button(
+    btn_clear_all = tk.Button(
         master=frame, text=i18n.t("keyboard_clear_all"), font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "clear", None)),
-    ).grid(row=control_row, column=6, columnspan=2, sticky=tk.NSEW,
-           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
-    tk.Button(
+    )
+    btn_clear_all.grid(row=control_row, column=6, columnspan=2, sticky=tk.NSEW,
+                        padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    btn_play = tk.Button(
         master=frame, text="▶", font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "play", None)),
-    ).grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
-           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    )
+    btn_play.grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
+                   padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+
+    for _btn in (btn_space, btn_backspace, btn_clear_all, btn_play):
+        _btn.bind("<Configure>", _wrap_to_width)
 
     return frame
 
@@ -831,13 +845,25 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             # its 17), so on a screen too short to show every row, they fell off-screen first. The
             # keyboard, not the always-needed controls, should be what runs out of room.
             keyboard_portrait_grid = {"row": 19 + index_gst_token, "column": 0, "columnspan": 3,
-                                       "sticky": tk.NSEW}
+                                       "rowspan": 1, "sticky": tk.NSEW}
             landscape_keyboard_column = max_buttons + 3
+            # Rows 0..17+index_gst_token are the entire main-stack vertical range (battery through
+            # Ranger/Mettre en veille). The landscape keyboard must span all of them, not just row
+            # 0 -- real-hardware bug report: gridding it at a single row (0) forced THAT row alone
+            # to grow to the keyboard's full height across every column (grid row height is shared
+            # across all columns), stealing the budget meant for row 2 (the options panel, the only
+            # weighted row) and collapsing it to ~0px, while pushing the fixed rows below it
+            # (Texte a saisir, duree labels, Rejouer, Mettre en veille) off the bottom of a
+            # screen-sized window. Spanning the same rows the main stack already occupies lets Tk
+            # absorb the keyboard's height mostly into row 2 (still the only weighted row in the
+            # span) instead of inflating row 0 alone.
+            landscape_keyboard_rowspan = 18 + index_gst_token
             layout_state = {"is_landscape": None}
 
             def _apply_current_orientation(force=False, _state=layout_state, _kb=keyboard_area,
                                             _portrait=keyboard_portrait_grid,
-                                            _col=landscape_keyboard_column):
+                                            _col=landscape_keyboard_column,
+                                            _rowspan=landscape_keyboard_rowspan):
                 if _orientation_override == "landscape":
                     landscape = True
                 elif _orientation_override == "portrait":
@@ -853,10 +879,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     # space") -- width is instead an explicit cap, a configurable fraction of the
                     # actual window width (Settings -> Advanced), enforced via grid_propagate(False)
                     # so the keyboard's own internal weighted columns/buttons scale DOWN to fit
-                    # that cap instead of growing into whatever space rowspan/weight would hand
-                    # them. No rowspan either (previously rowspan=20 pulled in row 2's -- the
-                    # options panel's -- own large weighted height, inflating the keyboard's
-                    # buttons vertically too ["letters are huge"]); natural height, anchored top.
+                    # that cap instead of growing into whatever space weight would hand them
+                    # (previously an unbounded rowspan=20 pulled in row 2's -- the options panel's
+                    # -- own large weighted height this way, inflating the keyboard's buttons
+                    # vertically too ["letters are huge"]); the height is explicit now (below), not
+                    # derived from the span, so rowspan only controls which rows share the cost of
+                    # that fixed height, not the keyboard's own size.
                     #
                     # grid_propagate(False) makes Tk stop deriving BOTH width and height from the
                     # frame's children -- it always uses whatever was last passed to .config(), and
@@ -871,7 +899,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     target_width = max(150, int(window.winfo_width() * _keyboard_landscape_fraction))
                     _kb.grid_propagate(False)
                     _kb.config(width=target_width, height=natural_height)
-                    _kb.grid(row=0, column=_col, sticky=tk.N)
+                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.N)
                 else:
                     _kb.grid_propagate(True)
                     _kb.grid(**_portrait)
