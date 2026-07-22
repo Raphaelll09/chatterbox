@@ -132,6 +132,58 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 4/5: generic control panel + duration pool
+
+- What: fourth (largest) phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `gui_fastspeech2()` -- FS2-specific, hand-written widget code -- is replaced
+  by `gui_generic_controls()`, which renders the panel entirely from the
+  active backend's `describe_controls()`: a speaker dropdown (skipped for a
+  backend with no `speaker_list`) plus one widget per `"controls"` entry,
+  dispatched by `"type"` (`chip_grid`/`slider`/`text`) to small builder
+  helpers reusing the exact logic `gui_fastspeech2()` used to hand-write
+  (stable-sort-default-first, dynamic 4-row chip columns, `hidden_pattern`-
+  gated placeholders).
+  1. `get_gui_controls()` returns a dict (was a fixed 12-element positional
+     list) assembled from `_generic_control_widgets`.
+  2. `describe_controls()` gained `"default_speaker"` (the backend's own
+     configured default speaker index) -- `app.py` no longer reads
+     `config_tts.yaml`'s `default_args` directly at all for the speaker
+     dropdown, keeping it fully generic.
+  3. Bias sliders' `"advanced"` flag now drives one new shared "Contrôles
+     avancés" toggle in the generic panel -- reveals/hides them together
+     instead of `gui_control_bias: False` meaning permanently absent with no
+     way to show them from the GUI (a small, low-risk UX improvement, not a
+     design goal on its own).
+  4. Duration display: the 3 hardcoded tts/vocoder/denoiser labels are
+     replaced by a pool of 3 generic rows, assigned to whichever
+     `stage_durations` keys are present at synthesis time via one shared i18n
+     template (`stage_duration_label`) + a display-name lookup, instead of 3
+     separate pre-written i18n keys -- hides any pool row a synthesis didn't
+     use (e.g. no `"vocoder"` for a monolithic backend). The "Afficher les
+     données de synthèse" menu checkbox now tracks how many pool rows are
+     actually active so re-enabling it doesn't reveal an unused row.
+  5. `config_tts.yaml`'s `gui_script` now points at `gui_generic_controls`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`,
+  `chatterbox/synthesis/base.py`, `chatterbox/synthesis/backends/
+  fastspeech2_hifigan/backend.py`, `chatterbox/config/config_tts.yaml`,
+  `tests/test_backend_describe_controls.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (mocked `describe_controls()`, no pretrained weights) confirmed
+  pixel-identical FS2 layout (speaker dropdown defaults correctly, style grid
+  still 4 rows x 3 cols for 12 named tokens, all 9 sliders present with
+  matching ranges/resolutions/defaults), the new advanced-controls toggle
+  correctly shows/hides bias sliders, `get_gui_controls()`'s keys match what
+  `backend.py`'s `syn_fastspeech2()` reads, and the duration pool correctly
+  handles both a 2-stage (monolithic-shaped) and 3-stage (today's FS2) result.
+- Notes/gotchas: phase 5 (`needs_vocoder`-gated Vocodeur picker + phoneme-
+  keyboard fallback) is last -- until then the Vocodeur picker always shows
+  and the Phonèmes keyboard has no fallback behavior wired up yet even though
+  the capability flags/config setting exist (phase 1).
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
