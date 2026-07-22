@@ -15,6 +15,32 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Orientation override + kiosk maintenance-recovery docs
+
+- What: the two items deferred from the second feedback round:
+  1. Settings -> Advanced gains an Auto/Portrait/Paysage orientation override (`_orientation_override`
+     module global + `_set_orientation_override()`/`_refresh_orientation` in `gui/app.py`). "Auto"
+     keeps the `<Configure>`-based detection; forcing Portrait/Paysage applies immediately and
+     makes further real resize events a no-op until set back to Auto.
+  2. `docs/kiosk/KIOSK.md` gained a "Maintenance / recovery access" section (manual SSH-over-
+     Ethernet, config.txt dtoverlay restore, getty@tty1 re-enable steps) instead of an in-GUI
+     feature -- both radios and getty are boot-time config, not live-toggleable, and a kiosk-escape
+     control needs real access-control design not yet done.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `docs/kiosk/KIOSK.md`.
+- Why: user asked for a persisted-feeling manual orientation override (kiosk windows may never
+  actually resize at runtime, defeating pure auto-detection) and a way back into a locked-down
+  kiosk Pi once `scripts/kiosk_finalize.sh` disables wifi/bluetooth/console login.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Two
+  mocked `create_gui()` smoke runs: forcing landscape/portrait moves `keyboard_area` with no real
+  window resize, switching back to Auto restores real detection; the radio buttons render in
+  Settings -> Advanced and clicking one sets the override correctly.
+- Notes/gotchas: the user picked the Settings -> Advanced *location* explicitly; persistence
+  wasn't separately confirmed, so this implementation defaulted to **runtime-only** (resets to
+  Auto on GUI restart, not persisted to `user_prefs.yaml`) as the smaller/reversible choice.
+  Flagged back to the user -- revisit if they actually want it to survive a restart.
+
+---
+
 ## 2026-07-21 — Second real-hardware feedback round: landscape width, chip labels, apostrophe
 
 - What: six fixes from a second Pi/PC feedback pass (landscape crop persisted after the first
