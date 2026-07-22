@@ -1,5 +1,11 @@
 GUI_config:
   online_phon_input: False
+  # Fallback when the active TTS model's accepts_phoneme_input (below, per tts_models entry) is
+  # False: "translate_labels" keeps the Phonemes keyboard usable, writing each key's already-
+  # computed display label (e.g. "CH", "ON" -- ordinary French spelling) into the text field
+  # instead of its raw phone code; "hide" removes the Texte/Phonemes toggle and keyboard entirely,
+  # leaving only the Texte keyboard. See chatterbox/gui/app.py's _keyboard_emit().
+  phoneme_fallback: "translate_labels"
   main_panel:
     name_window: "TTS"
     add_audio_infos: True
@@ -101,6 +107,15 @@ tts_models:
     gui_control_bias: False
     gui_style_control: True
     gui_styleTag_control: False
+    # Static per-model capability flags (decidable before the model is loaded, unlike
+    # describe_controls() -- see chatterbox/synthesis/base.py). needs_vocoder: whether a separate
+    # vocoder_models entry must be selected/loaded for this TTS model (False for a monolithic
+    # end-to-end model with no separate mel->wav stage -- gui/app.py's Settings->Advanced hides the
+    # Vocodeur picker when False). accepts_phoneme_input: whether this model understands the
+    # Phonemes keyboard's raw phone-code syntax at all (gui/app.py falls back per
+    # GUI_config.phoneme_fallback above when False).
+    needs_vocoder: True
+    accepts_phoneme_input: True
     default_args:
       text_cleaners: ["basic_cleaners"]
       preprocess_config: "config/ALL_corpus/preprocess.yaml"
