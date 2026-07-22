@@ -15,6 +15,42 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Third feedback round: settings modal bug, chip defaults, landscape crop root cause
+
+- What: six fixes from a third feedback pass, split across two commits:
+  1. **Real bug**: the Réglages Toplevel was never made modal (no `transient()`/`grab_set()`), so
+     clicks landed on the main window behind it. Fixed with `transient()`+`grab_set()`+
+     `focus_set()`, `grab_release()` added to `close()`.
+  2. Power-timer sliders (assombrissement/extinction/veille profonde) replaced with preset
+     dropdowns scoped to each field's role; a non-preset loaded value shows as its own
+     "(actuel)" option rather than silently snapping.
+  3. Brightness sliders now show 0-100% instead of raw 1-255 -- conversion only at the GUI
+     boundary, `write_settings()`/powerd/backlight driver untouched.
+  4. Default speaker (AD)/style (NEUTRE) chips now render at grid position [0,0] via a stable
+     sort of `enumerate(...)` by "is this the default" -- the chip's `value` stays each item's
+     ORIGINAL index (the real model speaker ID / the index `keyboards.py`'s hardcoded mood-
+     shortcuts depend on), only draw order changes. Reverted the previous round's
+     `gst_token_list` YAML reorder (unnecessary now) back to alphabetical/stable order,
+     `gst_token_index` back to 8.
+  5. All 9 sliders now `sticky=W` -- previously centered in their cell, so position shifted
+     unpredictably between portrait/landscape.
+  6. **Root-caused** "Synthèse cropped in landscape": the options-panel canvas's one-time
+     `width=`/`height=` hint (440x400) was a hard grid MINIMUM regardless of weight -- in a
+     landscape window shorter than 400px, that minimum forced the window taller than the actual
+     screen, pushing everything below the options panel off-screen. Replaced with a
+     `<Configure>` binding on the surrounding frame that keeps canvas's size matched to whatever
+     the grid actually allocates it.
+- Files: `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after a third round of testing (mix of PC and Pi 5).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged
+  (`validate_power_settings()`/`write_settings()` signatures untouched). Two mocked smoke runs:
+  settings dialog holds the modal grab, a non-preset value shows as "45 s (actuel)", brightness
+  204/255 shows as 80% and saving at 50% writes back 128; AD/NEUTRE chips render at row=0/col=0
+  and are selected by default, sliders report `sticky="w"`, and the options canvas shrinks to
+  279px (well below the old 400px floor) in a short 350px-tall landscape window.
+
+---
+
 ## 2026-07-21 — Orientation override + kiosk maintenance-recovery docs
 
 - What: the two items deferred from the second feedback round:
