@@ -442,5 +442,6 @@ class FastSpeech2HifiGanBackend:
 
         return {
             "speaker_list": text_pipeline.get_speaker_list(speakers_location),
+            "default_speaker": default_args["speaker_id"],
             "controls": controls,
         }

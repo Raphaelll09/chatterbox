@@ -74,6 +74,8 @@ class Synthesizer(ABC):
         button):
             {
                 "speaker_list": [str, ...],   # None/omitted if this backend has only one voice
+                "default_speaker": int,       # index into speaker_list pre-selected in the GUI;
+                                               # omitted/ignored when speaker_list is empty
                 "controls": [                 # ordered list of control descriptors; gui/app.py's
                                                # gui_generic_controls() renders one widget per
                                                # entry, in order, and collects values into a dict

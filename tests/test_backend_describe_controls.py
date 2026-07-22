@@ -17,6 +17,7 @@ def _make_tts_model_config(**overrides):
         "gui_control_bias": False,
         "gui_styleTag_control": False,
         "default_args": {
+            "speaker_id": 0,
             "gst_token_index": 0, "style_intensity": 1.0,
             "pitch_control": 0.0, "energy_control": 0.0, "duration_control": 1.0,
             "pitch_control_bias": 0.0, "energy_control_bias": 0.0,
@@ -39,6 +40,13 @@ def test_describe_controls_returns_speaker_list(backend):
     backend.tts_model_config = _make_tts_model_config()
     result = backend.describe_controls()
     assert result["speaker_list"] == {"NEB": 0, "DG": 1}
+
+
+def test_describe_controls_returns_default_speaker_from_default_args(backend):
+    backend.tts_model_config = _make_tts_model_config(
+        default_args={**_make_tts_model_config()["default_args"], "speaker_id": 4})
+    result = backend.describe_controls()
+    assert result["default_speaker"] == 4
 
 
 def test_describe_controls_style_chip_grid_has_hidden_pattern_for_placeholders(backend):
