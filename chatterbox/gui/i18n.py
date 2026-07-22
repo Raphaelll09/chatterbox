@@ -19,7 +19,9 @@ STRINGS = {
         "vocoder_label": "Vocodeur :",
         "synthesize_button": "Synthèse",
         "input_text_label": "Texte à saisir",
-        "replay_button": "Lire",
+        "replay_button": "Rejouer",  # was "Lire" -- real-hardware feedback: ambiguous/redundant
+                                     # with the keyboards' own "▶" play button, which
+                                     # re-synthesizes; this button only replays the last audio.
         "put_away_button": "Mettre en veille",
         "settings_button": "Réglages",
         "speaker_label": "Locuteur :",
@@ -52,6 +54,10 @@ STRINGS = {
         "keyboard_space": "Espace",
         "keyboard_backspace": "Effacer",
         "menu_toggle_audio_info": "Afficher les données de synthèse",
+        "orientation_label": "Orientation :",
+        "orientation_auto": "Auto",
+        "orientation_portrait": "Portrait",
+        "orientation_landscape": "Paysage",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
     },

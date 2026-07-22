@@ -63,6 +63,30 @@ chatterbox-gui` over SSH).
   `power.t_deep_s` in `user_prefs.yaml` (a value you set based on the real number, not something
   computed here).
 
+## Maintenance / recovery access
+
+Deliberately **not** an in-GUI "maintenance mode" button — the two things `kiosk_finalize.sh`
+locks down (wifi/bluetooth radios, tty1's getty) are boot-time config changes, not runtime
+toggles, so a GUI button couldn't flip them live anyway (both need a reboot to take effect), and a
+kiosk-escape control has real access-control implications (who can reach it, PIN-gated or not) that
+haven't been designed. Manual recovery instead:
+
+- **SSH is never disabled by `kiosk_finalize.sh`** — only step 2's `dtoverlay=disable-wifi/-bt`
+  and step 4's `getty@tty1` are touched, neither of which affects `sshd`. If the Pi has an
+  **Ethernet** cable connected, SSH in over that even with wifi disabled by `config.txt`.
+- **To restore wifi/bluetooth**: remove (or comment out) the `dtoverlay=disable-wifi` /
+  `dtoverlay=disable-bt` lines from `config.txt` — either restore the `.bak.<timestamp>` file
+  `kiosk_finalize.sh` printed the path to at the time, or SSH in and edit `config.txt` by hand —
+  then `sudo reboot`. This is a boot-time overlay, not a running-kernel toggle; nothing short of a
+  reboot re-enables the radios.
+- **To get a terminal on the physical screen**: `sudo systemctl stop chatterbox-gui` (frees
+  `tty1`, which the GUI service and a getty would otherwise both want), then
+  `sudo systemctl enable --now getty@tty1.service` for a normal login prompt. Reverse with
+  `sudo systemctl disable --now getty@tty1.service && sudo systemctl start chatterbox-gui` to
+  return to kiosk mode.
+- **No network access at all** (e.g. wifi-only Pi, disabled, no Ethernet handy): pull the SD card,
+  edit `config.txt` from another machine, reinsert, boot.
+
 ## Mass deployment
 
 Once one Pi 5 has been through `setup_pi.sh` → the full bring-up protocol → `kiosk_finalize.sh` →

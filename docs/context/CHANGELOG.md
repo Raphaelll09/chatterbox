@@ -15,6 +15,105 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Third feedback round: settings modal bug, chip defaults, landscape crop root cause
+
+- What: six fixes from a third feedback pass, split across two commits:
+  1. **Real bug**: the Réglages Toplevel was never made modal (no `transient()`/`grab_set()`), so
+     clicks landed on the main window behind it. Fixed with `transient()`+`grab_set()`+
+     `focus_set()`, `grab_release()` added to `close()`.
+  2. Power-timer sliders (assombrissement/extinction/veille profonde) replaced with preset
+     dropdowns scoped to each field's role; a non-preset loaded value shows as its own
+     "(actuel)" option rather than silently snapping.
+  3. Brightness sliders now show 0-100% instead of raw 1-255 -- conversion only at the GUI
+     boundary, `write_settings()`/powerd/backlight driver untouched.
+  4. Default speaker (AD)/style (NEUTRE) chips now render at grid position [0,0] via a stable
+     sort of `enumerate(...)` by "is this the default" -- the chip's `value` stays each item's
+     ORIGINAL index (the real model speaker ID / the index `keyboards.py`'s hardcoded mood-
+     shortcuts depend on), only draw order changes. Reverted the previous round's
+     `gst_token_list` YAML reorder (unnecessary now) back to alphabetical/stable order,
+     `gst_token_index` back to 8.
+  5. All 9 sliders now `sticky=W` -- previously centered in their cell, so position shifted
+     unpredictably between portrait/landscape.
+  6. **Root-caused** "Synthèse cropped in landscape": the options-panel canvas's one-time
+     `width=`/`height=` hint (440x400) was a hard grid MINIMUM regardless of weight -- in a
+     landscape window shorter than 400px, that minimum forced the window taller than the actual
+     screen, pushing everything below the options panel off-screen. Replaced with a
+     `<Configure>` binding on the surrounding frame that keeps canvas's size matched to whatever
+     the grid actually allocates it.
+- Files: `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after a third round of testing (mix of PC and Pi 5).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged
+  (`validate_power_settings()`/`write_settings()` signatures untouched). Two mocked smoke runs:
+  settings dialog holds the modal grab, a non-preset value shows as "45 s (actuel)", brightness
+  204/255 shows as 80% and saving at 50% writes back 128; AD/NEUTRE chips render at row=0/col=0
+  and are selected by default, sliders report `sticky="w"`, and the options canvas shrinks to
+  279px (well below the old 400px floor) in a short 350px-tall landscape window.
+
+---
+
+## 2026-07-21 — Orientation override + kiosk maintenance-recovery docs
+
+- What: the two items deferred from the second feedback round:
+  1. Settings -> Advanced gains an Auto/Portrait/Paysage orientation override (`_orientation_override`
+     module global + `_set_orientation_override()`/`_refresh_orientation` in `gui/app.py`). "Auto"
+     keeps the `<Configure>`-based detection; forcing Portrait/Paysage applies immediately and
+     makes further real resize events a no-op until set back to Auto.
+  2. `docs/kiosk/KIOSK.md` gained a "Maintenance / recovery access" section (manual SSH-over-
+     Ethernet, config.txt dtoverlay restore, getty@tty1 re-enable steps) instead of an in-GUI
+     feature -- both radios and getty are boot-time config, not live-toggleable, and a kiosk-escape
+     control needs real access-control design not yet done.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `docs/kiosk/KIOSK.md`.
+- Why: user asked for a persisted-feeling manual orientation override (kiosk windows may never
+  actually resize at runtime, defeating pure auto-detection) and a way back into a locked-down
+  kiosk Pi once `scripts/kiosk_finalize.sh` disables wifi/bluetooth/console login.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Two
+  mocked `create_gui()` smoke runs: forcing landscape/portrait moves `keyboard_area` with no real
+  window resize, switching back to Auto restores real detection; the radio buttons render in
+  Settings -> Advanced and clicking one sets the override correctly.
+- Notes/gotchas: the user picked the Settings -> Advanced *location* explicitly; persistence
+  wasn't separately confirmed, so this implementation defaulted to **runtime-only** (resets to
+  Auto on GUI restart, not persisted to `user_prefs.yaml`) as the smaller/reversible choice.
+  Flagged back to the user -- revisit if they actually want it to survive a restart.
+
+---
+
+## 2026-07-21 — Second real-hardware feedback round: landscape width, chip labels, apostrophe
+
+- What: six fixes from a second Pi/PC feedback pass (landscape crop persisted after the first
+  round's fixes; new issues surfaced):
+  1. Landscape keyboard column no longer weighted (was competing with the options panel for
+     extra width -- "keyboard takes a lot of space"); stays at natural/minimum width now.
+  2. Added a horizontal scrollbar to the options-panel canvas as an explicit fallback (still no
+     way to reach horizontally-overflowing content in landscape).
+  3. Speaker/style labels moved to their own row above the chip grid instead of a column to its
+     left -- frees horizontal space for the grid itself.
+  4. Chip width now computed from the longest label in each grid instead of a fixed `width=11` --
+     "RECONFORTANT"/"ENTHOUSIASTE" (12 chars) were being clipped.
+  5. Added an apostrophe key to the letter keyboard -- missing but essential for French.
+  6. Renamed the replay button "Lire" -> "Rejouer" -- was confusable with the keyboards' own "▶"
+     play button (that one re-synthesizes; this one only replays the last audio).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: direct user feedback after testing on the Pi 5 a second time.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Mocked
+  `create_gui()` smoke run confirmed: landscape keyboard column weight is 0 (was 1), the options
+  canvas has a horizontal scrollbar, style label/chip-grid are on consecutive (not shared) rows,
+  the "RECONFORTANT" chip is wide enough (13) not to clip, the apostrophe key inserts `'`
+  correctly, and the replay button reads "Rejouer".
+- Notes/gotchas: three items from this same feedback round are NOT yet addressed, deliberately --
+  they need more than a mechanical fix: (a) "Mettre en veille doesn't seem to be effective" --
+  most likely `chatterbox-powerd` isn't running/reachable on the user's Pi (the client silently
+  no-ops if it can't connect at GUI startup, and doesn't retry), not a code bug in anything
+  touched this session; needs the user to confirm powerd's status before further action. (b) A
+  settings toggle to force portrait/landscape manually (as a persisted override, not just live
+  `<Configure>`-based auto-detection) -- open design question on where it lives / how it's
+  persisted. (c) A "Maintenance access" entry to re-enable wifi/bluetooth/terminal once the kiosk
+  is boot-locked (`scripts/kiosk_finalize.sh`) -- a security-sensitive feature (`dtoverlay=disable-
+  wifi/-bt` in `config.txt` needs a reboot to take effect, isn't a runtime toggle; a kiosk-escape
+  terminal needs real access-control thought) that needs a design conversation, not blind
+  implementation.
+
+---
+
 ## 2026-07-21 — PC-GUI feedback: menu reorg, settings auto-size, style/speaker defaults
 
 - What: five corrections from user testing on PC (not the Pi):

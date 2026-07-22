@@ -53,6 +53,14 @@ canvas_circle_figure = None
 lbl_status = None
 lbl_battery = None
 
+# Manual portrait/landscape override (Settings -> Advanced): None means "auto" (today's
+# <Configure>-based detection); "portrait"/"landscape" forces that layout regardless of actual
+# window size -- real-hardware feedback: a kiosk's window may never receive a genuine resize event
+# at runtime, making pure auto-detection unreliable in practice. _refresh_orientation is set (to a
+# callable) only when the embedded keyboard/reflow machinery exists in create_gui() below.
+_orientation_override = None
+_refresh_orientation = None
+
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
 # is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
@@ -305,6 +313,17 @@ def _show_about():
     messagebox.showinfo(i18n.t("about_title"), i18n.t("about_body"))
 
 
+def _set_orientation_override(value):
+    """Settings -> Advanced's orientation radio buttons. value is "auto"/"portrait"/"landscape";
+    "auto" clears the override (back to <Configure>-based detection). Immediately re-applies the
+    layout via _refresh_orientation() -- set only when the embedded-keyboard reflow machinery
+    exists (gui_config["add_keyboard"] and not detach_keyboard)."""
+    global _orientation_override
+    _orientation_override = None if value == "auto" else value
+    if _refresh_orientation is not None:
+        _refresh_orientation()
+
+
 def _back_action():
     if settings.is_open():
         settings.close()
@@ -394,7 +413,8 @@ def create_keyboard(key_board_options, entry, main_window=None):
 _LETTER_ROWS = [
     ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
     ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
-    ["W", "X", "C", "V", "B", "N", ",", "."],
+    ["W", "X", "C", "V", "B", "N", ",", ".", "'"],  # apostrophe was missing -- real-hardware
+    # feedback: essential for French (l'..., qu'..., aujourd'hui, ...)
 ]
 
 
@@ -594,6 +614,22 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             list_vocoder_buttons.append(btn)
         select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
 
+        # Manual portrait/landscape override -- only meaningful (and only shown) when the
+        # embedded-keyboard reflow machinery below actually exists (_refresh_orientation is set).
+        # A kiosk's window may never receive a genuine resize event at runtime, making the
+        # <Configure>-based auto-detection unreliable in practice (real-hardware feedback).
+        if _refresh_orientation is not None:
+            tk.Label(master=parent_frame, text=i18n.t("orientation_label")).grid(
+                row=2, column=0, sticky=tk.W, padx=4, pady=2)
+            orientation_var = tk.StringVar(value=_orientation_override or "auto")
+            for col, (value, label_key) in enumerate(
+                    [("auto", "orientation_auto"), ("portrait", "orientation_portrait"),
+                     ("landscape", "orientation_landscape")], start=1):
+                tk.Radiobutton(
+                    master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
+                    value=value, command=lambda v=value: _set_orientation_override(v),
+                ).grid(row=2, column=col, sticky=tk.EW, padx=2, pady=2)
+
     _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
     _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
 
@@ -763,13 +799,22 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             def _on_window_configure(event, _state=layout_state, _kb=keyboard_area,
                                       _portrait=keyboard_portrait_grid,
                                       _col=landscape_keyboard_column):
-                landscape = window.winfo_width() > window.winfo_height()
+                if _orientation_override == "landscape":
+                    landscape = True
+                elif _orientation_override == "portrait":
+                    landscape = False
+                else:
+                    landscape = window.winfo_width() > window.winfo_height()
                 if landscape == _state["is_landscape"]:
                     return
                 _state["is_landscape"] = landscape
                 if landscape:
-                    window.grid_columnconfigure(_col, weight=1)
-                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NSEW)
+                    # Deliberately NOT weighted (stays at its natural/minimum width) -- real-
+                    # hardware feedback: the keyboard took "a lot of space" in landscape, competing
+                    # with the options panel for the same weighted extra width. All extra window
+                    # width now goes to the options-panel columns (1, 2) instead.
+                    window.grid_columnconfigure(_col, weight=0)
+                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NS)
                 else:
                     _kb.grid(**_portrait)
                     window.grid_columnconfigure(_col, weight=0)
@@ -777,6 +822,9 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window.bind("<Configure>", _on_window_configure)
             window.update_idletasks()
             _on_window_configure(None)
+
+            global _refresh_orientation
+            _refresh_orientation = lambda: _on_window_configure(None)
 
     # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
     # it doesn't delay the first paint. Runs on the busy/worker machinery above.
@@ -911,7 +959,10 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # docs/REORG_PROPOSAL.md Sec5/Sec7).
     speaker_list = registry.BACKEND.describe_controls()["speaker_list"]
 
-    # Create Options Frame with Scrollbar
+    # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
+    # landscape, content still overflowed the canvas viewport horizontally with no way to reach
+    # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
+    # but a horizontal scrollbar is still added as an explicit fallback for whatever doesn't fit).
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
     frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
@@ -919,8 +970,10 @@ def gui_fastspeech2(tts_config, main_panel_config):
     canvas = tk.Canvas(frame)
     canvas.grid(row=0, column=0, sticky='news')
     vsb = tk.Scrollbar(frame, orient='vertical', command=canvas.yview)
-    vsb.grid(row=0,column=1, sticky='ns')
-    canvas.configure(yscrollcommand=vsb.set)
+    vsb.grid(row=0, column=1, sticky='ns')
+    hsb = tk.Scrollbar(frame, orient='horizontal', command=canvas.xview)
+    hsb.grid(row=1, column=0, sticky='ew')
+    canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
     frame_options = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame_options, anchor='nw')
 
@@ -933,23 +986,38 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # Speaker chip grid (real-hardware bug report: a single unwrapped row overflowed the canvas
     # viewport horizontally once there were more than 2-3 speakers, with no horizontal scrollbar to
     # reach the rest -- same wrapped-chip-grid treatment as the GST style picker (item 4) instead).
+    # Label sits on its own row above the grid rather than to its left -- more real-hardware
+    # feedback: freeing the label column gives the chip grid more width to work with.
     lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
-    lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
+    lbl_speaker_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
+    sub_row_index += 1
 
     speaker_chip_frame = tk.Frame(master=frame_options)
-    speaker_chip_frame.grid(row=sub_row_index, column=1, columnspan=3, sticky=tk.EW)
+    speaker_chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
+
+    # Chip width fits the longest speaker name -- real-hardware bug report: a fixed width=11
+    # clipped names longer than that (e.g. style tokens like "RECONFORTANT", 12 chars, below).
+    _speaker_chip_width = max((len(s) for s in speaker_list), default=1) + 1
+
+    # Display order: default speaker first (row 0, col 0) -- real-hardware feedback -- everyone
+    # else keeps their original relative order after it (Python's sort is stable). The chip's
+    # underlying `value` stays each speaker's ORIGINAL index into speaker_list regardless of where
+    # it's drawn: that index is the actual model speaker ID, unrelated to display position.
+    _default_speaker_id = default_args['speaker_id']
+    _speaker_display_order = sorted(enumerate(speaker_list),
+                                     key=lambda pair: pair[0] != _default_speaker_id)
 
     index_speaker = 0
     _speaker_chip_row = _speaker_chip_col = 0
-    for speaker in speaker_list:
+    for _speaker_original_index, speaker in _speaker_display_order:
         chip = tk.Radiobutton(
             master=speaker_chip_frame,
             text=speaker,
             variable=speaker_selection,
-            value=index_speaker,
+            value=_speaker_original_index,
             indicatoron=0,
             selectcolor="#ffd54f",
-            width=11,
+            width=_speaker_chip_width,
             padx=4,
             pady=10,
             command=None,
@@ -974,7 +1042,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
     ent_styleTag_input = tk.Entry(master=frame_options, width=main_panel_config["input_width"])
     if tts_config['gui_styleTag_control']:
         lbl_styleTag_input = tk.Label(master=frame_options, text=i18n.t("styletag_label")).grid(row=sub_row_index, column=0)
-        ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
         sub_row_index += 1
 
     # GST token chip grid (cc_prompt_gui_refactor.md Phase 1 item 4): wrapped grid of chip-style
@@ -985,26 +1053,40 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # instead of cluttering the default picker; toggling shows/hides them via grid()/grid_remove()
     # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
     if tts_config['gui_style_control']:
+        all_gst_tokens = [*tts_config['gst_token_list']]
+
         lbl_gst_token_selection = tk.Label(master=frame_options, text=i18n.t("style_label"))
-        lbl_gst_token_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
+        lbl_gst_token_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
+        sub_row_index += 1
 
         chip_frame = tk.Frame(master=frame_options)
-        chip_frame.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.EW)
+        chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
+
+        # Chip width fits the longest token name -- real-hardware bug report: a fixed width=11
+        # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
+        _style_chip_width = max((len(t) for t in all_gst_tokens), default=1) + 1
+
+        # Display order: default style first (row 0, col 0) -- real-hardware feedback -- everyone
+        # else keeps their original relative order after it (stable sort). value stays each
+        # token's ORIGINAL index into gst_token_list (get_gui_controls()'s gst_token_index, and
+        # keyboards.py's hardcoded mood-shortcut indices, both depend on that index being
+        # unchanged) regardless of where it's drawn.
+        _default_gst_index = default_args['gst_token_index']
+        _gst_display_order = sorted(enumerate(all_gst_tokens),
+                                     key=lambda pair: pair[0] != _default_gst_index)
 
         _placeholder_re = re.compile(r"^TOKEN\d+$")
-        all_gst_tokens = [*tts_config['gst_token_list']]
         advanced_chips = []
-        index_gst_token = 0
         chip_row = chip_col = 0
-        for gst_token in all_gst_tokens:
+        for _gst_original_index, gst_token in _gst_display_order:
             chip = tk.Radiobutton(
                 master=chip_frame,
                 text=gst_token,
                 variable=gst_token_selection,
-                value=index_gst_token,
+                value=_gst_original_index,
                 indicatoron=0,
                 selectcolor="#ffd54f",
-                width=11,
+                width=_style_chip_width,
                 padx=4,
                 pady=10,
                 command=None,
@@ -1014,7 +1096,6 @@ def gui_fastspeech2(tts_config, main_panel_config):
             if _placeholder_re.match(gst_token):
                 chip.grid_remove()
                 advanced_chips.append(chip)
-            index_gst_token += 1
             chip_col += 1
             if chip_col >= _CHIPS_PER_ROW:
                 chip_col = 0
@@ -1045,28 +1126,28 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # Style Intensity Slider
     style_intensity_slider = tk.Scale(frame_options, from_=0, to=1, orient=tk.HORIZONTAL, resolution=0.05)
     lbl_style_intensity = tk.Label(master=frame_options, text=i18n.t("style_intensity_label")).grid(row=sub_row_index, column=0)
-    style_intensity_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+    style_intensity_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
     style_intensity_slider.set(default_args['style_intensity'])
     sub_row_index += 1
 
     # Pitch Slider
     pitch_slider = tk.Scale(frame_options, from_=-15, to=15, orient=tk.HORIZONTAL, resolution=1)
     lbl_pitch_selection = tk.Label(master=frame_options, text=i18n.t("pitch_label")).grid(row=sub_row_index, column=0)
-    pitch_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+    pitch_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
     pitch_slider.set(default_args['pitch_control'])
     sub_row_index += 1
 
     # Energy Slider
     energy_slider = tk.Scale(frame_options, from_=-20, to=20, orient=tk.HORIZONTAL, resolution=1)
     lbl_energy_selection = tk.Label(master=frame_options, text=i18n.t("energy_label")).grid(row=sub_row_index, column=0)
-    energy_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+    energy_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
     energy_slider.set(default_args['energy_control'])
     sub_row_index += 1
 
     # Speed Slider
     speed_slider = tk.Scale(frame_options, from_=0.5, to=1.5, orient=tk.HORIZONTAL, resolution=0.1)
     lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_label")).grid(row=sub_row_index, column=0)
-    speed_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+    speed_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
     speed_slider.set(default_args['duration_control'])
     sub_row_index += 1
 
@@ -1097,25 +1178,32 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     if tts_config['gui_control_bias']:
         lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pitch_bias_label")).grid(row=sub_row_index, column=0)
-        pitch_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        pitch_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
         lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("energy_bias_label")).grid(row=sub_row_index, column=0)
-        energy_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        energy_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
         lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_bias_label")).grid(row=sub_row_index, column=0)
-        speed_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        speed_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
         lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pause_bias_label")).grid(row=sub_row_index, column=0)
-        pause_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        pause_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
         lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("liaison_bias_label")).grid(row=sub_row_index, column=0)
-        liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker)
+        liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
-    # Add scrollbar. control_width/control_height are only an initial sizing hint for the canvas
-    # viewport now -- responsive layout (item 1) lets the surrounding frame grow with the window
-    # instead of pinning it via grid_propagate(False).
+    # Add scrollbar. A one-time canvas.config(width=..., height=...) hint (as this used to do) sets
+    # a MINIMUM size that grid respects regardless of weight -- in landscape, where the window is
+    # often shorter than main_panel_config["control_height"], that minimum forced the whole window
+    # taller than the available screen, pushing/clipping rows below the options panel (real-
+    # hardware bug report: "Synthèse is cropped"). Track frame's own allocated size instead, so
+    # canvas has no independent minimum beyond whatever the grid actually gives its parent frame.
     frame_options.update_idletasks()
-    canvas.config(width=main_panel_config["control_width"], height=main_panel_config["control_height"])
+
+    def _resize_canvas_to_frame(event):
+        canvas.config(width=event.width, height=event.height)
+
+    frame.bind("<Configure>", _resize_canvas_to_frame)
     canvas.config(scrollregion=canvas.bbox("all"))
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
