@@ -271,6 +271,42 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Eighth feedback round: fixed 0.6 keyboard share both orientations, bigger chips
+
+- What: real-hardware feedback on the previous round's fixes. Landscape: "the right share of
+  keyboard seems to be between 1/2 and 2/3 of the screen. Disable the option to choose the share
+  in parameters and find an optimal share." Portrait: "the keyboard is very small compared to the
+  window... the share [is] far below the landscape orientation. Make the keyboard bigger." Also:
+  "Style boxes can be slightly bigger to match the range of the pitch and energy cursors" (the
+  previous round's chip-shrink read as a bit too aggressive once seen next to the sliders).
+  1. `_keyboard_landscape_fraction` (user-configurable via Settings -> Advanced, three presets
+     1/2 through 3/4) replaced by a single fixed module constant, `_KEYBOARD_SCREEN_SHARE = 0.6`
+     -- inside the requested range. The Settings -> Advanced picker section and
+     `_set_keyboard_landscape_fraction()` removed; i18n's now-unused `keyboard_width_*` keys
+     removed too.
+  2. Portrait now applies the *same* mechanism landscape already used (measure natural size with
+     `grid_propagate(True)`, then `grid_propagate(False)` + explicit width/height + `sticky=NSEW`)
+     but on **height** instead of width: the keyboard's height floor is now
+     `max(natural_height, window_height * 0.6)`, giving portrait the same ~60% share landscape
+     already had -- previously portrait's keyboard row had no weight of its own (unlike row 2, the
+     options panel), so it only ever got its own small natural minimum.
+  3. Style chips sized back up slightly: width cap 9->10, font 8->9pt, padding 2/4->3/6.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: eighth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  landscape keyboard width is exactly 0.6x window width; portrait keyboard height is exactly 0.6x
+  window height after a genuine orientation flip (matching landscape's ratio); the Settings
+  keyboard-width picker is gone; a 12-char style-chip label is capped at `width=10` with font
+  size 9.
+- Notes/gotchas: `_apply_current_orientation()` only recomputes sizing on an actual
+  portrait<->landscape flip (an existing, intentional optimization, not new) -- a same-orientation
+  resize (e.g. portrait window just getting taller) won't re-derive the keyboard's height from the
+  new dimensions until the orientation actually flips at least once. Not addressed here; flagged
+  in case a future round needs it (e.g. by also reacting to `<Configure>` size deltas within the
+  same orientation, not just flips).
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
