@@ -31,11 +31,17 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   - `synth.py` — **Tk-free** synthesis compute path (chatterbox_gui_spec_v0.1.md §2.3), extracted
     from `cli.py:syn_audio()` in the GUI refactor: `synthesize(text, tts_idx, voc_idx, tts_config,
     ...) -> AudioResult | None` (TTS → vocoder → denoise/post-process → subtitles →
-    `audio/playback.py`'s `AUDIO_EXAMPLE` set). No Tk import, no playback call — both `cli.py` and
-    the GUI's worker thread call it directly. See `docs/gui/GUI.md`.
-  - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs; `registry.py` — the `BACKEND`
-    singleton, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script` strings,
-    unchanged, now resolved via `getattr(registry.BACKEND, name)` instead of a flat module).
+    `audio/playback.py`'s `AUDIO_EXAMPLE` set). The vocoder call is skipped for a monolithic TTS
+    model (`tts_models[i].needs_vocoder: false`) — see "Interchangeable backends" below;
+    `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (`"vocoder"` simply
+    absent in that case), not fixed named fields. No Tk import, no playback call — both `cli.py`
+    and the GUI's worker thread call it directly. See `docs/gui/GUI.md`.
+  - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs, `SynthesisRequest`/`SynthesisResult`
+    dataclasses (the latter's `wav_path` vs `mel_path` is how a monolithic backend signals "already
+    a finished wav, no vocoding needed" — see "Interchangeable backends" below); `registry.py` —
+    the `BACKEND` singleton, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script`
+    strings, unchanged, now resolved via `getattr(registry.BACKEND, name)` instead of a flat
+    module).
   - `synthesis/backends/fastspeech2_hifigan/` — `backend.py` (was `loading_modules.py` +
     `synthesis_modules.py`'s model-calling functions, now a `FastSpeech2HifiGanBackend` class owning
     loaded-model state as instance attributes) + `text_pipeline.py` (was `synthesis_modules.py`'s
@@ -51,11 +57,14 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     letter keyboard (`app.py:_create_letter_keyboard()`, simplified AZERTY) toggled via a
     Texte/Phonèmes segmented control — both live in one `keyboard_area` container that portrait/
     landscape reflow (`app.py`'s `<Configure>` binding) repositions as a unit. Main-window layout
-    is responsive (grid weights, not fixed pixel sizes); the style/GST-token picker is a wrapped
-    chip grid with unnamed placeholder tokens hidden behind an "Styles avancés" toggle; TTS/
-    vocoder model selection lives in Settings → Advanced (see `gui/settings.py` below), not the
-    main window. Synthesis+playback (and, since the same refactor, Replay) run on a worker thread,
-    never the Tk thread (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`.
+    is responsive (grid weights, not fixed pixel sizes); the model-options panel
+    (`gui_generic_controls()`, see "Interchangeable backends" below) is built entirely from the
+    active backend's `describe_controls()` — a wrapped style/GST-token chip grid with unnamed
+    placeholder tokens hidden behind an "Styles avancés" toggle is what today's FastSpeech2 backend
+    happens to declare, not something `app.py` hardcodes; TTS/vocoder model selection lives in
+    Settings → Advanced (see `gui/settings.py` below), not the main window. Synthesis+playback (and,
+    since the same refactor, Replay) run on a worker thread, never the Tk thread
+    (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`.
   - `gui/i18n.py` — the GUI's string table (added in the same refactor to replace a hardcoded
     French/English label mix); French-only today, `t(key, **kwargs)` is the lookup. The app-bar's
     Thème/Langue menu entries are intentionally disabled stubs until a second locale/theme table
@@ -70,9 +79,14 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     "Enregistrer".
   - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
   - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
-    `docs/context/ARCHITECTURE.md`, stale on paths but not on structure); `config/paths.py` —
-    repo-root-anchored path resolution for the vendored model dirs (added Phase 0);
-    `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs (below), reloadable on SIGHUP.
+    `docs/context/ARCHITECTURE.md`, stale on paths but not on structure). Each `tts_models[i]` entry
+    carries two static capability flags read *before* that model is loaded (see "Interchangeable
+    backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false)
+    and `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
+    `"translate_labels"` or `"hide"`, for when a model doesn't understand the Phonèmes keyboard's
+    phone-code syntax). `config/paths.py` — repo-root-anchored path resolution for the vendored
+    model dirs (added Phase 0); `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs
+    (below), reloadable on SIGHUP.
   - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon
     (ACTIVE→DIM→DARK→DEEP, backlight, amplifier SD line, physical switches/touch activity, halt-on-
     DEEP). Run with `python3 -m chatterbox.power.daemon`; every hardware import (`gpiozero`,
@@ -95,7 +109,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   `flaubert/`; weights not in git — see Install below).
 - `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`,
   `test_p4_sweep.py`, `test_export_xlsx.py`, `test_power_{fsm,config,backlight,amp,ipc}.py`,
-  `test_synth.py`, `test_gui_{input,worker,settings}.py`.
+  `test_synth.py`, `test_gui_{input,worker,settings}.py`, `test_backend_describe_controls.py`.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
 - `scripts/kiosk_finalize.sh` — **opt-in**, run once a Pi has passed
@@ -122,6 +136,39 @@ Full detail (globals-turned-instance-state pattern, control-tag mini-language, c
 registry, weights locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, but note its
 module names/paths predate the Phase 3 reorg above; cross-check against this file or
 `docs/REORG_PROPOSAL.md` §2 if something doesn't match.
+
+## Interchangeable backends
+
+The GUI/synthesis-result layer is generic, not hardcoded to FastSpeech2 — a future backend swap
+(e.g. a monolithic state-of-the-art model with no separate vocoder stage) should need **no**
+changes to `chatterbox/gui/app.py` or `chatterbox/synth.py`, only its own backend module +
+`config_tts.yaml` entry conforming to this contract:
+
+- **Model-options panel**: `Synthesizer.describe_controls()` (`chatterbox/synthesis/base.py`,
+  docstring has the full return shape) returns `speaker_list`/`default_speaker` plus an ordered
+  `controls` list of `chip_grid`/`slider`/`text` descriptors — `gui/app.py:gui_generic_controls()`
+  renders one widget per entry generically (no per-backend GUI code) and collects values into a
+  dict `get_gui_controls()` returns, keyed by each control's declared `"key"`. FastSpeech2's own
+  `describe_controls()` (`synthesis/backends/fastspeech2_hifigan/backend.py`) is what actually
+  declares today's style chip grid / 9 sliders / StyleTag entry, reading the same
+  `config_tts.yaml` keys (`gst_token_list`, `default_args.*`, `gui_control_bias`, etc.) it always
+  has, just translated into the generic schema instead of hand-built widgets.
+- **Two-stage vs. monolithic pipeline**: `SynthesisResult.wav_path` (set) vs. `mel_path` (set) is
+  how a backend signals "already a finished wav" vs. "still needs vocoding"; the static per-model
+  `needs_vocoder` flag (`config_tts.yaml`) tells `chatterbox.synth.synthesize()` whether to call
+  `BACKEND.vocoder()` at all, and tells `gui/app.py`'s Settings → Advanced whether to show a
+  Vocodeur picker. Denoising/postprocess/subtitles stay universal regardless of pipeline shape.
+  `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (GUI/CLI reporting iterate
+  it, no fixed named fields) — `"vocoder"` is simply absent for a monolithic backend.
+- **Phoneme keyboard**: the on-screen "Emmanuelle" Phonèmes keyboard (`gui/keyboards.py`) is
+  FastSpeech2's own custom phone-symbol alphabet (there's no G2P step anywhere in this repo) — a
+  different backend declares `accepts_phoneme_input: false` (`config_tts.yaml`, per `tts_models`
+  entry) if it can't understand that syntax, and `GUI_config.phoneme_fallback`
+  (`"translate_labels"`, the default, or `"hide"`) decides what the GUI does about it: substitute
+  each key's already-computed plain-French display label, or remove the Phonèmes keyboard/toggle
+  entirely. `keyboards.py`'s own mood-shortcut keys and phone-symbol table remain FS2/GST-specific
+  by design — a backend wanting phoneme input support of its own would need its own keyboard
+  layout, not a reuse of this one.
 
 ## Install gotchas
 
