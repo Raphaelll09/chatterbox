@@ -73,13 +73,13 @@ tts_models:
     folder: "assets/models/FastSpeech2"
     checkpoint_file: "390000"
     output_location: "output/audio"
-    # Order here is the GST chip grid's display order (dict order, PyYAML/Python 3.7+ preserve
-    # insertion order). NEUTRE sits at index 6 (7th of 12, middle of the 3-row x 4-col chip grid) --
-    # PC-GUI feedback asked for the neutral/default style centered rather than tucked away at its
-    # old index 8. Indices 0-5 (COLERE..ETONNE) are UNCHANGED from before: chatterbox/gui/
-    # keyboards.py's mood-shortcut keys (":D"->3 ENTHOUSIASTE, ":("->1 DESOLE, ":p"->4 ESPIEGLE,
-    # ":O"->5 ETONNE) hardcode those indices and must not shift. default_args.gst_token_index below
-    # was 8 (NEUTRE's old index) -- updated to 6 to keep pointing at NEUTRE, not EVIDENCE.
+    # This dict's order is chatterbox/gui/keyboards.py's mood-shortcut source of truth (":D"->3
+    # ENTHOUSIASTE, ":("->1 DESOLE, ":p"->4 ESPIEGLE, ":O"->5 ETONNE, all hardcoded indices) -- keep
+    # alphabetical/stable, don't reorder for display purposes. The GST chip grid no longer reads
+    # this order directly for WHERE to draw each chip: gui/app.py's gui_fastspeech2() sorts by
+    # "is this default_args.gst_token_index" first (stable sort) so the default always renders at
+    # grid position [0,0] regardless of its underlying index here (PC-GUI feedback) -- only the
+    # chip's underlying value (unchanged, still this dict's index) has to stay put.
     gst_token_list: {
         "COLERE": 1.0,
         "DESOLE": 1.0,
@@ -87,9 +87,9 @@ tts_models:
         "ENTHOUSIASTE": 1.0,
         "ESPIEGLE": 1.0,
         "ETONNE": 1.0,
-        "NEUTRE": 1.0,
         "EVIDENCE": 1.0,
         "INCREDULE": 1.0,
+        "NEUTRE": 1.0,
         "PENSIF": 1.0,
         "RECONFORTANT": 1.0,
         "SUPPLIANT": 1.0,
@@ -126,7 +126,9 @@ tts_models:
       pause_control_bias: 0.0
       liaison_control_bias: 0.0
       silence_control_bias: False
-      gst_token_index: 6  # NEUTRE -- was 8 before NEUTRE moved to index 6 in gst_token_list above
+      gst_token_index: 8  # NEUTRE -- gst_token_list's order is back to alphabetical/stable (see
+                          # comment above); the chip grid draws whichever index this points to
+                          # first regardless of its position in the list.
       style_intensity: 1.0
       enforce_linking_duration: True
 
