@@ -857,10 +857,20 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     # them. No rowspan either (previously rowspan=20 pulled in row 2's -- the
                     # options panel's -- own large weighted height, inflating the keyboard's
                     # buttons vertically too ["letters are huge"]); natural height, anchored top.
+                    #
+                    # grid_propagate(False) makes Tk stop deriving BOTH width and height from the
+                    # frame's children -- it always uses whatever was last passed to .config(), and
+                    # height was never set here, so it silently collapsed to 0 ("both keyboards
+                    # disappeared" real-hardware report, reproduced at every fraction: the fraction
+                    # only ever changed width). Measure the natural height with propagate still on
+                    # (so it reflects the actual keyboard content) before locking width.
                     window.grid_columnconfigure(_col, weight=0)
+                    _kb.grid_propagate(True)
+                    _kb.update_idletasks()
+                    natural_height = max(1, _kb.winfo_reqheight())
                     target_width = max(150, int(window.winfo_width() * _keyboard_landscape_fraction))
                     _kb.grid_propagate(False)
-                    _kb.config(width=target_width)
+                    _kb.config(width=target_width, height=natural_height)
                     _kb.grid(row=0, column=_col, sticky=tk.N)
                 else:
                     _kb.grid_propagate(True)
@@ -1003,7 +1013,8 @@ def gui_fastspeech2(tts_config, main_panel_config):
 
     sub_row_index = 0
     default_args = tts_config['default_args']
-    _CHIPS_PER_ROW = 4  # shared by the speaker and GST-style chip grids below
+    _CHIPS_PER_ROW = 4  # width (grid units) for the speaker dropdown row; the GST-style chip
+                        # grid below computes its own column count (_style_chips_per_row)
 
     # Speaker list read from the currently loaded backend instead of re-opening
     # config_tts.yaml's preprocess.yaml directly (the pre-Phase-3 leak -- see
@@ -1083,13 +1094,22 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
     if tts_config['gui_style_control']:
         all_gst_tokens = [*tts_config['gst_token_list']]
+        _placeholder_re = re.compile(r"^TOKEN\d+$")
+
+        # Chips per row: derived to fit the always-visible (non-placeholder) styles into
+        # _STYLE_ROWS_TARGET rows, rather than a fixed 4-per-row -- real-hardware feedback: with
+        # the landscape keyboard set to half the screen, 4-wide rows overflowed the narrower
+        # options column. Fewer, narrower columns (more rows) fit that reduced width instead.
+        _STYLE_ROWS_TARGET = 4
+        _named_token_count = sum(1 for t in all_gst_tokens if not _placeholder_re.match(t))
+        _style_chips_per_row = max(1, -(-_named_token_count // _STYLE_ROWS_TARGET))  # ceil div
 
         lbl_gst_token_selection = tk.Label(master=frame_options, text=i18n.t("style_label"))
-        lbl_gst_token_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
+        lbl_gst_token_selection.grid(row=sub_row_index, column=0, columnspan=_style_chips_per_row, sticky=tk.W)
         sub_row_index += 1
 
         chip_frame = tk.Frame(master=frame_options)
-        chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
+        chip_frame.grid(row=sub_row_index, column=0, columnspan=_style_chips_per_row, sticky=tk.EW)
 
         # Chip width fits the longest token name -- real-hardware bug report: a fixed width=11
         # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
@@ -1104,7 +1124,6 @@ def gui_fastspeech2(tts_config, main_panel_config):
         _gst_display_order = sorted(enumerate(all_gst_tokens),
                                      key=lambda pair: pair[0] != _default_gst_index)
 
-        _placeholder_re = re.compile(r"^TOKEN\d+$")
         advanced_chips = []
         chip_row = chip_col = 0
         for _gst_original_index, gst_token in _gst_display_order:
@@ -1126,7 +1145,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
                 chip.grid_remove()
                 advanced_chips.append(chip)
             chip_col += 1
-            if chip_col >= _CHIPS_PER_ROW:
+            if chip_col >= _style_chips_per_row:
                 chip_col = 0
                 chip_row += 1
         chip_rows_used = chip_row + (1 if chip_col else 0)
@@ -1145,7 +1164,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
                 master=chip_frame, text=i18n.t("advanced_styles_toggle"), variable=advanced_visible,
                 command=_toggle_advanced_chips,
             )
-            btn_advanced_toggle.grid(row=chip_rows_used, column=0, columnspan=_CHIPS_PER_ROW,
+            btn_advanced_toggle.grid(row=chip_rows_used, column=0, columnspan=_style_chips_per_row,
                                       sticky=tk.W, pady=(4, 0))
 
         # chip_frame is a single cell in frame_options' own grid -- its internal multi-row chip
