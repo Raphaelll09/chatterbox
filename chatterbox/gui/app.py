@@ -77,6 +77,26 @@ _ACTIVITY_THROTTLE_S = 1.0  # avoid flooding the socket with an "activity" ping 
 
 _BATTERY_POLL_MS = 30000  # battery % changes slowly -- no need to poll faster than this
 
+# Populated by gui_generic_controls() (interchangeable-backend GUI refactor): {control_key: widget}
+# for every control the active backend's describe_controls()["controls"] declared -- get_gui_
+# controls() reads .get() off each of these generically instead of a fixed set of named globals.
+_generic_control_widgets = {}
+
+# Display name per AudioResult.stage_durations key (chatterbox/synth.py) -- falls back to the raw
+# key.title() for a stage name a future backend introduces that isn't listed here (mirrors
+# chatterbox/cli.py's own _STAGE_DISPLAY_NAMES for its English console equivalent).
+_STAGE_DISPLAY_NAMES = {"tts": "TTS", "vocoder": "Vocodeur", "denoiser": "Denoiser"}
+
+# How many of lbl_audio_infos_stage_pool's rows are currently showing real data (set by
+# update_audio_infos(), read by _toggle_audio_info_visibility() so re-enabling "Afficher les
+# donnees de synthese" doesn't reveal a pool row a monolithic/fewer-stage backend never used).
+_audio_info_active_stage_count = 0
+
+# Set by gui_generic_controls() only if the active backend's describe_controls()["speaker_list"]
+# is non-empty -- stays None for a backend with only one voice (base.py's describe_controls()
+# docstring), in which case get_gui_controls() simply omits "speaker" from its result.
+speaker_selection = None
+
 # UI thread-marshaling (chatterbox_gui_spec_v0.1.md Sec2.1): the ONE queue shared by worker-thread
 # results (synthesis/playback done, warm-up done) AND powerd-forwarded socket events -- Tk is only
 # ever touched from the Tk thread, everything else posts a closure here instead.
@@ -152,14 +172,7 @@ def _set_ui_state(state_name, error=None):
 
 
 def _update_audio_info(result):
-    # AudioResult.stage_durations (interchangeable-backend GUI refactor, phase 2) replaces the old
-    # named tts/vocoder/denoiser fields with a generic dict -- update_audio_infos()'s own 3-named-
-    # argument signature is still FS2-specific and gets replaced by a generic pooled-row renderer in
-    # phase 4 (docs/context/CHANGELOG.md); this call site is a minimal compatibility shim until then,
-    # defaulting to 0.0 for any stage a future/monolithic backend doesn't run (e.g. no "vocoder" key).
-    stage_durations = result.stage_durations
-    update_audio_infos(result.audio_duration_s, stage_durations.get("tts", 0.0),
-                        stage_durations.get("vocoder", 0.0), stage_durations.get("denoiser", 0.0))
+    update_audio_infos(result.audio_duration_s, result.stage_durations)
     if result.gst_weights is not None:
         update_GST_infos(result.gst_weights)
 
@@ -509,9 +522,7 @@ def _create_letter_keyboard(master, key_board_options):
 def create_gui(tts_config, device, default_tts, default_vocoder):
     global ent_text_input
     global lbl_audio_infos_audio_duration
-    global lbl_audio_infos_tts_duration
-    global lbl_audio_infos_vocoder_duration
-    global lbl_audio_infos_denoiser_duration
+    global lbl_audio_infos_stage_pool
     global lbl_audio_infos_synthesis_duration
     global lbl_status
     global lbl_battery
@@ -720,18 +731,25 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         # Create a circle on the canvas
         canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill="gray")  # Initial color set to gray
 
-        lbl_audio_infos_tts_duration = tk.Label(master=window, text=i18n.t("tts_duration_label", duration=0.0, percent=0))
-        lbl_audio_infos_tts_duration.grid(row=9, column=0, columnspan=max_buttons+2)
-        lbl_audio_infos_vocoder_duration = tk.Label(master=window, text=i18n.t("vocoder_duration_label", duration=0.0, percent=0))
-        lbl_audio_infos_vocoder_duration.grid(row=10, column=0, columnspan=max_buttons+2)
-        lbl_audio_infos_denoiser_duration = tk.Label(master=window, text=i18n.t("denoiser_duration_label", duration=0.0, percent=0))
-        lbl_audio_infos_denoiser_duration.grid(row=11, column=0, columnspan=max_buttons+2)
+        # Pool of generic stage-duration rows (interchangeable-backend GUI refactor) -- assigned
+        # dynamically to whichever stage keys AudioResult.stage_durations (chatterbox/synth.py)
+        # actually contains at synthesis time, instead of fixed named tts/vocoder/denoiser labels.
+        # 3 slots covers every pipeline shape this repo currently anticipates (two-stage: tts +
+        # vocoder + denoiser; monolithic: tts + denoiser, one slot unused/hidden) without having to
+        # renumber every row below (replay/put-away/keyboard) for a rarer, wider pipeline.
+        _STAGE_POOL_SIZE = 3
+        lbl_audio_infos_stage_pool = []
+        for _pool_i in range(_STAGE_POOL_SIZE):
+            _lbl = tk.Label(master=window, text="")
+            _lbl.grid(row=9 + _pool_i, column=0, columnspan=max_buttons+2)
+            lbl_audio_infos_stage_pool.append(_lbl)
+
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
 
         def _toggle_audio_info_visibility(visible_var):
-            labels = (lbl_audio_infos_audio_duration, lbl_audio_infos_tts_duration,
-                      lbl_audio_infos_vocoder_duration, lbl_audio_infos_denoiser_duration,
+            active_pool_labels = lbl_audio_infos_stage_pool[:_audio_info_active_stage_count]
+            labels = (lbl_audio_infos_audio_duration, *active_pool_labels,
                       lbl_audio_infos_synthesis_duration)
             if visible_var.get():
                 for lbl in labels:
@@ -927,19 +945,29 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 
     window.mainloop()
 
-def update_audio_infos(audio_duration, tts_inference_duration, vocoder_inference_duration, denoiser_inference_duration):
+def update_audio_infos(audio_duration, stage_durations):
+    """stage_durations (chatterbox.synth.AudioResult, interchangeable-backend GUI refactor) is a
+    generic {stage_key: seconds} dict -- assigned to lbl_audio_infos_stage_pool's rows in order,
+    hiding whichever pool rows this synthesis didn't use (e.g. no "vocoder" stage for a monolithic
+    backend), instead of 3 fixed named tts/vocoder/denoiser labels."""
+    global _audio_info_active_stage_count
     if main_panel_config["add_audio_infos"]:
-        total_inference_duration = tts_inference_duration + vocoder_inference_duration + denoiser_inference_duration
         lbl_audio_infos_audio_duration["text"] = i18n.t("audio_duration_label", duration=audio_duration)
-        lbl_audio_infos_tts_duration["text"] = i18n.t(
-            "tts_duration_label", duration=tts_inference_duration,
-            percent=100*tts_inference_duration/audio_duration)
-        lbl_audio_infos_vocoder_duration["text"] = i18n.t(
-            "vocoder_duration_label", duration=vocoder_inference_duration,
-            percent=100*vocoder_inference_duration/audio_duration)
-        lbl_audio_infos_denoiser_duration["text"] = i18n.t(
-            "denoiser_duration_label", duration=denoiser_inference_duration,
-            percent=100*denoiser_inference_duration/audio_duration)
+
+        stage_items = list(stage_durations.items())
+        _audio_info_active_stage_count = min(len(stage_items), len(lbl_audio_infos_stage_pool))
+        for pool_index, lbl in enumerate(lbl_audio_infos_stage_pool):
+            if pool_index < len(stage_items):
+                stage_key, stage_duration = stage_items[pool_index]
+                display_name = _STAGE_DISPLAY_NAMES.get(stage_key, stage_key.title())
+                lbl["text"] = i18n.t(
+                    "stage_duration_label", name=display_name, duration=stage_duration,
+                    percent=100*stage_duration/audio_duration)
+                lbl.grid()
+            else:
+                lbl.grid_remove()
+
+        total_inference_duration = sum(stage_durations.values())
         lbl_audio_infos_synthesis_duration["text"] = i18n.t(
             "synthesis_duration_label", duration=total_inference_duration,
             percent=100*total_inference_duration/audio_duration)
@@ -993,34 +1021,17 @@ def select_model_from_list(id_button, list_buttons):
             button["bg"] = "#f0f0f0"
 
 def get_gui_controls():
-    speaker_id = speaker_selection.get()
-    pitch_control = pitch_slider.get()
-    energy_control = energy_slider.get()
-    speed_control = speed_slider.get()
-    pitch_control_bias = pitch_bias_slider.get()
-    energy_control_bias = energy_bias_slider.get()
-    speed_control_bias = speed_bias_slider.get()
-    pause_control_bias = pause_bias_slider.get()
-    liaison_control_bias = liaison_bias_slider.get()
-    gst_token_index = gst_token_selection.get()
-    style_intensity_control = style_intensity_slider.get()
-    styleTag_control = ent_styleTag_input.get()
-
-    result = [
-        speaker_id,
-        pitch_control,
-        energy_control,
-        speed_control,
-        pitch_control_bias,
-        energy_control_bias,
-        speed_control_bias,
-        pause_control_bias,
-        liaison_control_bias,
-        gst_token_index,
-        style_intensity_control,
-        styleTag_control,
-    ]
-
+    """Returns a dict keyed by control "key" (interchangeable-backend GUI refactor -- was a fixed
+    12-element positional list, too fragile for a different backend to conform to; see
+    docs/context/CHANGELOG.md). "speaker" comes from the dedicated speaker dropdown (built outside
+    the generic control loop, since it's the one control every backend will plausibly have); every
+    other entry comes from _generic_control_widgets, populated by gui_generic_controls() from the
+    active backend's describe_controls()["controls"]."""
+    result = {}
+    if speaker_selection is not None:
+        result["speaker"] = speaker_selection.get()
+    for key, widget in _generic_control_widgets.items():
+        result[key] = widget.get()
     return result
 
 # Function to update the color of the circle
@@ -1030,30 +1041,116 @@ def get_canvas_circle():
 def update_circle_color(color, canvas_circle, canvas_circle_figure):
     canvas_circle.itemconfig(canvas_circle_figure, fill=color)
 
-def gui_fastspeech2(tts_config, main_panel_config):
+def _build_chip_grid_control(frame_options, control, sub_row_index):
+    """Generalizes the GST-style chip grid (cc_prompt_gui_refactor.md Phase 1 item 4 /
+    interchangeable-backend GUI refactor): wrapped grid of chip-style toggle Radiobuttons, default
+    option first (stable sort), options matching an optional hidden_pattern regex start hidden
+    behind an "advanced" toggle. Returns (IntVar, rows_used)."""
+    options = control["options"]
+    default_value = control["default"]
+    hidden_pattern = control.get("hidden_pattern")
+    hidden_re = re.compile(hidden_pattern) if hidden_pattern else None
+
+    # Chips per row: derived to fit the always-visible (non-hidden-pattern) options into
+    # _STYLE_ROWS_TARGET rows, rather than a fixed 4-per-row -- real-hardware feedback: with the
+    # landscape keyboard set to half the screen, 4-wide rows overflowed the narrower options
+    # column. Fewer, narrower columns (more rows) fit that reduced width instead.
+    _STYLE_ROWS_TARGET = 4
+    visible_count = sum(1 for o in options if not (hidden_re and hidden_re.match(o)))
+    chips_per_row = max(1, -(-visible_count // _STYLE_ROWS_TARGET))  # ceil div
+
+    lbl = tk.Label(master=frame_options, text=i18n.t(control["label_key"]))
+    lbl.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.W)
+    sub_row_index += 1
+
+    chip_frame = tk.Frame(master=frame_options)
+    chip_frame.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.EW)
+
+    # Chip width fits the longest option name -- real-hardware bug report: a fixed width=11
+    # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
+    chip_width = max((len(o) for o in options), default=1) + 1
+
+    selection_var = tk.IntVar(frame_options)
+    selection_var.set(default_value)
+
+    # Display order: default option first (row 0, col 0) -- real-hardware feedback -- everyone
+    # else keeps their original relative order after it (stable sort). value stays each option's
+    # ORIGINAL index into options (get_gui_controls()'s collected value, and keyboards.py's
+    # hardcoded mood-shortcut indices for the style control specifically, both depend on that
+    # index being unchanged) regardless of where it's drawn.
+    display_order = sorted(enumerate(options), key=lambda pair: pair[0] != default_value)
+
+    hidden_chips = []
+    chip_row = chip_col = 0
+    for original_index, option_text in display_order:
+        chip = tk.Radiobutton(
+            master=chip_frame,
+            text=option_text,
+            variable=selection_var,
+            value=original_index,
+            indicatoron=0,
+            selectcolor="#ffd54f",
+            width=chip_width,
+            padx=4,
+            pady=10,
+            command=None,
+        )
+        chip.grid(row=chip_row, column=chip_col, padx=3, pady=3, sticky=tk.NSEW)
+        chip_frame.grid_columnconfigure(chip_col, weight=1)
+        if hidden_re and hidden_re.match(option_text):
+            chip.grid_remove()
+            hidden_chips.append(chip)
+        chip_col += 1
+        if chip_col >= chips_per_row:
+            chip_col = 0
+            chip_row += 1
+    chip_rows_used = chip_row + (1 if chip_col else 0)
+
+    if hidden_chips:
+        hidden_visible = tk.BooleanVar(value=False)
+
+        def _toggle_hidden_chips(_chips=hidden_chips, _var=hidden_visible):
+            for _chip in _chips:
+                if _var.get():
+                    _chip.grid()
+                else:
+                    _chip.grid_remove()
+
+        btn_toggle = tk.Checkbutton(
+            master=chip_frame, text=i18n.t("advanced_styles_toggle"), variable=hidden_visible,
+            command=_toggle_hidden_chips,
+        )
+        btn_toggle.grid(row=chip_rows_used, column=0, columnspan=chips_per_row,
+                         sticky=tk.W, pady=(4, 0))
+
+    # chip_frame is a single cell in frame_options' own grid -- its internal multi-row chip layout
+    # doesn't change frame_options' row count regardless of how many chip rows exist.
+    sub_row_index += 1
+    return selection_var, sub_row_index
+
+
+def gui_generic_controls(tts_config, main_panel_config):
+    """Renders the model-options panel from the active backend's describe_controls() (renamed
+    from gui_fastspeech2() -- interchangeable-backend GUI refactor, see docs/context/CHANGELOG.md)
+    instead of hand-building FS2-specific widgets: a speaker dropdown (if describe_controls()
+    returns a non-empty speaker_list) plus one widget per describe_controls()["controls"] entry,
+    dispatched by "type". Collects every widget into _generic_control_widgets so get_gui_controls()
+    can read them back generically; goal is a pixel-identical FS2 panel, just built from data
+    instead of hand-written per-field code, so a different backend's describe_controls() renders
+    through the exact same code path with zero changes here."""
     global speaker_selection
-    global pitch_slider
-    global energy_slider
-    global speed_slider
-    global pitch_bias_slider
-    global energy_bias_slider
-    global speed_bias_slider
-    global pause_bias_slider
-    global liaison_bias_slider
-    global gst_token_selection
-    global style_intensity_slider
-    global ent_styleTag_input
     global canvas
+    global _generic_control_widgets
 
+    _generic_control_widgets = {}
     sub_row_index = 0
-    default_args = tts_config['default_args']
-    _CHIPS_PER_ROW = 4  # width (grid units) for the speaker dropdown row; the GST-style chip
-                        # grid below computes its own column count (_style_chips_per_row)
+    _CHIPS_PER_ROW = 4  # width (grid units) for the speaker dropdown row and the shared
+                        # "advanced controls" toggle; chip grids compute their own column count
 
-    # Speaker list read from the currently loaded backend instead of re-opening
-    # config_tts.yaml's preprocess.yaml directly (the pre-Phase-3 leak -- see
-    # docs/REORG_PROPOSAL.md Sec5/Sec7).
-    speaker_list = registry.BACKEND.describe_controls()["speaker_list"]
+    backend_controls = registry.BACKEND.describe_controls()
+    speaker_list = backend_controls.get("speaker_list") or []
+    default_speaker = backend_controls.get("default_speaker", 0)
+    controls = backend_controls.get("controls", [])
 
     # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
@@ -1073,206 +1170,101 @@ def gui_fastspeech2(tts_config, main_panel_config):
     frame_options = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame_options, anchor='nw')
 
-    # ~ lbl_tts_options_selection = tk.Label(master=frame_options, text="TTS options :", font='Helvetica 15 underline').grid(row=0, column=0, rowspan = 4)
-
-    # Select default values
-    speaker_selection = tk.IntVar(frame)
-    speaker_selection.set(default_args['speaker_id'])
-
     # Speaker dropdown (PC-GUI feedback: a chip grid was overkill for something that "doesn't
     # change very often" and some future backends may only have one voice at all -- a dropdown
-    # beside the label instead of a whole wrapped grid also gives the style chip grid below more
-    # width/rows to itself). Display order: default speaker first in the list (stable sort, same
-    # as the chip grids), value stays each speaker's ORIGINAL index into speaker_list (the real
-    # model speaker ID) regardless of its position in the dropdown.
-    lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
-    lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.W)
+    # beside the label instead of a whole wrapped grid also gives the controls below more
+    # width/rows to themselves). Display order: default speaker first in the list (stable sort,
+    # same as the chip grids), value stays each speaker's ORIGINAL index into speaker_list (the
+    # real model speaker ID) regardless of its position in the dropdown. Skipped entirely for a
+    # backend with no speaker_list at all (a single-voice model) -- speaker_selection stays None
+    # and get_gui_controls() simply omits "speaker".
+    index_speaker = 0
+    if speaker_list:
+        speaker_selection = tk.IntVar(frame)
+        speaker_selection.set(default_speaker)
 
-    _default_speaker_id = default_args['speaker_id']
-    _speaker_display_order = sorted(enumerate(speaker_list),
-                                     key=lambda pair: pair[0] != _default_speaker_id)
-    _speaker_index_by_label = {name: idx for idx, name in _speaker_display_order}
-    _speaker_label_by_index = {idx: name for idx, name in _speaker_display_order}
-    speaker_display_var = tk.StringVar(value=_speaker_label_by_index[_default_speaker_id])
+        lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
+        lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.W)
 
-    def _on_speaker_selected(selected_label):
-        speaker_selection.set(_speaker_index_by_label[selected_label])
+        _default_speaker_id = default_speaker
+        _speaker_display_order = sorted(enumerate(speaker_list),
+                                         key=lambda pair: pair[0] != _default_speaker_id)
+        _speaker_index_by_label = {name: idx for idx, name in _speaker_display_order}
+        _speaker_label_by_index = {idx: name for idx, name in _speaker_display_order}
+        speaker_display_var = tk.StringVar(value=_speaker_label_by_index[_default_speaker_id])
 
-    tk.OptionMenu(frame_options, speaker_display_var,
-                  *[name for _, name in _speaker_display_order], command=_on_speaker_selected
-                  ).grid(row=sub_row_index, column=1, columnspan=_CHIPS_PER_ROW - 1, sticky=tk.W)
-    sub_row_index += 1
+        def _on_speaker_selected(selected_label):
+            speaker_selection.set(_speaker_index_by_label[selected_label])
 
-    # Downstream columnspan=1+index_speaker uses were always just a "how many speakers" width
-    # heuristic (predating the chip/dropdown UI), matching the original per-speaker-row loop's
-    # final counter value.
-    index_speaker = len(speaker_list)
-
-    # Select default values
-    gst_token_selection = tk.IntVar(frame)
-    gst_token_selection.set(default_args['gst_token_index'])
-
-    # Free StyleTag input field
-    ent_styleTag_input = tk.Entry(master=frame_options, width=main_panel_config["input_width"])
-    if tts_config['gui_styleTag_control']:
-        lbl_styleTag_input = tk.Label(master=frame_options, text=i18n.t("styletag_label")).grid(row=sub_row_index, column=0)
-        ent_styleTag_input.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
+        tk.OptionMenu(frame_options, speaker_display_var,
+                      *[name for _, name in _speaker_display_order], command=_on_speaker_selected
+                      ).grid(row=sub_row_index, column=1, columnspan=_CHIPS_PER_ROW - 1, sticky=tk.W)
         sub_row_index += 1
 
-    # GST token chip grid (cc_prompt_gui_refactor.md Phase 1 item 4): wrapped grid of chip-style
-    # toggle buttons instead of a one-per-row radio column -- fewer rows, larger touch targets,
-    # same gst_token_selection IntVar so the underlying synthesis control (get_gui_controls()'s
-    # gst_token_index) is unchanged. Unnamed placeholder tokens (config_tts.yaml's "TOKEN13".."16"
-    # -- not yet trained/named LST directions) start hidden behind an "Styles avances" toggle
-    # instead of cluttering the default picker; toggling shows/hides them via grid()/grid_remove()
-    # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
-    if tts_config['gui_style_control']:
-        all_gst_tokens = [*tts_config['gst_token_list']]
-        _placeholder_re = re.compile(r"^TOKEN\d+$")
+        # Downstream columnspan=1+index_speaker uses were always just a "how many speakers" width
+        # heuristic (predating the chip/dropdown UI), matching the original per-speaker-row loop's
+        # final counter value.
+        index_speaker = len(speaker_list)
 
-        # Chips per row: derived to fit the always-visible (non-placeholder) styles into
-        # _STYLE_ROWS_TARGET rows, rather than a fixed 4-per-row -- real-hardware feedback: with
-        # the landscape keyboard set to half the screen, 4-wide rows overflowed the narrower
-        # options column. Fewer, narrower columns (more rows) fit that reduced width instead.
-        _STYLE_ROWS_TARGET = 4
-        _named_token_count = sum(1 for t in all_gst_tokens if not _placeholder_re.match(t))
-        _style_chips_per_row = max(1, -(-_named_token_count // _STYLE_ROWS_TARGET))  # ceil div
+    # Generic controls: one widget per describe_controls()["controls"] entry, in order. "advanced"
+    # controls (chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py: the 5 bias sliders,
+    # gated by gui_control_bias) are still gridded a real row each -- so their layout position is
+    # reserved like everything else -- but immediately grid_remove()'d, and revealed together by
+    # one shared toggle at the end (same show/hide mechanism as the chip grid's own hidden_pattern
+    # toggle, generalized to any control type). This is a new capability where there was none
+    # before (gui_control_bias: False used to mean permanently absent, no way to reveal from the
+    # GUI) -- a small, low-risk side effect of building this generically, not a design goal.
+    advanced_widgets = []  # [(label, widget), ...]
 
-        lbl_gst_token_selection = tk.Label(master=frame_options, text=i18n.t("style_label"))
-        lbl_gst_token_selection.grid(row=sub_row_index, column=0, columnspan=_style_chips_per_row, sticky=tk.W)
+    for control in controls:
+        control_type = control["type"]
+        key = control["key"]
+
+        if control_type == "chip_grid":
+            selection_var, sub_row_index = _build_chip_grid_control(frame_options, control, sub_row_index)
+            _generic_control_widgets[key] = selection_var
+            continue
+
+        if control_type == "slider":
+            widget = tk.Scale(frame_options, from_=control["min"], to=control["max"],
+                               orient=tk.HORIZONTAL, resolution=control.get("resolution", 1))
+            widget.set(control["default"])
+        elif control_type == "text":
+            widget = tk.Entry(master=frame_options, width=main_panel_config["input_width"])
+        else:
+            raise ValueError("Unknown control type: {!r}".format(control_type))
+
+        lbl = tk.Label(master=frame_options, text=i18n.t(control["label_key"]))
+        lbl.grid(row=sub_row_index, column=0)
+        widget.grid(row=sub_row_index, column=1, columnspan=1 + index_speaker, sticky=tk.W)
         sub_row_index += 1
 
-        chip_frame = tk.Frame(master=frame_options)
-        chip_frame.grid(row=sub_row_index, column=0, columnspan=_style_chips_per_row, sticky=tk.EW)
+        if control.get("advanced", False):
+            lbl.grid_remove()
+            widget.grid_remove()
+            advanced_widgets.append((lbl, widget))
 
-        # Chip width fits the longest token name -- real-hardware bug report: a fixed width=11
-        # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
-        _style_chip_width = max((len(t) for t in all_gst_tokens), default=1) + 1
+        _generic_control_widgets[key] = widget
 
-        # Display order: default style first (row 0, col 0) -- real-hardware feedback -- everyone
-        # else keeps their original relative order after it (stable sort). value stays each
-        # token's ORIGINAL index into gst_token_list (get_gui_controls()'s gst_token_index, and
-        # keyboards.py's hardcoded mood-shortcut indices, both depend on that index being
-        # unchanged) regardless of where it's drawn.
-        _default_gst_index = default_args['gst_token_index']
-        _gst_display_order = sorted(enumerate(all_gst_tokens),
-                                     key=lambda pair: pair[0] != _default_gst_index)
+    if advanced_widgets:
+        advanced_visible = tk.BooleanVar(value=False)
 
-        advanced_chips = []
-        chip_row = chip_col = 0
-        for _gst_original_index, gst_token in _gst_display_order:
-            chip = tk.Radiobutton(
-                master=chip_frame,
-                text=gst_token,
-                variable=gst_token_selection,
-                value=_gst_original_index,
-                indicatoron=0,
-                selectcolor="#ffd54f",
-                width=_style_chip_width,
-                padx=4,
-                pady=10,
-                command=None,
-            )
-            chip.grid(row=chip_row, column=chip_col, padx=3, pady=3, sticky=tk.NSEW)
-            chip_frame.grid_columnconfigure(chip_col, weight=1)
-            if _placeholder_re.match(gst_token):
-                chip.grid_remove()
-                advanced_chips.append(chip)
-            chip_col += 1
-            if chip_col >= _style_chips_per_row:
-                chip_col = 0
-                chip_row += 1
-        chip_rows_used = chip_row + (1 if chip_col else 0)
+        def _toggle_advanced_controls(_widgets=advanced_widgets, _var=advanced_visible):
+            for _lbl, _widget in _widgets:
+                if _var.get():
+                    _lbl.grid()
+                    _widget.grid()
+                else:
+                    _lbl.grid_remove()
+                    _widget.grid_remove()
 
-        if advanced_chips:
-            advanced_visible = tk.BooleanVar(value=False)
-
-            def _toggle_advanced_chips(_chips=advanced_chips, _var=advanced_visible):
-                for _chip in _chips:
-                    if _var.get():
-                        _chip.grid()
-                    else:
-                        _chip.grid_remove()
-
-            btn_advanced_toggle = tk.Checkbutton(
-                master=chip_frame, text=i18n.t("advanced_styles_toggle"), variable=advanced_visible,
-                command=_toggle_advanced_chips,
-            )
-            btn_advanced_toggle.grid(row=chip_rows_used, column=0, columnspan=_style_chips_per_row,
-                                      sticky=tk.W, pady=(4, 0))
-
-        # chip_frame is a single cell in frame_options' own grid -- its internal multi-row chip
-        # layout doesn't change frame_options' row count regardless of how many chip rows exist.
+        btn_advanced_controls_toggle = tk.Checkbutton(
+            master=frame_options, text=i18n.t("advanced_controls_toggle"), variable=advanced_visible,
+            command=_toggle_advanced_controls,
+        )
+        btn_advanced_controls_toggle.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW,
+                                           sticky=tk.W, pady=(4, 0))
         sub_row_index += 1
-
-    # Style Intensity Slider
-    style_intensity_slider = tk.Scale(frame_options, from_=0, to=1, orient=tk.HORIZONTAL, resolution=0.05)
-    lbl_style_intensity = tk.Label(master=frame_options, text=i18n.t("style_intensity_label")).grid(row=sub_row_index, column=0)
-    style_intensity_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-    style_intensity_slider.set(default_args['style_intensity'])
-    sub_row_index += 1
-
-    # Pitch Slider
-    pitch_slider = tk.Scale(frame_options, from_=-15, to=15, orient=tk.HORIZONTAL, resolution=1)
-    lbl_pitch_selection = tk.Label(master=frame_options, text=i18n.t("pitch_label")).grid(row=sub_row_index, column=0)
-    pitch_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-    pitch_slider.set(default_args['pitch_control'])
-    sub_row_index += 1
-
-    # Energy Slider
-    energy_slider = tk.Scale(frame_options, from_=-20, to=20, orient=tk.HORIZONTAL, resolution=1)
-    lbl_energy_selection = tk.Label(master=frame_options, text=i18n.t("energy_label")).grid(row=sub_row_index, column=0)
-    energy_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-    energy_slider.set(default_args['energy_control'])
-    sub_row_index += 1
-
-    # Speed Slider
-    speed_slider = tk.Scale(frame_options, from_=0.5, to=1.5, orient=tk.HORIZONTAL, resolution=0.1)
-    lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_label")).grid(row=sub_row_index, column=0)
-    speed_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-    speed_slider.set(default_args['duration_control'])
-    sub_row_index += 1
-
-    # Pitch Bias Slider
-    pitch_bias_slider = tk.Scale(frame_options, from_=-6, to=6, orient=tk.HORIZONTAL, resolution=0.5)
-    pitch_bias_slider.set(default_args['pitch_control_bias'])
-    sub_row_index += 1
-
-    # Energy Bias Slider
-    energy_bias_slider = tk.Scale(frame_options, from_=-5, to=5, orient=tk.HORIZONTAL, resolution=1)
-    energy_bias_slider.set(default_args['energy_control_bias'])
-    sub_row_index += 1
-
-    # Speed Bias Slider
-    speed_bias_slider = tk.Scale(frame_options, from_=0.5, to=1.5, orient=tk.HORIZONTAL, resolution=0.1)
-    speed_bias_slider.set(default_args['duration_control_bias'])
-    sub_row_index += 1
-
-    # Pause Bias Slider
-    pause_bias_slider = tk.Scale(frame_options, from_=-2, to=2, orient=tk.HORIZONTAL, resolution=0.1)
-    pause_bias_slider.set(default_args['pause_control_bias'])
-    sub_row_index += 1
-
-    # Liaison Bias Slider
-    liaison_bias_slider = tk.Scale(frame_options, from_=-2, to=2, orient=tk.HORIZONTAL, resolution=0.1)
-    liaison_bias_slider.set(default_args['liaison_control_bias'])
-    sub_row_index += 1
-
-    if tts_config['gui_control_bias']:
-        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pitch_bias_label")).grid(row=sub_row_index, column=0)
-        pitch_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-
-        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("energy_bias_label")).grid(row=sub_row_index, column=0)
-        energy_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-
-        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("speed_bias_label")).grid(row=sub_row_index, column=0)
-        speed_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-
-        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("pause_bias_label")).grid(row=sub_row_index, column=0)
-        pause_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
-
-        lbl_speed_selection = tk.Label(master=frame_options, text=i18n.t("liaison_bias_label")).grid(row=sub_row_index, column=0)
-        liaison_bias_slider.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.W)
 
     # Add scrollbar. A one-time canvas.config(width=..., height=...) hint (as this used to do) sets
     # a MINIMUM size that grid respects regardless of weight -- in landscape, where the window is

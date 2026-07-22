@@ -75,14 +75,14 @@ tts_models:
   - label: "Multi Speaker/Style"
     load_script: "load_fastspeech2"
     syn_script: "syn_fastspeech2"
-    gui_script: "gui_fastspeech2"
+    gui_script: "gui_generic_controls"
     folder: "assets/models/FastSpeech2"
     checkpoint_file: "390000"
     output_location: "output/audio"
     # This dict's order is chatterbox/gui/keyboards.py's mood-shortcut source of truth (":D"->3
     # ENTHOUSIASTE, ":("->1 DESOLE, ":p"->4 ESPIEGLE, ":O"->5 ETONNE, all hardcoded indices) -- keep
     # alphabetical/stable, don't reorder for display purposes. The GST chip grid no longer reads
-    # this order directly for WHERE to draw each chip: gui/app.py's gui_fastspeech2() sorts by
+    # this order directly for WHERE to draw each chip: gui/app.py's gui_generic_controls() sorts by
     # "is this default_args.gst_token_index" first (stable sort) so the default always renders at
     # grid position [0,0] regardless of its underlying index here (PC-GUI feedback) -- only the
     # chip's underlying value (unchanged, still this dict's index) has to stay put.

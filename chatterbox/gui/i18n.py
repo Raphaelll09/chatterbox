@@ -28,6 +28,7 @@ STRINGS = {
         "styletag_label": "StyleTag :",
         "style_label": "Style :",
         "advanced_styles_toggle": "Styles avancés",
+        "advanced_controls_toggle": "Contrôles avancés",
         "style_intensity_label": "Intensité du style :",
         "pitch_label": "Hauteur (demi-tons) :",
         "energy_label": "Énergie (dB) :",
@@ -38,9 +39,12 @@ STRINGS = {
         "pause_bias_label": "Biais de pause :",
         "liaison_bias_label": "Biais de liaison :",
         "audio_duration_label": "Durée audio : {duration:.3f}s",
-        "tts_duration_label": "Durée TTS : {duration:.3f}s | {percent:.0f}% de la durée audio",
-        "vocoder_duration_label": "Durée Vocodeur : {duration:.3f}s | {percent:.0f}% de la durée audio",
-        "denoiser_duration_label": "Durée Denoiser : {duration:.3f}s | {percent:.0f}% de la durée audio",
+        # One generic template for every AudioResult.stage_durations entry (interchangeable-
+        # backend GUI refactor -- replaces the old tts_duration_label/vocoder_duration_label/
+        # denoiser_duration_label, which were textually identical except the stage name) --
+        # {name} is the stage's display name (app.py's _STAGE_DISPLAY_NAMES, "TTS"/"Vocodeur"/
+        # "Denoiser" today, falling back to the raw stage key for one a future backend adds).
+        "stage_duration_label": "Durée {name} : {duration:.3f}s | {percent:.0f}% de la durée audio",
         "synthesis_duration_label": "Durée Totale Synthèse : {duration:.3f}s | {percent:.0f}% de la durée audio",
         "error_label": "Erreur : {error}",
         "gst_weights_title": "\nPoids GST\n",
