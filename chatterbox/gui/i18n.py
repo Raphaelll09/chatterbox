@@ -18,7 +18,11 @@ STRINGS = {
         "tts_label": "TTS :",
         "vocoder_label": "Vocodeur :",
         "synthesize_button": "Synthèse",
-        "input_text_label": "Texte à saisir",
+        # Shortened from "Texte à saisir" -- real-hardware feedback: in landscape, that label's
+        # own (unweighted) column width left too little of the row's remaining width for the
+        # Synthèse button, which rendered clipped ("nthè"). A shorter label leaves the weighted
+        # entry/button columns more room.
+        "input_text_label": "Saisie",
         "replay_button": "Rejouer",  # was "Lire" -- real-hardware feedback: ambiguous/redundant
                                      # with the keyboards' own "▶" play button, which
                                      # re-synthesizes; this button only replays the last audio.

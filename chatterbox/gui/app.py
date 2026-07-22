@@ -186,7 +186,16 @@ def _set_ui_state(state_name, error=None):
     if canvas_circle is not None:
         update_circle_color(color, canvas_circle, canvas_circle_figure)
     if lbl_status is not None:
-        lbl_status["text"] = "" if error is None else i18n.t("error_label", error=error)
+        # grid_remove()'d rather than just left with empty text (real-hardware feedback: "Rejouer
+        # and Mettre en veille buttons can be placed slightly upper") -- an always-gridded blank
+        # row between the duration info and those buttons contributed real, if small, permanently
+        # reserved height for no reason whenever there's no error to show, the common case.
+        if error is None:
+            lbl_status["text"] = ""
+            lbl_status.grid_remove()
+        else:
+            lbl_status["text"] = i18n.t("error_label", error=error)
+            lbl_status.grid()
 
 
 def _update_audio_info(result):
@@ -783,10 +792,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                 for lbl in labels:
                     lbl.grid_remove()
 
-    # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- always
-    # present, empty text outside the error state.
+    # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- grid_remove()'d
+    # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
+    # blank row for the common no-error case.
     lbl_status = tk.Label(master=window, text="", fg="red")
     lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
+    lbl_status.grid_remove()
 
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
@@ -1121,23 +1132,31 @@ def get_canvas_circle():
 def update_circle_color(color, canvas_circle, canvas_circle_figure):
     canvas_circle.itemconfig(canvas_circle_figure, fill=color)
 
-def _build_chip_grid_control(frame_options, control, sub_row_index):
+def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     """Generalizes the GST-style chip grid (cc_prompt_gui_refactor.md Phase 1 item 4 /
     interchangeable-backend GUI refactor): wrapped grid of chip-style toggle Radiobuttons, default
     option first (stable sort), options matching an optional hidden_pattern regex start hidden
-    behind an "advanced" toggle. Returns (IntVar, rows_used)."""
+    behind an "advanced" toggle. Returns (IntVar, rows_used).
+
+    landscape picks the column count: real-hardware feedback across two rounds asked for opposite
+    things in each orientation -- in landscape, where the keyboard shares screen width, a fixed
+    4-per-row overflowed the narrower options column (rows target ~4, i.e. narrower columns);
+    in portrait, where the whole width is available, "styles and cursors can take more space in
+    vertical, there can be 4 styles per row" (the original, pre-adaptive 4-per-row default). This
+    is decided once at build time from the window's shape when the GUI first loads, not live-
+    reactive to a later Settings -> Advanced orientation override -- landscape is a maintenance-
+    only mode in this app's design, not a case this needs to reflow instantly for."""
     options = control["options"]
     default_value = control["default"]
     hidden_pattern = control.get("hidden_pattern")
     hidden_re = re.compile(hidden_pattern) if hidden_pattern else None
-
-    # Chips per row: derived to fit the always-visible (non-hidden-pattern) options into
-    # _STYLE_ROWS_TARGET rows, rather than a fixed 4-per-row -- real-hardware feedback: with the
-    # landscape keyboard set to half the screen, 4-wide rows overflowed the narrower options
-    # column. Fewer, narrower columns (more rows) fit that reduced width instead.
-    _STYLE_ROWS_TARGET = 4
     visible_count = sum(1 for o in options if not (hidden_re and hidden_re.match(o)))
-    chips_per_row = max(1, -(-visible_count // _STYLE_ROWS_TARGET))  # ceil div
+
+    if landscape:
+        _STYLE_ROWS_TARGET = 4
+        chips_per_row = max(1, -(-visible_count // _STYLE_ROWS_TARGET))  # ceil div
+    else:
+        chips_per_row = 4
 
     lbl = tk.Label(master=frame_options, text=i18n.t(control["label_key"]))
     lbl.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.W)
@@ -1241,6 +1260,13 @@ def gui_generic_controls(tts_config, main_panel_config):
     default_speaker = backend_controls.get("default_speaker", 0)
     controls = backend_controls.get("controls", [])
 
+    # Chip-grid column count depends on orientation at build time (see
+    # _build_chip_grid_control()'s docstring) -- update_idletasks() first so a fullscreen kiosk's
+    # real on-screen shape is reflected here rather than main_panel_config's configured width/
+    # height (this runs before create_gui()'s own orientation-detection code further down).
+    window.update_idletasks()
+    landscape_at_build = window.winfo_width() > window.winfo_height()
+
     # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
     # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
@@ -1310,7 +1336,8 @@ def gui_generic_controls(tts_config, main_panel_config):
         key = control["key"]
 
         if control_type == "chip_grid":
-            selection_var, sub_row_index = _build_chip_grid_control(frame_options, control, sub_row_index)
+            selection_var, sub_row_index = _build_chip_grid_control(
+                frame_options, control, sub_row_index, landscape_at_build)
             _generic_control_widgets[key] = selection_var
             if key == "style":
                 # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its
@@ -1376,7 +1403,18 @@ def gui_generic_controls(tts_config, main_panel_config):
         canvas.config(width=event.width, height=event.height)
 
     frame.bind("<Configure>", _resize_canvas_to_frame)
-    canvas.config(scrollregion=canvas.bbox("all"))
+
+    # Recompute the scrollable region whenever frame_options' own rendered size changes -- real-
+    # hardware bug report: toggling "Styles avances"/"Controles avances" reveals more chips/
+    # sliders (frame_options grows taller), but the scrollregion set once below never updated, so
+    # the scrollbar's range stayed capped at the ORIGINAL (pre-toggle) content height -- newly
+    # revealed rows (the toggle checkbox itself, "Biais de hauteur", ...) became genuinely
+    # unreachable by scrolling, not just currently out of view.
+    def _update_scrollregion(event=None):
+        canvas.config(scrollregion=canvas.bbox("all"))
+
+    frame_options.bind("<Configure>", _update_scrollregion)
+    _update_scrollregion()
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
     canvas.bind('<Leave>', unbound_to_mouse_wheel)
