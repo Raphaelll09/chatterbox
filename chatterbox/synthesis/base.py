@@ -39,10 +39,15 @@ class SynthesisRequest:
 
 @dataclass
 class SynthesisResult:
-    mel_path: str
+    mel_path: Optional[str]
     au_path: Optional[str]  # facial/visual animation params -- optional per backend (Matcha-TTS
                              # won't produce one; see docs/REORG_PROPOSAL.md Sec5)
     sample_rate: Optional[int] = None
+    # A monolithic/end-to-end backend (text -> wav directly, no separate vocoder stage) fills this
+    # in and leaves mel_path=None; a two-stage backend (this repo's FastSpeech2+HiFi-GAN) fills
+    # mel_path and leaves this None. chatterbox/synth.py's synthesize() branches on which one is
+    # set to decide whether to call VocoderBackend.vocode() at all -- see its module docstring.
+    wav_path: Optional[str] = None
 
 
 class Synthesizer(ABC):
@@ -57,9 +62,41 @@ class Synthesizer(ABC):
         ...
 
     def describe_controls(self) -> dict:
-        """GUI renders sliders/buttons off this instead of special-casing the backend by name
-        (kills gui_utils.py's gui_fastspeech2()-style branching and its config-reopening leak --
-        see docs/REORG_PROPOSAL.md Sec5). Default: no extra controls."""
+        """GUI renders its model-options panel off this instead of special-casing the backend by
+        name (kills gui_utils.py's gui_fastspeech2()-style branching and its config-reopening leak
+        -- see docs/REORG_PROPOSAL.md Sec5). Called once per load, on the loaded instance (so
+        `speaker_list` etc. can depend on which checkpoint is actually loaded) --  for capability
+        flags a caller needs *before* loading a model (whether it needs a separate vocoder, or
+        understands phoneme input), see the static per-`tts_models` entry YAML flags
+        (`needs_vocoder`/`accepts_phoneme_input` in config_tts.yaml) instead.
+
+        Return shape (all keys optional, default: no extra controls beyond a bare "Synthèse"
+        button):
+            {
+                "speaker_list": [str, ...],   # None/omitted if this backend has only one voice
+                "controls": [                 # ordered list of control descriptors; gui/app.py's
+                                               # gui_generic_controls() renders one widget per
+                                               # entry, in order, and collects values into a dict
+                                               # keyed by "key" (get_gui_controls()'s return value)
+                    {
+                        "type": "chip_grid" | "slider" | "text",
+                        "key": str,            # dict key the collected value is stored under
+                        "label_key": str,      # chatterbox.gui.i18n key for the widget's label
+                        # chip_grid only:
+                        "options": [str, ...], # displayed in stable order, default option first
+                        "default": <value>,    # for chip_grid/slider: the option/value pre-selected
+                        "hidden_pattern": <regex str, optional>,  # options matching this start
+                                                # hidden behind an "advanced" toggle (chip_grid only)
+                        # slider only:
+                        "min": float, "max": float,
+                        "advanced": bool,       # optional; groups this control behind an
+                                                # "advanced"-style show/hide toggle, same idea as
+                                                # hidden_pattern but for sliders/any control type
+                    },
+                    ...
+                ],
+            }
+        Default: no extra controls."""
         return {}
 
 
