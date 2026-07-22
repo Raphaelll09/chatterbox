@@ -61,11 +61,14 @@ lbl_battery = None
 _orientation_override = None
 _refresh_orientation = None
 
-# Landscape keyboard width cap (Settings -> Advanced), as a fraction of the window's actual width
-# -- real-hardware feedback: the keyboard was "taking all the space" in landscape with huge
-# letters. Default 1/2; _refresh_orientation() (above) re-applies this immediately when changed,
-# same mechanism as the orientation override.
-_keyboard_landscape_fraction = 0.5
+# Keyboard's share of the screen -- a fixed fraction, no longer user-configurable (real-hardware
+# feedback: tried 1/2 through 3/4 across several rounds; "the right share of keyboard seems to be
+# between 1/2 and 2/3" -- 0.6 lands inside that range). Used as a fraction of window WIDTH in
+# landscape (the keyboard sits beside the options panel, competing for width) and of window HEIGHT
+# in portrait (it sits below the options panel, competing for height) -- see
+# _apply_current_orientation()'s two branches below, which both force their respective dimension
+# to at least this share via the same grid_propagate(False) + explicit size + sticky=NSEW pattern.
+_KEYBOARD_SCREEN_SHARE = 0.6
 
 # Whether the currently-loaded TTS model understands the Phonemes keyboard's raw phone-code syntax
 # at all (interchangeable-backend GUI refactor -- config_tts.yaml's static per-model
@@ -183,7 +186,16 @@ def _set_ui_state(state_name, error=None):
     if canvas_circle is not None:
         update_circle_color(color, canvas_circle, canvas_circle_figure)
     if lbl_status is not None:
-        lbl_status["text"] = "" if error is None else i18n.t("error_label", error=error)
+        # grid_remove()'d rather than just left with empty text (real-hardware feedback: "Rejouer
+        # and Mettre en veille buttons can be placed slightly upper") -- an always-gridded blank
+        # row between the duration info and those buttons contributed real, if small, permanently
+        # reserved height for no reason whenever there's no error to show, the common case.
+        if error is None:
+            lbl_status["text"] = ""
+            lbl_status.grid_remove()
+        else:
+            lbl_status["text"] = i18n.t("error_label", error=error)
+            lbl_status.grid()
 
 
 def _update_audio_info(result):
@@ -372,16 +384,6 @@ def _set_orientation_override(value):
         _refresh_orientation()
 
 
-def _set_keyboard_landscape_fraction(value):
-    """Settings -> Advanced's keyboard-width radio buttons. value is a float fraction (0.5/0.667/
-    0.75); immediately re-applies via _refresh_orientation() so the cap takes effect right away
-    even if the window is already in landscape (a plain orientation flip check alone wouldn't
-    re-run, since the orientation itself hasn't changed -- _refresh_orientation forces it)."""
-    global _keyboard_landscape_fraction
-    _keyboard_landscape_fraction = value
-    if _refresh_orientation is not None:
-        _refresh_orientation()
-
 
 def _back_action():
     if settings.is_open():
@@ -477,6 +479,16 @@ _LETTER_ROWS = [
 ]
 
 
+def _wrap_label_to_width(event):
+    """Bound to a widget's own <Configure>: wraps its label to whatever pixel width Tk actually
+    gives it instead of a fixed font/width -- real-hardware bug report: "Tout effacer" rendered as
+    "out effacer", clipped, once the landscape keyboard's width cap (Settings -> Advanced fraction)
+    made its column narrower than the label's natural request. Reused for the style chip grid's
+    long option names (cc_prompt_gui_refactor.md follow-up: cropping/shrinking chips to make more
+    room for the keyboard) for the same reason -- crop by wrapping, never by silent clipping."""
+    event.widget.config(wraplength=max(1, event.width - 4))
+
+
 def _create_letter_keyboard(master, key_board_options):
     """Text-mode soft keyboard: independent of create_keyboard()/keyboards.keys on purpose -- that
     machinery (mirror readonly entry, prerecorded-phone playback, the entry_text_keyboard/
@@ -499,13 +511,6 @@ def _create_letter_keyboard(master, key_board_options):
             )
             btn.grid(row=row_index, column=col_index, sticky=tk.NSEW,
                       padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
-
-    # Control-row buttons wrap their own label to whatever width Tk actually gives them (bound to
-    # each button's own <Configure>) instead of a fixed font/width -- real-hardware bug report:
-    # "Tout effacer" rendered as "out effacer", clipped, once the landscape keyboard's width cap
-    # (Settings -> Advanced fraction) made these columns narrower than the label's natural request.
-    def _wrap_to_width(event):
-        event.widget.config(wraplength=max(1, event.width - 4))
 
     control_row = len(_LETTER_ROWS)
     tk.Grid.rowconfigure(frame, control_row, weight=1)
@@ -537,7 +542,7 @@ def _create_letter_keyboard(master, key_board_options):
                    padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
 
     for _btn in (btn_space, btn_backspace, btn_clear_all, btn_play):
-        _btn.bind("<Configure>", _wrap_to_width)
+        _btn.bind("<Configure>", _wrap_label_to_width)
 
     return frame
 
@@ -718,19 +723,10 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     command=lambda v=value: _set_orientation_override(v),
                 ).grid(row=2, column=col, sticky=tk.EW, padx=2, pady=2)
 
-            # Landscape keyboard width cap, as a fraction of the actual window width -- real-
-            # hardware feedback: the keyboard was "taking all the space" with huge letters.
-            tk.Label(master=parent_frame, text=i18n.t("keyboard_width_label")).grid(
-                row=3, column=0, sticky=tk.W, padx=4, pady=2)
-            kb_width_var = tk.StringVar(value=str(_keyboard_landscape_fraction))
-            for col, (value, label_key) in enumerate(
-                    [(0.5, "keyboard_width_half"), (2 / 3, "keyboard_width_two_thirds"),
-                     (0.75, "keyboard_width_three_quarters")], start=1):
-                tk.Radiobutton(
-                    master=parent_frame, text=i18n.t(label_key), variable=kb_width_var,
-                    value=str(value), indicatoron=0, selectcolor="#ffd54f",
-                    command=lambda v=value: _set_keyboard_landscape_fraction(v),
-                ).grid(row=3, column=col, sticky=tk.EW, padx=2, pady=2)
+            # No user-configurable keyboard-width picker anymore (real-hardware feedback: tried
+            # 1/2 through 3/4 across several rounds; "the right share seems to be between 1/2 and
+            # 2/3" -- 0.6, a fixed constant (_KEYBOARD_SCREEN_SHARE), replaces the picker instead
+            # of adding yet another option to it).
 
     _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
     _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
@@ -769,11 +765,17 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         # 3 slots covers every pipeline shape this repo currently anticipates (two-stage: tts +
         # vocoder + denoiser; monolithic: tts + denoiser, one slot unused/hidden) without having to
         # renumber every row below (replay/put-away/keyboard) for a rarer, wider pipeline.
+        # grid_remove()'d immediately -- real-hardware feedback: gridded-but-blank rows still
+        # claim their row height, leaving a dead, empty-looking gap before any synthesis has run
+        # (and stealing height the options panel's own weighted row could otherwise use, "as the
+        # synthesis data has been reduced, it may be useful to extend the upper window").
+        # update_audio_infos() grids whichever of these are actually in use once real data exists.
         _STAGE_POOL_SIZE = 3
         lbl_audio_infos_stage_pool = []
         for _pool_i in range(_STAGE_POOL_SIZE):
             _lbl = tk.Label(master=window, text="")
             _lbl.grid(row=9 + _pool_i, column=0, columnspan=max_buttons+2)
+            _lbl.grid_remove()
             lbl_audio_infos_stage_pool.append(_lbl)
 
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
@@ -790,10 +792,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                 for lbl in labels:
                     lbl.grid_remove()
 
-    # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- always
-    # present, empty text outside the error state.
+    # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- grid_remove()'d
+    # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
+    # blank row for the common no-error case.
     lbl_status = tk.Label(master=window, text="", fg="red")
     lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
+    lbl_status.grid_remove()
 
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
@@ -962,15 +966,15 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                 if landscape:
                     # Column deliberately NOT weighted (real-hardware feedback: the keyboard
                     # competed with the options panel for extra window width, "taking a lot of
-                    # space") -- width is instead an explicit cap, a configurable fraction of the
-                    # actual window width (Settings -> Advanced), enforced via grid_propagate(False)
-                    # so the keyboard's own internal weighted columns/buttons scale DOWN to fit
-                    # that cap instead of growing into whatever space weight would hand them
-                    # (previously an unbounded rowspan=20 pulled in row 2's -- the options panel's
-                    # -- own large weighted height this way, inflating the keyboard's buttons
-                    # vertically too ["letters are huge"]); the height is explicit now (below), not
-                    # derived from the span, so rowspan only controls which rows share the cost of
-                    # that fixed height, not the keyboard's own size.
+                    # space") -- width is instead an explicit cap, _KEYBOARD_SCREEN_SHARE of the
+                    # actual window width, enforced via grid_propagate(False) so the keyboard's own
+                    # internal weighted columns/buttons scale DOWN to fit that cap instead of
+                    # growing into whatever space weight would hand them (previously an unbounded
+                    # rowspan=20 pulled in row 2's -- the options panel's -- own large weighted
+                    # height this way, inflating the keyboard's buttons vertically too ["letters
+                    # are huge"]); the height is explicit now (below), not derived from the span, so
+                    # rowspan only controls which rows share the cost of that fixed height, not the
+                    # keyboard's own size.
                     #
                     # grid_propagate(False) makes Tk stop deriving BOTH width and height from the
                     # frame's children -- it always uses whatever was last passed to .config(), and
@@ -982,12 +986,37 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     _kb.grid_propagate(True)
                     _kb.update_idletasks()
                     natural_height = max(1, _kb.winfo_reqheight())
-                    target_width = max(150, int(window.winfo_width() * _keyboard_landscape_fraction))
+                    target_width = max(150, int(window.winfo_width() * _KEYBOARD_SCREEN_SHARE))
                     _kb.grid_propagate(False)
                     _kb.config(width=target_width, height=natural_height)
-                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.N)
+                    # sticky=NSEW (not just N): natural_height above is a MINIMUM, not a cap --
+                    # real-hardware feedback: the keyboard sat anchored at the top of its row span
+                    # with dead space below whenever the span's actual allocated height (governed
+                    # by row 2's weight, same computation either way) exceeded that minimum. NSEW
+                    # tells grid to stretch the frame to fill however much height it actually got;
+                    # keyboard_area's own internal row 1 (weight=1, holding the two keyboard
+                    # frames) and each key's own weighted row/column then grow to fill that,
+                    # matching the user's ask ("the keyboard should use all the space available").
+                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.NSEW)
                 else:
+                    # Portrait's keyboard row (unlike row 2, the options panel) has no weight of
+                    # its own by default, so it would otherwise only ever get its own natural
+                    # minimum height -- real-hardware feedback: "the keyboard is very small
+                    # compared to the window... the share is far below the landscape orientation."
+                    # Mirrors the landscape branch's mechanism exactly, just on the other axis:
+                    # measure the natural size with propagate on, then lock BOTH width and height
+                    # explicitly (grid_propagate(False) needs both, or the unset dimension collapses
+                    # to ~0 -- the same "both keyboards disappeared" gotcha as above) with height
+                    # floored at _KEYBOARD_SCREEN_SHARE of the window's actual height. sticky=NSEW
+                    # (already in _portrait) then stretches it to fill whatever more the row ends up
+                    # getting, and to fill the full width regardless of the natural-width floor.
                     _kb.grid_propagate(True)
+                    _kb.update_idletasks()
+                    natural_width = max(1, _kb.winfo_reqwidth())
+                    natural_height = max(1, _kb.winfo_reqheight())
+                    target_height = max(natural_height, int(window.winfo_height() * _KEYBOARD_SCREEN_SHARE))
+                    _kb.grid_propagate(False)
+                    _kb.config(width=natural_width, height=target_height)
                     _kb.grid(**_portrait)
                     window.grid_columnconfigure(_col, weight=0)
 
@@ -1103,23 +1132,31 @@ def get_canvas_circle():
 def update_circle_color(color, canvas_circle, canvas_circle_figure):
     canvas_circle.itemconfig(canvas_circle_figure, fill=color)
 
-def _build_chip_grid_control(frame_options, control, sub_row_index):
+def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     """Generalizes the GST-style chip grid (cc_prompt_gui_refactor.md Phase 1 item 4 /
     interchangeable-backend GUI refactor): wrapped grid of chip-style toggle Radiobuttons, default
     option first (stable sort), options matching an optional hidden_pattern regex start hidden
-    behind an "advanced" toggle. Returns (IntVar, rows_used)."""
+    behind an "advanced" toggle. Returns (IntVar, rows_used).
+
+    landscape picks the column count: real-hardware feedback across two rounds asked for opposite
+    things in each orientation -- in landscape, where the keyboard shares screen width, a fixed
+    4-per-row overflowed the narrower options column (rows target ~4, i.e. narrower columns);
+    in portrait, where the whole width is available, "styles and cursors can take more space in
+    vertical, there can be 4 styles per row" (the original, pre-adaptive 4-per-row default). This
+    is decided once at build time from the window's shape when the GUI first loads, not live-
+    reactive to a later Settings -> Advanced orientation override -- landscape is a maintenance-
+    only mode in this app's design, not a case this needs to reflow instantly for."""
     options = control["options"]
     default_value = control["default"]
     hidden_pattern = control.get("hidden_pattern")
     hidden_re = re.compile(hidden_pattern) if hidden_pattern else None
-
-    # Chips per row: derived to fit the always-visible (non-hidden-pattern) options into
-    # _STYLE_ROWS_TARGET rows, rather than a fixed 4-per-row -- real-hardware feedback: with the
-    # landscape keyboard set to half the screen, 4-wide rows overflowed the narrower options
-    # column. Fewer, narrower columns (more rows) fit that reduced width instead.
-    _STYLE_ROWS_TARGET = 4
     visible_count = sum(1 for o in options if not (hidden_re and hidden_re.match(o)))
-    chips_per_row = max(1, -(-visible_count // _STYLE_ROWS_TARGET))  # ceil div
+
+    if landscape:
+        _STYLE_ROWS_TARGET = 4
+        chips_per_row = max(1, -(-visible_count // _STYLE_ROWS_TARGET))  # ceil div
+    else:
+        chips_per_row = 4
 
     lbl = tk.Label(master=frame_options, text=i18n.t(control["label_key"]))
     lbl.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.W)
@@ -1128,9 +1165,16 @@ def _build_chip_grid_control(frame_options, control, sub_row_index):
     chip_frame = tk.Frame(master=frame_options)
     chip_frame.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.EW)
 
-    # Chip width fits the longest option name -- real-hardware bug report: a fixed width=11
-    # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
-    chip_width = max((len(o) for o in options), default=1) + 1
+    # Chip width fits the longest option name, up to a cap -- real-hardware bug report: a fixed
+    # width=11 clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each); later feedback asked for
+    # smaller/denser chips ("crop a bit the tags... boxes can be a bit smaller too") to leave more
+    # room for the keyboard, then a round after that asked to size them back up slightly ("Style
+    # boxes can be slightly bigger to match the range of the pitch and energy cursors") -- this cap
+    # (and the font/padding below) is the middle ground between those two rounds. A name past the
+    # cap wraps (via _wrap_label_to_width below) instead of forcing every chip as wide as the
+    # single longest name.
+    _CHIP_WIDTH_CAP = 10
+    chip_width = min(max((len(o) for o in options), default=1) + 1, _CHIP_WIDTH_CAP)
 
     selection_var = tk.IntVar(frame_options)
     selection_var.set(default_value)
@@ -1152,12 +1196,14 @@ def _build_chip_grid_control(frame_options, control, sub_row_index):
             value=original_index,
             indicatoron=0,
             selectcolor="#ffd54f",
+            font=("TkDefaultFont", 9),
             width=chip_width,
-            padx=4,
-            pady=10,
+            padx=3,
+            pady=6,
             command=None,
         )
         chip.grid(row=chip_row, column=chip_col, padx=3, pady=3, sticky=tk.NSEW)
+        chip.bind("<Configure>", _wrap_label_to_width)
         chip_frame.grid_columnconfigure(chip_col, weight=1)
         if hidden_re and hidden_re.match(option_text):
             chip.grid_remove()
@@ -1213,6 +1259,13 @@ def gui_generic_controls(tts_config, main_panel_config):
     speaker_list = backend_controls.get("speaker_list") or []
     default_speaker = backend_controls.get("default_speaker", 0)
     controls = backend_controls.get("controls", [])
+
+    # Chip-grid column count depends on orientation at build time (see
+    # _build_chip_grid_control()'s docstring) -- update_idletasks() first so a fullscreen kiosk's
+    # real on-screen shape is reflected here rather than main_panel_config's configured width/
+    # height (this runs before create_gui()'s own orientation-detection code further down).
+    window.update_idletasks()
+    landscape_at_build = window.winfo_width() > window.winfo_height()
 
     # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
@@ -1283,7 +1336,8 @@ def gui_generic_controls(tts_config, main_panel_config):
         key = control["key"]
 
         if control_type == "chip_grid":
-            selection_var, sub_row_index = _build_chip_grid_control(frame_options, control, sub_row_index)
+            selection_var, sub_row_index = _build_chip_grid_control(
+                frame_options, control, sub_row_index, landscape_at_build)
             _generic_control_widgets[key] = selection_var
             if key == "style":
                 # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its
@@ -1349,7 +1403,18 @@ def gui_generic_controls(tts_config, main_panel_config):
         canvas.config(width=event.width, height=event.height)
 
     frame.bind("<Configure>", _resize_canvas_to_frame)
-    canvas.config(scrollregion=canvas.bbox("all"))
+
+    # Recompute the scrollable region whenever frame_options' own rendered size changes -- real-
+    # hardware bug report: toggling "Styles avances"/"Controles avances" reveals more chips/
+    # sliders (frame_options grows taller), but the scrollregion set once below never updated, so
+    # the scrollbar's range stayed capped at the ORIGINAL (pre-toggle) content height -- newly
+    # revealed rows (the toggle checkbox itself, "Biais de hauteur", ...) became genuinely
+    # unreachable by scrolling, not just currently out of view.
+    def _update_scrollregion(event=None):
+        canvas.config(scrollregion=canvas.bbox("all"))
+
+    frame_options.bind("<Configure>", _update_scrollregion)
+    _update_scrollregion()
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
     canvas.bind('<Leave>', unbound_to_mouse_wheel)

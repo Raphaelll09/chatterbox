@@ -237,6 +237,114 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Seventh feedback round: keyboard fills available height, denser style chips
+
+- What: real-hardware landscape screenshots (800x480-ish) showed the keyboard -- "the most
+  important aspect of the GUI" -- sitting small and anchored to the top of its column, with a lot
+  of dead space below it, while the Style chip grid read as comparatively large.
+  1. The landscape keyboard now grids with `sticky=tk.NSEW` instead of `sticky=tk.N`. The
+     previously-computed `natural_height` (via `grid_propagate(False)` + explicit `height=`,
+     sixth round) is still the *minimum* -- still protects against the earlier "huge letters"
+     regression -- but the frame now stretches to fill however much height its row span actually
+     has, instead of anchoring at its own natural minimum and leaving blank space below.
+     `keyboard_area`'s own weighted internal row (and each keyboard's own weighted button rows/
+     columns) grow to fill that, so the keys themselves get physically bigger.
+  2. Style chips: width capped at 9 characters (was sized to fit the single longest option name,
+     "RECONFORTANT"/"ENTHOUSIASTE" at 12 chars, forcing every chip that wide), smaller font (8pt)
+     and padding, with each chip's label bound to wrap to its own actual rendered width (the
+     existing letter-keyboard "Tout effacer" wraplength-on-`<Configure>` fix extracted into a
+     shared `_wrap_label_to_width()` helper) so a name past the cap wraps onto two lines instead
+     of forcing an oversized button or silently clipping.
+  3. Duration-info pool rows (added in the interchangeable-backend refactor, phase 4) now start
+     `grid_remove()`'d instead of gridded-with-blank-text -- they previously still claimed their
+     row height before any synthesis had run, leaving a dead, empty-looking gap and denying that
+     height to the options panel's own weighted row. Real-hardware feedback: "as the synthesis
+     data has been reduced, it may be useful to extend the upper window" -- this reclaims that
+     space for the options panel automatically via the existing weight mechanism.
+- Files: `chatterbox/gui/app.py`.
+- Why: seventh real-hardware feedback round (landscape, 800x480-ish kiosk screen).
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test at a real
+  800x480 landscape geometry confirmed: keyboard height now matches the full window height (480,
+  was capped at its ~263px natural minimum); duration pool rows unmapped before any synthesis, all
+  three mapped after a 3-stage result; a 12-char style-chip label is capped at `width=9` with a
+  nonzero `wraplength` instead of forcing a wide button.
+
+---
+
+## 2026-07-22 — Eighth feedback round: fixed 0.6 keyboard share both orientations, bigger chips
+
+- What: real-hardware feedback on the previous round's fixes. Landscape: "the right share of
+  keyboard seems to be between 1/2 and 2/3 of the screen. Disable the option to choose the share
+  in parameters and find an optimal share." Portrait: "the keyboard is very small compared to the
+  window... the share [is] far below the landscape orientation. Make the keyboard bigger." Also:
+  "Style boxes can be slightly bigger to match the range of the pitch and energy cursors" (the
+  previous round's chip-shrink read as a bit too aggressive once seen next to the sliders).
+  1. `_keyboard_landscape_fraction` (user-configurable via Settings -> Advanced, three presets
+     1/2 through 3/4) replaced by a single fixed module constant, `_KEYBOARD_SCREEN_SHARE = 0.6`
+     -- inside the requested range. The Settings -> Advanced picker section and
+     `_set_keyboard_landscape_fraction()` removed; i18n's now-unused `keyboard_width_*` keys
+     removed too.
+  2. Portrait now applies the *same* mechanism landscape already used (measure natural size with
+     `grid_propagate(True)`, then `grid_propagate(False)` + explicit width/height + `sticky=NSEW`)
+     but on **height** instead of width: the keyboard's height floor is now
+     `max(natural_height, window_height * 0.6)`, giving portrait the same ~60% share landscape
+     already had -- previously portrait's keyboard row had no weight of its own (unlike row 2, the
+     options panel), so it only ever got its own small natural minimum.
+  3. Style chips sized back up slightly: width cap 9->10, font 8->9pt, padding 2/4->3/6.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: eighth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  landscape keyboard width is exactly 0.6x window width; portrait keyboard height is exactly 0.6x
+  window height after a genuine orientation flip (matching landscape's ratio); the Settings
+  keyboard-width picker is gone; a 12-char style-chip label is capped at `width=10` with font
+  size 9.
+- Notes/gotchas: `_apply_current_orientation()` only recomputes sizing on an actual
+  portrait<->landscape flip (an existing, intentional optimization, not new) -- a same-orientation
+  resize (e.g. portrait window just getting taller) won't re-derive the keyboard's height from the
+  new dimensions until the orientation actually flips at least once. Not addressed here; flagged
+  in case a future round needs it (e.g. by also reacting to `<Configure>` size deltas within the
+  same orientation, not just flips).
+
+---
+
+## 2026-07-22 — Ninth feedback round: stale scrollregion, cropped Synthèse, chip columns per orientation
+
+- What: real-hardware feedback on the previous round.
+  1. Landscape: clicking "Contrôles avancés" made the checkbox itself disappear and "Biais de
+     hauteur" render partly out of frame. Root cause: `canvas.config(scrollregion=canvas.bbox(
+     "all"))` was computed once at build time and never recomputed -- revealing more rows below
+     the fold (via `grid()`/`grid_remove()`) grows `frame_options`' actual content height, but the
+     canvas's scrollbar range stayed capped at the original, smaller size, so the newly-revealed
+     rows became genuinely unreachable by scrolling. Fixed by binding `frame_options`' own
+     `<Configure>` to recompute the scrollregion whenever its rendered size actually changes (the
+     standard Tkinter scrollable-frame idiom) instead of a one-time computation.
+  2. Landscape: "Synthèse is partly hidden by 'Texte à saisir'." That label's own unweighted
+     column left too little of the row's remaining width for the weighted Synthèse-button column,
+     clipping it to "nthè". Shortened the label to "Saisie" per the user's own suggestion.
+  3. Landscape: "Rejouer and Mettre en veille buttons can be placed slightly upper." The status/
+     error label (row 13) permanently reserved a blank row between the duration info and those two
+     buttons even with nothing to show. Now `grid_remove()`'d whenever there's no error (`_set_ui_
+     state()`), matching the same hide-when-empty idiom already used for the duration-info pool.
+  4. Portrait: "Styles and cursors can take more space in vertical, there can be 4 styles per
+     row." The chip grid's "target ~4 rows" column computation (introduced for landscape, where
+     the keyboard shares screen width) was being applied in portrait too, where there's no such
+     constraint. `_build_chip_grid_control()` now takes a `landscape` flag (decided once at GUI
+     build time from the window's actual on-screen shape): landscape keeps the narrower ~3-per-row
+     computation, portrait uses a flat 4-per-row (the original, pre-adaptive default).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: ninth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  the canvas scrollregion's height grows after revealing the bias sliders; the "Saisie" label
+  renders; the status label starts unmapped, maps on an error, unmaps again back to idle; the
+  style chip grid renders 3 columns at a landscape-shaped (900x480) window and 4 columns at a
+  portrait-shaped (440x800) one.
+- Notes/gotchas: the chip-grid orientation choice is decided once at build time, not live-
+  reactive to a later manual orientation override in Settings -> Advanced -- consistent with this
+  app's "portrait is native, landscape is maintenance-only" design, not expected to flip mid-
+  session in normal use.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
