@@ -15,6 +15,49 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 1/5: contract formalization
+
+- What: the user wants to be able to swap the FastSpeech2+HiFi-GAN backend for a
+  different TTS technology (possibly a monolithic model with no separate
+  vocoder stage) without rewriting the GUI. This is the first of a planned
+  5-phase refactor (see `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`
+  for the full design) that makes the *existing* backend conform to a generic
+  contract, proving it covers today's needs before any second backend exists.
+  No behavior change in this phase -- purely additive contract/config surface.
+  1. `SynthesisResult` (`chatterbox/synthesis/base.py`) gains `wav_path:
+     Optional[str] = None`. Convention: a two-stage backend (today's FS2+HiFi-
+     GAN) fills `mel_path`, leaves `wav_path=None`; a monolithic backend fills
+     `wav_path` directly, leaves `mel_path=None`. `chatterbox/synth.py`'s
+     `synthesize()` (phase 2) will branch on which one is set to decide whether
+     a vocoder call is needed at all.
+  2. `Synthesizer.describe_controls()`'s docstring formalizes the dict shape a
+     backend returns to drive a *generic* model-options panel: an ordered
+     `"controls"` list of `chip_grid`/`slider`/`text` descriptors (key, label
+     key, options/min/max/default, optional `hidden_pattern`/`advanced`
+     grouping) -- this will replace `gui_fastspeech2()`'s hand-written,
+     FS2-specific widget code in phase 4.
+  3. `config_tts.yaml`: two new static per-`tts_models`-entry capability flags,
+     decidable *before* a model loads (same convention as the existing
+     `gui_style_control`/`gui_control_bias`/`gui_styleTag_control` booleans) --
+     `needs_vocoder` (will hide the Settings -> Advanced Vocodeur picker for a
+     monolithic model, phase 5) and `accepts_phoneme_input` (will drive a new
+     `GUI_config.phoneme_fallback: "translate_labels" | "hide"` setting when a
+     model doesn't understand the Phonemes keyboard's raw phone-code syntax,
+     phase 5). Both default to `True` for the current FastSpeech2 model (no
+     behavior change).
+- Files: `chatterbox/synthesis/base.py`, `chatterbox/config/config_tts.yaml`.
+- Why: user request -- see plan file for the full context/design rationale,
+  including two research passes' findings on exactly what's FS2-specific today
+  (GUI duration labels/control panel, `AudioResult`, `cli.py` reporting, the
+  phoneme-keyboard's "Emmanuelle" custom phone-symbol alphabet with no G2P step).
+- Verify: full test suite (233 passed/1 skipped, unchanged -- nothing reads the
+  new fields yet).
+- Notes/gotchas: this is phase 1 of 5; phases 2-5 (synth.py pipeline, backend.py
+  schema, app.py generic panel, app.py keyboard/vocoder gating) are tracked in
+  the same plan file and will each get their own changelog entry.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
