@@ -61,6 +61,12 @@ lbl_battery = None
 _orientation_override = None
 _refresh_orientation = None
 
+# Landscape keyboard width cap (Settings -> Advanced), as a fraction of the window's actual width
+# -- real-hardware feedback: the keyboard was "taking all the space" in landscape with huge
+# letters. Default 1/2; _refresh_orientation() (above) re-applies this immediately when changed,
+# same mechanism as the orientation override.
+_keyboard_landscape_fraction = 0.5
+
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
 # is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
@@ -324,6 +330,17 @@ def _set_orientation_override(value):
         _refresh_orientation()
 
 
+def _set_keyboard_landscape_fraction(value):
+    """Settings -> Advanced's keyboard-width radio buttons. value is a float fraction (0.5/0.667/
+    0.75); immediately re-applies via _refresh_orientation() so the cap takes effect right away
+    even if the window is already in landscape (a plain orientation flip check alone wouldn't
+    re-run, since the orientation itself hasn't changed -- _refresh_orientation forces it)."""
+    global _keyboard_landscape_fraction
+    _keyboard_landscape_fraction = value
+    if _refresh_orientation is not None:
+        _refresh_orientation()
+
+
 def _back_action():
     if settings.is_open():
         settings.close()
@@ -446,12 +463,19 @@ def _create_letter_keyboard(master, key_board_options):
     tk.Button(
         master=frame, text=i18n.t("keyboard_space"), font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "space", None)),
-    ).grid(row=control_row, column=0, columnspan=5, sticky=tk.NSEW,
+    ).grid(row=control_row, column=0, columnspan=4, sticky=tk.NSEW,
            padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
     tk.Button(
         master=frame, text=i18n.t("keyboard_backspace"), font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "backspace", None)),
-    ).grid(row=control_row, column=5, columnspan=3, sticky=tk.NSEW,
+    ).grid(row=control_row, column=4, columnspan=2, sticky=tk.NSEW,
+           padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    # "Tout effacer" (clear all) -- PC-GUI feedback: only backspace (delete last letter) existed;
+    # _letter_key_emit()'s "clear" kind was already wired for dispatch, just never had a button.
+    tk.Button(
+        master=frame, text=i18n.t("keyboard_clear_all"), font=my_font,
+        command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "clear", None)),
+    ).grid(row=control_row, column=6, columnspan=2, sticky=tk.NSEW,
            padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
     tk.Button(
         master=frame, text="▶", font=my_font,
@@ -627,8 +651,23 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                      ("landscape", "orientation_landscape")], start=1):
                 tk.Radiobutton(
                     master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
-                    value=value, command=lambda v=value: _set_orientation_override(v),
+                    value=value, indicatoron=0, selectcolor="#ffd54f",
+                    command=lambda v=value: _set_orientation_override(v),
                 ).grid(row=2, column=col, sticky=tk.EW, padx=2, pady=2)
+
+            # Landscape keyboard width cap, as a fraction of the actual window width -- real-
+            # hardware feedback: the keyboard was "taking all the space" with huge letters.
+            tk.Label(master=parent_frame, text=i18n.t("keyboard_width_label")).grid(
+                row=3, column=0, sticky=tk.W, padx=4, pady=2)
+            kb_width_var = tk.StringVar(value=str(_keyboard_landscape_fraction))
+            for col, (value, label_key) in enumerate(
+                    [(0.5, "keyboard_width_half"), (2 / 3, "keyboard_width_two_thirds"),
+                     (0.75, "keyboard_width_three_quarters")], start=1):
+                tk.Radiobutton(
+                    master=parent_frame, text=i18n.t(label_key), variable=kb_width_var,
+                    value=str(value), indicatoron=0, selectcolor="#ffd54f",
+                    command=lambda v=value: _set_keyboard_landscape_fraction(v),
+                ).grid(row=3, column=col, sticky=tk.EW, padx=2, pady=2)
 
     _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
     _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
@@ -796,35 +835,47 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             landscape_keyboard_column = max_buttons + 3
             layout_state = {"is_landscape": None}
 
-            def _on_window_configure(event, _state=layout_state, _kb=keyboard_area,
-                                      _portrait=keyboard_portrait_grid,
-                                      _col=landscape_keyboard_column):
+            def _apply_current_orientation(force=False, _state=layout_state, _kb=keyboard_area,
+                                            _portrait=keyboard_portrait_grid,
+                                            _col=landscape_keyboard_column):
                 if _orientation_override == "landscape":
                     landscape = True
                 elif _orientation_override == "portrait":
                     landscape = False
                 else:
                     landscape = window.winfo_width() > window.winfo_height()
-                if landscape == _state["is_landscape"]:
+                if landscape == _state["is_landscape"] and not force:
                     return
                 _state["is_landscape"] = landscape
                 if landscape:
-                    # Deliberately NOT weighted (stays at its natural/minimum width) -- real-
-                    # hardware feedback: the keyboard took "a lot of space" in landscape, competing
-                    # with the options panel for the same weighted extra width. All extra window
-                    # width now goes to the options-panel columns (1, 2) instead.
+                    # Column deliberately NOT weighted (real-hardware feedback: the keyboard
+                    # competed with the options panel for extra window width, "taking a lot of
+                    # space") -- width is instead an explicit cap, a configurable fraction of the
+                    # actual window width (Settings -> Advanced), enforced via grid_propagate(False)
+                    # so the keyboard's own internal weighted columns/buttons scale DOWN to fit
+                    # that cap instead of growing into whatever space rowspan/weight would hand
+                    # them. No rowspan either (previously rowspan=20 pulled in row 2's -- the
+                    # options panel's -- own large weighted height, inflating the keyboard's
+                    # buttons vertically too ["letters are huge"]); natural height, anchored top.
                     window.grid_columnconfigure(_col, weight=0)
-                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NS)
+                    target_width = max(150, int(window.winfo_width() * _keyboard_landscape_fraction))
+                    _kb.grid_propagate(False)
+                    _kb.config(width=target_width)
+                    _kb.grid(row=0, column=_col, sticky=tk.N)
                 else:
+                    _kb.grid_propagate(True)
                     _kb.grid(**_portrait)
                     window.grid_columnconfigure(_col, weight=0)
 
+            def _on_window_configure(event):
+                _apply_current_orientation()
+
             window.bind("<Configure>", _on_window_configure)
             window.update_idletasks()
-            _on_window_configure(None)
+            _apply_current_orientation(force=True)
 
             global _refresh_orientation
-            _refresh_orientation = lambda: _on_window_configure(None)
+            _refresh_orientation = lambda: _apply_current_orientation(force=True)
 
     # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
     # it doesn't delay the first paint. Runs on the busy/worker machinery above.
@@ -983,56 +1034,34 @@ def gui_fastspeech2(tts_config, main_panel_config):
     speaker_selection = tk.IntVar(frame)
     speaker_selection.set(default_args['speaker_id'])
 
-    # Speaker chip grid (real-hardware bug report: a single unwrapped row overflowed the canvas
-    # viewport horizontally once there were more than 2-3 speakers, with no horizontal scrollbar to
-    # reach the rest -- same wrapped-chip-grid treatment as the GST style picker (item 4) instead).
-    # Label sits on its own row above the grid rather than to its left -- more real-hardware
-    # feedback: freeing the label column gives the chip grid more width to work with.
+    # Speaker dropdown (PC-GUI feedback: a chip grid was overkill for something that "doesn't
+    # change very often" and some future backends may only have one voice at all -- a dropdown
+    # beside the label instead of a whole wrapped grid also gives the style chip grid below more
+    # width/rows to itself). Display order: default speaker first in the list (stable sort, same
+    # as the chip grids), value stays each speaker's ORIGINAL index into speaker_list (the real
+    # model speaker ID) regardless of its position in the dropdown.
     lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
-    lbl_speaker_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
-    sub_row_index += 1
+    lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.W)
 
-    speaker_chip_frame = tk.Frame(master=frame_options)
-    speaker_chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
-
-    # Chip width fits the longest speaker name -- real-hardware bug report: a fixed width=11
-    # clipped names longer than that (e.g. style tokens like "RECONFORTANT", 12 chars, below).
-    _speaker_chip_width = max((len(s) for s in speaker_list), default=1) + 1
-
-    # Display order: default speaker first (row 0, col 0) -- real-hardware feedback -- everyone
-    # else keeps their original relative order after it (Python's sort is stable). The chip's
-    # underlying `value` stays each speaker's ORIGINAL index into speaker_list regardless of where
-    # it's drawn: that index is the actual model speaker ID, unrelated to display position.
     _default_speaker_id = default_args['speaker_id']
     _speaker_display_order = sorted(enumerate(speaker_list),
                                      key=lambda pair: pair[0] != _default_speaker_id)
+    _speaker_index_by_label = {name: idx for idx, name in _speaker_display_order}
+    _speaker_label_by_index = {idx: name for idx, name in _speaker_display_order}
+    speaker_display_var = tk.StringVar(value=_speaker_label_by_index[_default_speaker_id])
 
-    index_speaker = 0
-    _speaker_chip_row = _speaker_chip_col = 0
-    for _speaker_original_index, speaker in _speaker_display_order:
-        chip = tk.Radiobutton(
-            master=speaker_chip_frame,
-            text=speaker,
-            variable=speaker_selection,
-            value=_speaker_original_index,
-            indicatoron=0,
-            selectcolor="#ffd54f",
-            width=_speaker_chip_width,
-            padx=4,
-            pady=10,
-            command=None,
-        )
-        chip.grid(row=_speaker_chip_row, column=_speaker_chip_col, padx=3, pady=3, sticky=tk.NSEW)
-        speaker_chip_frame.grid_columnconfigure(_speaker_chip_col, weight=1)
-        index_speaker += 1
-        _speaker_chip_col += 1
-        if _speaker_chip_col >= _CHIPS_PER_ROW:
-            _speaker_chip_col = 0
-            _speaker_chip_row += 1
-    # index_speaker ends at len(speaker_list) here (matching the pre-chip-grid loop's final value)
-    # -- downstream columnspan=1+index_speaker uses are just a "how many speakers" width heuristic,
-    # unaffected by speakers now wrapping into a grid instead of one row.
+    def _on_speaker_selected(selected_label):
+        speaker_selection.set(_speaker_index_by_label[selected_label])
+
+    tk.OptionMenu(frame_options, speaker_display_var,
+                  *[name for _, name in _speaker_display_order], command=_on_speaker_selected
+                  ).grid(row=sub_row_index, column=1, columnspan=_CHIPS_PER_ROW - 1, sticky=tk.W)
     sub_row_index += 1
+
+    # Downstream columnspan=1+index_speaker uses were always just a "how many speakers" width
+    # heuristic (predating the chip/dropdown UI), matching the original per-speaker-row loop's
+    # final counter value.
+    index_speaker = len(speaker_list)
 
     # Select default values
     gst_token_selection = tk.IntVar(frame)
