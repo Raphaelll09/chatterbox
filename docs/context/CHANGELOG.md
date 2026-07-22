@@ -15,6 +15,39 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
+
+- What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
+  speaker/style options panel gone and "Mettre en veille" cut off past the bottom edge. Root
+  cause, confirmed with a reproduction script driving the real `create_gui()` at 800x480: the
+  landscape keyboard was gridded at a single row (`row=0`), but Tk's grid row height is shared
+  across every column at that row index -- placing the ~263px-tall keyboard there forced row 0 to
+  be ~263px tall for EVERY column, including column 0 where only a small battery label lives. That
+  stole the vertical budget from row 2 (the options panel, the only weighted row), collapsing it
+  from a healthy size to 7px, while the fixed rows below it (Texte a saisir, duree labels, Rejouer,
+  Mettre en veille) kept their natural size and overflowed past the window's bottom edge.
+  Fixed by spanning the keyboard across the same row range the main content stack already
+  occupies (`rowspan=18+index_gst_token`) instead of a single row, so its height gets absorbed by
+  row 2 (still the only weighted row in that span) instead of inflating row 0 alone.
+- Also fixed: the letter keyboard's "Tout effacer" button rendered as "out effacer" -- clipped
+  once the landscape width cap (Settings -> Advanced fraction) made its column narrower than the
+  label's natural width, same class of bug as the earlier GST-token chip clipping. Its control-row
+  buttons (Espace/Effacer/Tout effacer/Play) now bind `wraplength` to their own actual
+  `<Configure>` width, so labels wrap instead of clipping regardless of the chosen fraction.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `_create_letter_keyboard()`).
+- Why: sixth real-hardware feedback round (800x480-ish kiosk screen).
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk reproduction at a real
+  800x480 geometry confirmed: options-panel frame height went from 7px (collapsed) to 270px;
+  "Mettre en veille" (row 17) still ends exactly at the window's bottom edge (480), no longer past
+  it; "Tout effacer" now reports a nonzero `wraplength` (66px) matching its actual rendered width
+  instead of clipping.
+- Notes/gotchas: row 17 (Mettre en veille) still ends EXACTLY at the window's bottom edge with no
+  slack on an 800x480 screen -- any future addition to the fixed-row stack (another always-visible
+  label/button) will need either more vertical budget or to go behind a toggle, the same way
+  audio-info rows already do.
+
+---
+
 ## 2026-07-22 — Fifth feedback round: landscape keyboard zero-height bug, style grid rows
 
 - What: user reported "both keyboards disappeared, whatever dimension we chose" (the landscape
