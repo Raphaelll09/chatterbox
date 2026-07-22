@@ -394,7 +394,8 @@ def create_keyboard(key_board_options, entry, main_window=None):
 _LETTER_ROWS = [
     ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
     ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
-    ["W", "X", "C", "V", "B", "N", ",", "."],
+    ["W", "X", "C", "V", "B", "N", ",", ".", "'"],  # apostrophe was missing -- real-hardware
+    # feedback: essential for French (l'..., qu'..., aujourd'hui, ...)
 ]
 
 
@@ -768,8 +769,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     return
                 _state["is_landscape"] = landscape
                 if landscape:
-                    window.grid_columnconfigure(_col, weight=1)
-                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NSEW)
+                    # Deliberately NOT weighted (stays at its natural/minimum width) -- real-
+                    # hardware feedback: the keyboard took "a lot of space" in landscape, competing
+                    # with the options panel for the same weighted extra width. All extra window
+                    # width now goes to the options-panel columns (1, 2) instead.
+                    window.grid_columnconfigure(_col, weight=0)
+                    _kb.grid(row=0, column=_col, rowspan=20, sticky=tk.NS)
                 else:
                     _kb.grid(**_portrait)
                     window.grid_columnconfigure(_col, weight=0)
@@ -911,7 +916,10 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # docs/REORG_PROPOSAL.md Sec5/Sec7).
     speaker_list = registry.BACKEND.describe_controls()["speaker_list"]
 
-    # Create Options Frame with Scrollbar
+    # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
+    # landscape, content still overflowed the canvas viewport horizontally with no way to reach
+    # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
+    # but a horizontal scrollbar is still added as an explicit fallback for whatever doesn't fit).
     frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
     frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
@@ -919,8 +927,10 @@ def gui_fastspeech2(tts_config, main_panel_config):
     canvas = tk.Canvas(frame)
     canvas.grid(row=0, column=0, sticky='news')
     vsb = tk.Scrollbar(frame, orient='vertical', command=canvas.yview)
-    vsb.grid(row=0,column=1, sticky='ns')
-    canvas.configure(yscrollcommand=vsb.set)
+    vsb.grid(row=0, column=1, sticky='ns')
+    hsb = tk.Scrollbar(frame, orient='horizontal', command=canvas.xview)
+    hsb.grid(row=1, column=0, sticky='ew')
+    canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
     frame_options = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame_options, anchor='nw')
 
@@ -933,11 +943,18 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # Speaker chip grid (real-hardware bug report: a single unwrapped row overflowed the canvas
     # viewport horizontally once there were more than 2-3 speakers, with no horizontal scrollbar to
     # reach the rest -- same wrapped-chip-grid treatment as the GST style picker (item 4) instead).
+    # Label sits on its own row above the grid rather than to its left -- more real-hardware
+    # feedback: freeing the label column gives the chip grid more width to work with.
     lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
-    lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
+    lbl_speaker_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
+    sub_row_index += 1
 
     speaker_chip_frame = tk.Frame(master=frame_options)
-    speaker_chip_frame.grid(row=sub_row_index, column=1, columnspan=3, sticky=tk.EW)
+    speaker_chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
+
+    # Chip width fits the longest speaker name -- real-hardware bug report: a fixed width=11
+    # clipped names longer than that (e.g. style tokens like "RECONFORTANT", 12 chars, below).
+    _speaker_chip_width = max((len(s) for s in speaker_list), default=1) + 1
 
     index_speaker = 0
     _speaker_chip_row = _speaker_chip_col = 0
@@ -949,7 +966,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
             value=index_speaker,
             indicatoron=0,
             selectcolor="#ffd54f",
-            width=11,
+            width=_speaker_chip_width,
             padx=4,
             pady=10,
             command=None,
@@ -985,14 +1002,20 @@ def gui_fastspeech2(tts_config, main_panel_config):
     # instead of cluttering the default picker; toggling shows/hides them via grid()/grid_remove()
     # so their IntVar values stay selectable once revealed (no widget re-creation, no reordering).
     if tts_config['gui_style_control']:
+        all_gst_tokens = [*tts_config['gst_token_list']]
+
         lbl_gst_token_selection = tk.Label(master=frame_options, text=i18n.t("style_label"))
-        lbl_gst_token_selection.grid(row=sub_row_index, column=0, sticky=tk.NW)
+        lbl_gst_token_selection.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.W)
+        sub_row_index += 1
 
         chip_frame = tk.Frame(master=frame_options)
-        chip_frame.grid(row=sub_row_index, column=1, columnspan=1+index_speaker, sticky=tk.EW)
+        chip_frame.grid(row=sub_row_index, column=0, columnspan=_CHIPS_PER_ROW, sticky=tk.EW)
+
+        # Chip width fits the longest token name -- real-hardware bug report: a fixed width=11
+        # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
+        _style_chip_width = max((len(t) for t in all_gst_tokens), default=1) + 1
 
         _placeholder_re = re.compile(r"^TOKEN\d+$")
-        all_gst_tokens = [*tts_config['gst_token_list']]
         advanced_chips = []
         index_gst_token = 0
         chip_row = chip_col = 0
@@ -1004,7 +1027,7 @@ def gui_fastspeech2(tts_config, main_panel_config):
                 value=index_gst_token,
                 indicatoron=0,
                 selectcolor="#ffd54f",
-                width=11,
+                width=_style_chip_width,
                 padx=4,
                 pady=10,
                 command=None,
