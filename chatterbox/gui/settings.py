@@ -29,8 +29,21 @@ def is_open():
 def close():
     global _window
     if is_open():
+        _window.grab_release()
         _window.destroy()
     _window = None
+
+
+# Preset (label, seconds) choices for the three power-timer dropdowns (real-hardware feedback:
+# free-drag sliders over a wide second-level range weren't practical -- a fixed set of sensible
+# durations is easier to reason about and to hit reliably on a touchscreen). Chosen to fit each
+# field's actual role: dimming is the first, shortest threshold; screen-off is a middle ground;
+# deep sleep/shutdown is the last-resort, longest one (or disabled).
+_DIM_PRESETS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300)]
+_DARK_PRESETS = [("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300), ("10 min", 600),
+                  ("30 min", 1800)]
+_DEEP_PRESETS = [("Désactivé", 0), ("5 min", 300), ("15 min", 900), ("30 min", 1800), ("1 h", 3600),
+                  ("2 h", 7200)]
 
 
 def validate_power_settings(t_dim_s, t_dark_s, t_deep_s, brightness_active, brightness_dim):
@@ -99,31 +112,67 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # No fixed geometry() -- PC-GUI feedback: the hardcoded 420x420 didn't scale to the actual
     # content (worse once the "Avancé" model-picker section was added). Tk's default behavior
     # (no explicit geometry) is to size the window to fit its packed/gridded children exactly.
+    win.transient(parent)
+    win.grab_set()  # modal -- PC-GUI bug report: without this, clicks landed on the main window
+    # behind instead of this dialog (no exclusive input grab meant nothing actually stopped them
+    # from falling through).
+    win.focus_set()
 
     t_dim_var = tk.IntVar(win, value=power_cfg["t_dim_s"])
     t_dark_var = tk.IntVar(win, value=power_cfg["t_dark_s"])
     t_deep_var = tk.IntVar(win, value=power_cfg["t_deep_s"] or 0)
     deep_manual_only_var = tk.BooleanVar(win, value=power_cfg["deep_manual_only"])
+    # Brightness vars stay in the underlying 1-255 range write_settings()/validate_power_settings()
+    # (and the powerd/backlight driver on the other end) actually expect -- only the on-screen
+    # scale is 0-100%, per feedback ("plus cohérente sur une échelle de 0 à 100%"). Converted at
+    # the boundary in add_percent_scale()/on_save(), not threaded through the rest of the schema.
     brightness_active_var = tk.IntVar(win, value=display_cfg["brightness_active"])
     brightness_dim_var = tk.IntVar(win, value=display_cfg["brightness_dim"])
 
     row = 0
 
-    def add_scale(label_text, var, from_, to):
+    def add_preset_dropdown(label_text, int_var, presets):
+        """Replaces a free-drag-over-a-wide-range slider with a fixed set of sensible durations
+        (real-hardware feedback). If the loaded value isn't one of the presets (e.g. set by hand,
+        or before this change), it's added as its own extra option instead of silently snapping to
+        the nearest preset -- opening Settings must not change behavior on its own."""
         nonlocal row
+        options = dict(presets)
+        current = int_var.get()
+        if current not in options.values():
+            options["{} s (actuel)".format(current)] = current
+        label_by_seconds = {v: k for k, v in options.items()}
+        ordered_labels = [label_by_seconds[v] for v in sorted(label_by_seconds)]
+
+        display_var = tk.StringVar(win, value=label_by_seconds[current])
+
+        def _on_select(selected_label):
+            int_var.set(options[selected_label])
+
         tk.Label(win, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
-        tk.Scale(win, variable=var, from_=from_, to=to, orient=tk.HORIZONTAL, length=220
-                 ).grid(row=row, column=1, sticky=tk.EW, padx=8, pady=4)
+        tk.OptionMenu(win, display_var, *ordered_labels, command=_on_select
+                      ).grid(row=row, column=1, sticky=tk.EW, padx=8, pady=4)
         row += 1
 
-    add_scale("Délai avant assombrissement (s)", t_dim_var, 1, 600)
-    add_scale("Délai avant extinction écran (s)", t_dark_var, 1, 1800)
-    add_scale("Délai avant veille profonde (s, 0=désactivé)", t_deep_var, 0, 3600)
+    def add_percent_scale(label_text, raw_var):
+        """0-100% on screen; raw_var (1-255) is only read/written at the boundary (initial percent
+        here, converted back in on_save()) -- the rest of the schema/powerd side is untouched."""
+        nonlocal row
+        percent_var = tk.IntVar(win, value=round(raw_var.get() / 255 * 100))
+        tk.Label(win, text=label_text, font="Helvetica 12").grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
+        tk.Scale(win, variable=percent_var, from_=0, to=100, orient=tk.HORIZONTAL, length=220
+                 ).grid(row=row, column=1, sticky=tk.EW, padx=8, pady=4)
+        row += 1
+        return percent_var
+
+    add_preset_dropdown("Délai avant assombrissement", t_dim_var, _DIM_PRESETS)
+    add_preset_dropdown("Délai avant extinction écran", t_dark_var, _DARK_PRESETS)
+    add_preset_dropdown("Délai avant veille profonde", t_deep_var, _DEEP_PRESETS)
     tk.Checkbutton(win, text="Veille profonde manuelle uniquement", variable=deep_manual_only_var,
                     font="Helvetica 12").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
     row += 1
-    add_scale("Luminosité active", brightness_active_var, 1, 255)
-    add_scale("Luminosité atténuée", brightness_dim_var, 1, 255)
+    brightness_active_percent_var = add_percent_scale("Luminosité active (%)", brightness_active_var)
+    brightness_dim_percent_var = add_percent_scale("Luminosité atténuée (%)", brightness_dim_var)
 
     if build_advanced_section is not None:
         advanced_frame = tk.LabelFrame(win, text="Avancé", font="Helvetica 12")
@@ -139,8 +188,11 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
         t_dim_s = t_dim_var.get()
         t_dark_s = t_dark_var.get()
         t_deep_s = t_deep_var.get()
-        brightness_active = brightness_active_var.get()
-        brightness_dim = brightness_dim_var.get()
+        # Percent (0-100, what the Scale widgets actually control) -> raw 1-255 for
+        # write_settings()/validate_power_settings()/powerd, clamped to at least 1 (0% still means
+        # "as dim as possible while on", not "off" -- DARK/DEEP already turn the backlight off).
+        brightness_active = max(1, round(brightness_active_percent_var.get() / 100 * 255))
+        brightness_dim = max(1, round(brightness_dim_percent_var.get() / 100 * 255))
 
         errors = validate_power_settings(t_dim_s, t_dark_s, t_deep_s, brightness_active, brightness_dim)
         if errors:
