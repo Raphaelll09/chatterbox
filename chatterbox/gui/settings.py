@@ -39,11 +39,17 @@ def close():
 # durations is easier to reason about and to hit reliably on a touchscreen). Chosen to fit each
 # field's actual role: dimming is the first, shortest threshold; screen-off is a middle ground;
 # deep sleep/shutdown is the last-resort, longest one (or disabled).
-_DIM_PRESETS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300)]
-_DARK_PRESETS = [("30 s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300), ("10 min", 600),
-                  ("30 min", 1800)]
-_DEEP_PRESETS = [("Désactivé", 0), ("5 min", 300), ("15 min", 900), ("30 min", 1800), ("1 h", 3600),
-                  ("2 h", 7200)]
+#
+# The three lists deliberately do NOT overlap in range (real-hardware bug report: picking, say,
+# 2min assombrissement + 30s extinction was pickable from the old presets even though it makes no
+# sense -- the screen would go dark before it ever dimmed). Each list's max equals the next list's
+# min: DIM tops out at 2min, DARK starts at 2min and tops out at 30min, DEEP's shortest real option
+# (Désactivé/0 is exempt, it disables the check entirely) starts at 30min. The exact boundary case
+# (e.g. dim=2min AND dark=2min) is still caught by validate_power_settings()'s strict ">" check at
+# save time -- these ranges just make an obviously-wrong WIDE gap much harder to pick by accident.
+_DIM_PRESETS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("2 min", 120)]
+_DARK_PRESETS = [("2 min", 120), ("5 min", 300), ("10 min", 600), ("30 min", 1800)]
+_DEEP_PRESETS = [("Désactivé", 0), ("30 min", 1800), ("1 h", 3600), ("2 h", 7200), ("4 h", 14400)]
 
 
 def _format_duration(seconds):
