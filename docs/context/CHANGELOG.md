@@ -15,6 +15,147 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — PC-GUI feedback: menu reorg, settings auto-size, style/speaker defaults
+
+- What: five corrections from user testing on PC (not the Pi):
+  1. Moved "Réglages" from a physical main-window button (sat directly above the keyboard area)
+     into a "Paramètres" menu entry -- drops Settings from the switch-driven NavRing, deemed
+     acceptable since physical switches aren't wired/validated on any real deployment yet.
+  2. "À propos" moved to the far right (last) of the menu bar.
+  3. Removed the settings dialog's hardcoded `win.geometry("420x420")` -- didn't scale to actual
+     content (worse once the "Avancé" model-picker section existed); Tk now auto-sizes it.
+  4. Reordered `config_tts.yaml`'s `gst_token_list` so NEUTRE sits at index 6 (middle of the 3x4
+     chip grid) instead of 8, chosen to not disturb `keyboards.py`'s hardcoded mood-shortcut
+     indices; `default_args.gst_token_index` 8->6 to keep pointing at NEUTRE.
+  5. Confirmed (no change needed) that the default speaker (AD, `speaker_id: 4`) and default style
+     (NEUTRE) were already correct, against `assets/models/FastSpeech2/preprocessed_data/
+     ALL_corpus/speakers.json`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/gui/settings.py`,
+  `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after testing the real-hardware-bugfix session's GUI on PC.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. A mocked
+  `create_gui()` smoke run confirmed: menu order/labels, no physical Réglages button, settings
+  dialog auto-sizes (562x461 observed vs. the old fixed 420x420), NEUTRE chip position + default
+  selection, AD default selection.
+- Notes/gotchas: item 1 is a deliberate accessibility trade-off (Settings no longer reachable via
+  the physical switch-driven NavRing) -- revisit if `user_prefs.yaml`'s `switches:` list is ever
+  populated for a real deployment.
+
+---
+
+## 2026-07-21 — Battery percentage display (DFRobot FIT0992 UPS HAT)
+
+- What: new `chatterbox/power/battery.py` reads battery voltage/percentage over I2C (i2c-1 @
+  0x36, a Maxim/Analog-Devices MAX17048-style fuel gauge) for the DFRobot FIT0992 Raspberry Pi 5
+  UPS HAT. `gui/app.py` polls it every 30s and shows a "🔋 NN%" label (row 0 -- the space freed up
+  when model selection moved into Settings -> Advanced), red under 20%, hidden entirely whenever
+  no reading is available (no hardware/no `smbus2` -- the normal case for any other checkout).
+  New `add_battery_info` config flag (default `True`).
+- Files: new `chatterbox/power/battery.py`, `tests/test_power_battery.py`; modified
+  `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`, `requirements-pi.txt` (comment
+  only -- `smbus2` now has a second consumer), `CLAUDE.md`.
+- Why: user request, mid-session, once the exact SKU (FIT0992) was confirmed. Register
+  addresses/scaling (VCELL @ 0x02, SOC @ 0x04, byte-swap-then-scale) were verified against the
+  exact reference driver DFRobot's own FIT0992 wiki page links to
+  (github.com/suptronics/x120x/bat.py) rather than guessed -- wrong I2C register addresses sent to
+  real hardware was an explicit thing to avoid here.
+- Verify: `tests/test_power_battery.py` (byte-swap pure-function round-trip against a known value;
+  `read_battery()` degrades to `None` on this checkout, which has no `smbus2` installed -- the
+  same guarded-optional-hardware posture as `chatterbox/power/amp.py`). GUI wiring verified with a
+  mocked `create_gui()` smoke run (shortened poll interval, `battery.read_battery` monkeypatched):
+  label starts hidden, shows the right text/color for a healthy and a low reading, hides again
+  once the reading goes back to `None`. Full suite: 230 passed/1 skipped (227 + 3 new).
+- Notes/gotchas: **not yet verified against the real FIT0992 on Pi hardware** -- the register
+  map/scaling is taken on faith from the vendor-linked reference driver (same chip family,
+  different product line: X1200/X1201/X1202 UPS shields, not the FIT0992 itself), not confirmed
+  against this exact board. First real-hardware run should sanity-check the reported percentage
+  against the board's own behavior (e.g. does it read ~100% on a freshly charged cell, does it
+  track a charge/discharge cycle sensibly) before trusting it further.
+
+---
+
+## 2026-07-21 — GUI real-hardware bug-report fixes (post Phase 3)
+
+- What: seven fixes from user testing of the Phase 3 refactor (below) on real Pi 5 hardware:
+  1. Column-weight loop covered one column past the widest actual content (max_buttons+2, not
+     +1), so a dead column soaked up width in landscape that should've gone to the options panel.
+  2. Speaker picker was still a single unwrapped row (only the GST style picker got the chip-grid
+     treatment) -- overflowed the canvas viewport with more than 2-3 speakers, no horizontal
+     scrollbar to reach the rest. Same wrapped chip-grid treatment as the style picker now.
+  3. Replay/Ranger/Réglages sat in grid rows *after* `keyboard_area` (16/18/19 vs its 17) -- on a
+     screen too short to show every row, they fell off-screen below the (now taller, two-
+     keyboards-in-one) keyboard, in both orientations. Reordered so keyboard_area is last.
+  4. Removed the menu's "Paramètres" entry (opened the identical dialog the physical "Réglages"
+     button already does; that button has to stay regardless -- it's in the switch-driven
+     `NavRing`, which the menu bar isn't reachable from).
+  5. Renamed "Ranger" -> "Mettre en veille" (states what it actually does: powerd put-away/dim).
+  6. `config_tts.yaml`'s `add_play_button` was `False` -- the earlier replay-button crash fix was
+     invisible since the button never showed up. Flipped to `True`.
+  7. Added a menu checkbutton to hide/show the 5 synthesis-duration labels (reclaims vertical
+     space; the status circle stays visible regardless, separate from the timing breakdown).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user bug reports after testing the Phase 3 refactor's 7 commits on a real Pi 5 --
+  landscape crop, missing buttons in both orientations, duplicate settings entry point, an
+  unclear button label, and an invisible feature toggle.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 227 passed/1 skipped, unchanged. Each fix
+  had a one-off mocked-`create_gui()` smoke script (real Tk, no pretrained weights) run manually
+  during the session confirming the specific claim (dead column gone, speakers wrap into 2+ rows,
+  Replay/Ranger/Réglages rows all precede keyboard_area's row, menu entry counts/labels, toggle
+  visibility) -- not checked into `tests/`, same carve-out as the rest of `docs/gui/GUI.md`.
+- Notes/gotchas: none of these seven has been re-verified on the Pi yet as of this entry (the
+  session ended mid-verification) -- flagged for the next session/user check. A separate,
+  not-yet-started request came in mid-session: a battery-percentage display for a DFRobot
+  FIT0xxx UPS/fuel-gauge HAT reportedly installed on the Pi 5 -- blocked on the user providing the
+  exact SKU (register map/vendor library unknown, didn't want to guess and send wrong I2C
+  commands to real hardware).
+
+---
+
+## 2026-07-21 — GUI responsive/accessible refactor (cc_prompt_gui_refactor.md, Phase 3)
+
+- What: seven incremental commits against `cc_prompt_gui_refactor.md`'s Phase 1 audit list (Phase
+  0 discovery found the reliability item, #9, already solved in an earlier session — worker
+  thread + busy-guard + exception-swallowing were already in place per `docs/gui/GUI.md`):
+  1. Responsive grid: `window`/options-panel `columnconfigure`/`rowconfigure` weights replace the
+     fixed-pixel `grid_propagate(False)` pinning, so content tracks window size.
+  2. Fixed a real latent bug in the "Play" replay button (crashed on click before any synthesis,
+     ran unguarded on the Tk thread) by routing it through a new `Action.REPLAY` + `on_replay()`
+     on the same worker/busy-guard machinery as Speak.
+  3. Portrait/landscape reflow: a `<Configure>` binding moves the embedded keyboard area into a
+     second column in landscape (maintenance use) and back in portrait (native orientation).
+  4. GST-token style picker: one-radio-per-row column → a wrapped 4-per-row chip grid;
+     `TOKEN13`-`16` placeholders (unnamed/untrained LST directions) hidden behind an "Styles
+     avancés" toggle.
+  5. Added an app-bar menu (Paramètres/À propos wired up; Thème/Langue honest disabled stubs) and
+     `chatterbox/gui/i18n.py`, a French string table replacing a hardcoded French/English label
+     mix. Caught `tk.Menu()`'s default tearoff entry shifting every menu index.
+  6. Demoted the TTS/vocoder model-selector buttons out of the main window into a new "Avancé"
+     section of the settings dialog (dependency-injected via `open_settings(...,
+     build_advanced_section=...)`, mirroring `gui/input.py`'s no-import-cycle pattern) — kept
+     rather than deleted since Matcha-TTS/FastSpeech2s are still being benchmarked.
+  7. Added a Texte/Phonèmes segmented toggle and a new simplified-AZERTY soft letter keyboard
+     (`app.py:_create_letter_keyboard()`) alongside the existing phonetic grid — both keyboards
+     live in one `keyboard_area` container that landscape reflow (item 3) now repositions as a
+     unit.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/input.py`, `chatterbox/gui/settings.py`, new
+  `chatterbox/gui/i18n.py`; `CLAUDE.md` (repo map updated for the above).
+- Why: `cc_prompt_gui_refactor.md` — Objective 5 (accessible interface) of the project report,
+  which flagged the GUI as buggy/slow-to-wake/touchscreen-bound; user confirmed on real Pi 5
+  hardware mid-session that the portrait/landscape reflow (item 3) works correctly.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed/1 skipped, unchanged by every
+  commit. Each commit additionally has a one-off mocked-`create_gui()` smoke script (real Tk, no
+  pretrained weights, `registry.BACKEND` model-loading monkeypatched) run manually during the
+  session, not checked into `tests/` — same "needs real weights/Tk, not part of pytest" carve-out
+  `docs/gui/GUI.md` already documents for the worker-thread responsiveness check.
+- Notes/gotchas: manual on-hardware test checklists were given per-commit in-session; only the
+  portrait/landscape reflow (item 3) has been confirmed by the user on a real Pi 5 so far. Chip
+  grid touch-target size, French menu label accent rendering, and the new letter keyboard still
+  need real-hardware eyes-on. `docs/gui/GUI.md` itself was not updated in this session (still
+  accurate on the pre-existing worker-thread/dispatch architecture; the new pieces layer on top
+  without changing it) — flagged here in case it drifts further from `app.py`'s actual layout.
+
+---
+
 ## 2026-07-21 — Kiosk finalization (step 3): cage decided, opt-in unattended-boot script
 
 - What: `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passed on real Pi 5 hardware (per the

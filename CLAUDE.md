@@ -46,13 +46,28 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `audio_utils.py`).
   - `audio/playback.py`, `audio/denoise.py` — playback and noise-reduction (was part of
     `audio_utils.py`).
-  - `gui/app.py`, `gui/keyboards.py` — Tkinter GUI and on-screen phonetic keyboard (was
-    `gui_utils.py`, `keyboards.py`). Synthesis+playback run on a worker thread, never the Tk
-    thread (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`.
+  - `gui/app.py`, `gui/keyboards.py` — Tkinter GUI, on-screen phonetic (Emmanuelle) keyboard, and
+    (added in the responsive/accessible refactor, `cc_prompt_gui_refactor.md`) a second soft
+    letter keyboard (`app.py:_create_letter_keyboard()`, simplified AZERTY) toggled via a
+    Texte/Phonèmes segmented control — both live in one `keyboard_area` container that portrait/
+    landscape reflow (`app.py`'s `<Configure>` binding) repositions as a unit. Main-window layout
+    is responsive (grid weights, not fixed pixel sizes); the style/GST-token picker is a wrapped
+    chip grid with unnamed placeholder tokens hidden behind an "Styles avancés" toggle; TTS/
+    vocoder model selection lives in Settings → Advanced (see `gui/settings.py` below), not the
+    main window. Synthesis+playback (and, since the same refactor, Replay) run on a worker thread,
+    never the Tk thread (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`.
+  - `gui/i18n.py` — the GUI's string table (added in the same refactor to replace a hardcoded
+    French/English label mix); French-only today, `t(key, **kwargs)` is the lookup. The app-bar's
+    Thème/Langue menu entries are intentionally disabled stubs until a second locale/theme table
+    exists.
   - `gui/input.py` — the `Action` enum + `dispatch()` + a minimal nav ring driving/driven-by
-    physical switches (via powerd) and the Speak/keyboard/Put-away/Settings controls.
+    physical switches (via powerd) and the Speak/Replay/keyboard/Put-away/Settings controls.
   - `gui/settings.py` — the settings screen (`chatterbox/config/user_prefs.yaml`'s power-timer/
-    brightness fields; atomic write; `powerd.reload()` on save).
+    brightness fields; atomic write; `powerd.reload()` on save), plus an "Avancé" section
+    (dependency-injected via `open_settings(..., build_advanced_section=...)`, mirroring
+    `gui/input.py`'s no-import-cycle pattern) that `gui/app.py` uses to host the TTS/vocoder model
+    pickers — model switches there take effect immediately, unlike the power fields, which need
+    "Enregistrer".
   - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
   - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
     `docs/context/ARCHITECTURE.md`, stale on paths but not on structure); `config/paths.py` —
@@ -65,6 +80,9 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
     `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
     powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
+    `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
+    DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
+    `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
 - `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
   `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd"). `chatterbox-gui.service` runs the
   GUI under `cage` (finalized kiosk compositor choice — see `docs/kiosk/KIOSK.md`).

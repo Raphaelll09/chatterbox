@@ -72,10 +72,19 @@ def write_settings(t_dim_s, t_dark_s, t_deep_s, deep_manual_only, brightness_act
     os.replace(tmp_path, path)
 
 
-def open_settings(parent, on_saved=None):
+def open_settings(parent, on_saved=None, build_advanced_section=None):
     """Opens (or raises, if already open) the settings Toplevel. Loads current values from
     user_prefs.yaml via the validated loader -- a missing/malformed file just shows the built-in
-    defaults, never raises (chatterbox.power.config's own guarantee)."""
+    defaults, never raises (chatterbox.power.config's own guarantee).
+
+    build_advanced_section, if given, is called with a parent Frame to populate an "Avancé"
+    section below the power/brightness fields -- dependency-injected (this module knows nothing
+    about TTS/vocoder models) the same way chatterbox/gui/input.py's make_dispatcher() takes every
+    side-effecting callable as an argument instead of importing chatterbox.gui.app, to avoid an
+    import cycle (app.py already imports this module). Unlike the power fields, whatever this
+    populates takes effect immediately on its own widgets' commands, not gated behind
+    "Enregistrer" -- same as the model buttons' pre-existing behavior when they lived in the main
+    window."""
     global _window
     if is_open():
         _window.lift()
@@ -87,7 +96,9 @@ def open_settings(parent, on_saved=None):
 
     win = tk.Toplevel(parent)
     win.title("Réglages")
-    win.geometry("420x420")
+    # No fixed geometry() -- PC-GUI feedback: the hardcoded 420x420 didn't scale to the actual
+    # content (worse once the "Avancé" model-picker section was added). Tk's default behavior
+    # (no explicit geometry) is to size the window to fit its packed/gridded children exactly.
 
     t_dim_var = tk.IntVar(win, value=power_cfg["t_dim_s"])
     t_dark_var = tk.IntVar(win, value=power_cfg["t_dark_s"])
@@ -113,6 +124,12 @@ def open_settings(parent, on_saved=None):
     row += 1
     add_scale("Luminosité active", brightness_active_var, 1, 255)
     add_scale("Luminosité atténuée", brightness_dim_var, 1, 255)
+
+    if build_advanced_section is not None:
+        advanced_frame = tk.LabelFrame(win, text="Avancé", font="Helvetica 12")
+        advanced_frame.grid(row=row, column=0, columnspan=2, sticky=tk.EW, padx=8, pady=8)
+        build_advanced_section(advanced_frame)
+        row += 1
 
     error_label = tk.Label(win, text="", fg="red", font="Helvetica 10", wraplength=380, justify=tk.LEFT)
     error_label.grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
