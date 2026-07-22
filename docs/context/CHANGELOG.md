@@ -15,6 +15,27 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Power-timer presets: eliminate overlap between adjacent ranges
+
+- What: user clarified the ambiguous "timer before assombrissement" comment from the fourth
+  feedback round: the old preset ranges overlapped enough that a nonsensical combination (2min
+  dim + 30s screen-off) was directly pickable. `_DIM_PRESETS` now tops out at 2min,
+  `_DARK_PRESETS` starts at 2min and tops out at 30min, `_DEEP_PRESETS`'s shortest real option
+  (excluding "Désactivé"/0) now starts at 30min (same pattern applied to dark/deep for
+  consistency; added a 4h option since 5min/15min no longer fit that range).
+- Files: `chatterbox/gui/settings.py`.
+- Why: direct user clarification -- see the fourth feedback round's changelog entry for the
+  original ambiguous comment.
+- Verify: full test suite (233 passed/1 skipped, unchanged -- `validate_power_settings()`'s own
+  `>` check is untouched, still the actual enforcement at save time) plus a re-run of the settings
+  smoke test confirming the dark-timer dropdown reflects the new range with a custom loaded value
+  still correctly inserted ("20 min (actuel)" for 1200s).
+- Notes/gotchas: the exact boundary case (dim=2min AND dark=2min, both now valid preset picks) is
+  still only caught by save-time validation, not prevented by the preset ranges themselves --
+  narrowing how far off an accidental pick can be, not a replacement for that check.
+
+---
+
 ## 2026-07-21 — Fourth feedback round: powerd reload bug, settings scroll, keyboard sizing
 
 - What: nine fixes from a fourth feedback pass, across three commits:
