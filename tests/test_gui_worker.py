@@ -49,7 +49,7 @@ def _drain_queue():
 
 
 def _fake_result():
-    return AudioResult(audio_duration_s=1.0, tts_duration_s=0.2, vocoder_duration_s=0.1, denoiser_duration_s=0.05)
+    return AudioResult(audio_duration_s=1.0, stage_durations={"tts": 0.2, "vocoder": 0.1, "denoiser": 0.05})
 
 
 @pytest.fixture(autouse=True)

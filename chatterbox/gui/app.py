@@ -152,8 +152,14 @@ def _set_ui_state(state_name, error=None):
 
 
 def _update_audio_info(result):
-    update_audio_infos(result.audio_duration_s, result.tts_duration_s,
-                        result.vocoder_duration_s, result.denoiser_duration_s)
+    # AudioResult.stage_durations (interchangeable-backend GUI refactor, phase 2) replaces the old
+    # named tts/vocoder/denoiser fields with a generic dict -- update_audio_infos()'s own 3-named-
+    # argument signature is still FS2-specific and gets replaced by a generic pooled-row renderer in
+    # phase 4 (docs/context/CHANGELOG.md); this call site is a minimal compatibility shim until then,
+    # defaulting to 0.0 for any stage a future/monolithic backend doesn't run (e.g. no "vocoder" key).
+    stage_durations = result.stage_durations
+    update_audio_infos(result.audio_duration_s, stage_durations.get("tts", 0.0),
+                        stage_durations.get("vocoder", 0.0), stage_durations.get("denoiser", 0.0))
     if result.gst_weights is not None:
         update_GST_infos(result.gst_weights)
 
