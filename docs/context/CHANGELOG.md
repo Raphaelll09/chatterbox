@@ -184,6 +184,59 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 5/5: vocoder gating + phoneme fallback
+
+- What: fifth and final phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- wires
+  up the two static per-model capability flags from phase 1 (`needs_vocoder`,
+  `accepts_phoneme_input`) to actual GUI behavior.
+  1. Settings -> Advanced's Vocodeur picker row is skipped entirely when the
+     selected TTS model's `needs_vocoder` is false (a monolithic model has
+     nothing to pick).
+  2. `_keyboard_emit()` checks the active model's `accepts_phoneme_input`:
+     when false, a phoneme keypress inserts the key's already-computed display
+     label (ordinary French spelling, e.g. "CH"/"ON") instead of the raw phone
+     code (this backend's own custom phone-symbol alphabet -- no G2P step
+     exists anywhere in this pipeline for a different backend to fall back
+     on). Per the user's explicit choice, the fallback itself is a config
+     setting (`GUI_config.phoneme_fallback`): `"translate_labels"` (default)
+     keeps the Phonemes keyboard usable with that substitution;
+     `"hide"` removes the Texte/Phonemes toggle and the phoneme keyboard
+     entirely, forcing Texte-only mode.
+  3. `_apply_keyboard_capabilities()`/`_refresh_keyboard_capabilities` (new,
+     mirrors the existing `_refresh_orientation` pattern) re-evaluates
+     `accepts_phoneme_input` whenever the TTS model is switched live from
+     Settings -> Advanced, not just once at startup.
+  4. Compat fix found via smoke testing: `chatterbox/gui/keyboards.py`'s
+     "Emmanuelle" phoneme keyboard has its own hardcoded mood-shortcut keys
+     (`:D`/`:p`/`:(`/`:O`) that resolve the literal global name
+     `"gst_token_selection"` via `app.py`'s `globals()` to temporarily
+     override the GST style selection around a quick styled phrase. Phase 4
+     removed that global entirely, which broke GUI startup outright (a
+     `KeyError` at button-creation time, not even requiring a keypress).
+     Fixed by keeping `gst_token_selection` as a compat alias, set to the
+     "style" chip_grid's `IntVar` whenever `gui_generic_controls()` builds
+     one (module-level default `None` otherwise, so a backend with no
+     "style" control degrades to a no-op on those keys instead of crashing).
+- Files: `chatterbox/gui/app.py`.
+- Why: see phase 1's entry above for the full user request/context. This
+  closes out the 5-phase refactor -- FastSpeech2+HiFi-GAN now conforms fully
+  to the generic contract; a future backend needs only its own module +
+  `config_tts.yaml` entry, no `app.py`/`synth.py` changes.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (two fake TTS models -- monolithic/no-phonemes vs two-stage/
+  phonemes-ok, mocked `describe_controls()`, no pretrained weights) confirmed:
+  Vocodeur picker absent for the monolithic model, present after switching to
+  the two-stage model; a phoneme keypress inserts "CH " for the no-phonemes
+  model and "s^ " after live-switching to the phonemes-capable one;
+  `phoneme_fallback="hide"` un-maps the Phonemes mode radio button entirely.
+- Notes/gotchas: `keyboards.py`'s "Emmanuelle" mood-shortcut keys and phoneme
+  symbol table remain FS2/GST-specific by design (documented, not touched) --
+  a future backend that also wants phoneme input support would need its own
+  keyboard layout/symbol table, not a reuse of this one.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
