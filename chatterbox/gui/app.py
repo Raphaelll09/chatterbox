@@ -67,6 +67,14 @@ _refresh_orientation = None
 # same mechanism as the orientation override.
 _keyboard_landscape_fraction = 0.5
 
+# Whether the currently-loaded TTS model understands the Phonemes keyboard's raw phone-code syntax
+# at all (interchangeable-backend GUI refactor -- config_tts.yaml's static per-model
+# accepts_phoneme_input flag). _refresh_keyboard_capabilities is set (to a callable), same pattern
+# as _refresh_orientation above, only once the embedded keyboard exists in create_gui() below, and
+# re-run whenever the TTS model is switched from Settings -> Advanced.
+_accepts_phoneme_input = True
+_refresh_keyboard_capabilities = None
+
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
 # is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
@@ -96,6 +104,13 @@ _audio_info_active_stage_count = 0
 # is non-empty -- stays None for a backend with only one voice (base.py's describe_controls()
 # docstring), in which case get_gui_controls() simply omits "speaker" from its result.
 speaker_selection = None
+
+# Compat alias for chatterbox/gui/keyboards.py's "Emmanuelle" mood-shortcut keys (see
+# gui_generic_controls()'s "style" chip_grid handling) -- stays None if the active backend's
+# describe_controls() doesn't declare a "style" control at all, so create_keyboard()'s
+# globals()["gst_token_selection"] lookup for those keys finds a name (just unusable/None) instead
+# of a KeyError; those keys would then no-op rather than crash if actually pressed.
+gst_token_selection = None
 
 # UI thread-marshaling (chatterbox_gui_spec_v0.1.md Sec2.1): the ONE queue shared by worker-thread
 # results (synthesis/playback done, warm-up done) AND powerd-forwarded socket events -- Tk is only
@@ -305,7 +320,15 @@ def _keyboard_emit(payload):
         _letter_key_emit(kind, value)
         return
     phon, label, keyboard_config = payload
-    ent_text_input.insert("end", "{} ".format(phon))
+    # interchangeable-backend GUI refactor: the phon code is this backend's own custom phone-
+    # symbol alphabet (chatterbox/gui/keyboards.py's "Emmanuelle" table) -- a model that doesn't
+    # declare accepts_phoneme_input (config_tts.yaml) has no way to understand it. Fall back to the
+    # already-computed display label (ordinary French spelling, e.g. "CH"/"ON") instead, per
+    # GUI_config.phoneme_fallback -- "hide" removes the Phonemes tab entirely (see
+    # _apply_keyboard_capabilities() below) so this branch shouldn't normally be reachable in that
+    # mode, but falls back the same way regardless as a defensive default.
+    text_to_insert = phon if _accepts_phoneme_input else label
+    ent_text_input.insert("end", "{} ".format(text_to_insert))
     if entry_text_keyboard is not None:
         entry_readonly_insert(entry_text_keyboard, label, keyboard_config)
     else:
@@ -632,6 +655,8 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         loading_script(tts_model, device)
         state.update_selected_tts(id_button)
         gui_script(tts_model, main_panel_config)
+        if _refresh_keyboard_capabilities is not None:
+            _refresh_keyboard_capabilities()
         if list_buttons is not None:
             select_model_from_list(id_button, list_buttons)
 
@@ -658,16 +683,23 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             list_tts_buttons.append(btn)
         select_model_from_list(state.TTS_INDEX + 1, list_tts_buttons)
 
-        tk.Label(master=parent_frame, text=i18n.t("vocoder_label")).grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
-        list_vocoder_buttons = []
-        for voc_index, vocoder_model in enumerate(tts_config["vocoder_models"], start=1):
-            btn = tk.Button(
-                master=parent_frame, text=vocoder_model["label"],
-                command=lambda m=vocoder_model, i=voc_index, lb=list_vocoder_buttons: _select_vocoder_model(m, i, lb),
-            )
-            btn.grid(row=1, column=voc_index, sticky=tk.EW, padx=2, pady=2)
-            list_vocoder_buttons.append(btn)
-        select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
+        # Vocodeur picker is skipped entirely for a monolithic TTS model (needs_vocoder: false,
+        # config_tts.yaml, interchangeable-backend GUI refactor) -- nothing to pick, since that
+        # model produces a finished wav directly with no separate mel->wav stage (chatterbox/
+        # synth.py). Row 1 is simply left blank in that case rather than renumbering rows 2/3
+        # below -- a cosmetic-only gap for a case that doesn't exist with today's one real backend.
+        selected_tts_model = tts_config["tts_models"][state.TTS_INDEX]
+        if selected_tts_model.get("needs_vocoder", True):
+            tk.Label(master=parent_frame, text=i18n.t("vocoder_label")).grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
+            list_vocoder_buttons = []
+            for voc_index, vocoder_model in enumerate(tts_config["vocoder_models"], start=1):
+                btn = tk.Button(
+                    master=parent_frame, text=vocoder_model["label"],
+                    command=lambda m=vocoder_model, i=voc_index, lb=list_vocoder_buttons: _select_vocoder_model(m, i, lb),
+                )
+                btn.grid(row=1, column=voc_index, sticky=tk.EW, padx=2, pady=2)
+                list_vocoder_buttons.append(btn)
+            select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
 
         # Manual portrait/landscape override -- only meaningful (and only shown) when the
         # embedded-keyboard reflow machinery below actually exists (_refresh_orientation is set).
@@ -859,6 +891,36 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                         frame.grid()
                     else:
                         frame.grid_remove()
+
+            def _apply_keyboard_capabilities():
+                """Re-read the currently-selected TTS model's static accepts_phoneme_input flag
+                (config_tts.yaml) -- called once below for the model already loaded at startup,
+                and again from _select_tts_model() (interchangeable-backend GUI refactor) whenever
+                the user switches TTS model from Settings -> Advanced, since a different model may
+                have a different phoneme capability. When the active model can't understand
+                phoneme input and GUI_config.phoneme_fallback is "hide", the Texte/Phonemes toggle
+                and the phoneme keyboard itself are removed entirely -- Texte becomes the only
+                mode. "translate_labels" (the default) leaves the toggle/keyboard as-is;
+                _keyboard_emit() is what actually falls back to label text in that case."""
+                global _accepts_phoneme_input
+                tts_model = tts_config["tts_models"][state.TTS_INDEX]
+                _accepts_phoneme_input = tts_model.get("accepts_phoneme_input", True)
+                phoneme_fallback = gui_config.get("phoneme_fallback", "translate_labels")
+                hide_phonemes_tab = not _accepts_phoneme_input and phoneme_fallback == "hide"
+                if hide_phonemes_tab:
+                    btn_mode_text.grid_remove()
+                    btn_mode_phonemes.grid_remove()
+                    if keyboard_mode.get() == "phonemes":
+                        keyboard_mode.set("text")
+                        _set_keyboard_mode("text")
+                else:
+                    btn_mode_text.grid()
+                    btn_mode_phonemes.grid()
+
+            _apply_keyboard_capabilities()
+
+            global _refresh_keyboard_capabilities
+            _refresh_keyboard_capabilities = _apply_keyboard_capabilities
 
             # Portrait-first + landscape reflow (Phase 1 item 2): the panel's native orientation is
             # portrait (single column, keyboard_area below the main controls) -- maintenance
@@ -1223,6 +1285,15 @@ def gui_generic_controls(tts_config, main_panel_config):
         if control_type == "chip_grid":
             selection_var, sub_row_index = _build_chip_grid_control(frame_options, control, sub_row_index)
             _generic_control_widgets[key] = selection_var
+            if key == "style":
+                # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its
+                # own hardcoded mood-shortcut keys (:D/:p/:(/:O) that look up this exact global by
+                # name (create_keyboard()'s globals()[key_arg] resolution) to set/restore the GST
+                # style selection around a quick styled phrase. Those are themselves FS2/GST-
+                # specific (unchanged, out of scope here) -- keep the name they already depend on
+                # working rather than touching that table.
+                global gst_token_selection
+                gst_token_selection = selection_var
             continue
 
         if control_type == "slider":
