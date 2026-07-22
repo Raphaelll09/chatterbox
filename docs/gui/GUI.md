@@ -37,6 +37,17 @@ Speak triggers a no-op while a job is running; the GUI's own startup warm-up
 (`cli.warmup()`, see `chatterbox/cli.py`) runs through this exact same machinery, so a Speak click
 during warm-up is naturally ignored rather than needing separate handling.
 
+The startup default model load runs through the same machinery too (startup-latency phase 2, see
+`docs/context/CHANGELOG.md`): `create_gui()` only registers the selected indices and grids a
+"Chargement du modèle…" placeholder synchronously, then builds every other widget as normal; the
+actual `loading_script()` calls run on a background thread (`_start_initial_model_load()`),
+scheduled via `window.after(50, ...)` right before `mainloop()` like warm-up always was — so the
+window paints before FastSpeech2+HiFi-GAN finish loading, not after. Its completion replaces the
+placeholder with the real options panel and only then chains into `_start_warmup()`, which needs a
+loaded model. `busy` is `True` for the entire load (blocking Speak/Replay the same way it blocks
+them during warm-up), with a synchronous `False`→`True` hand-off into warm-up's own busy-guard at
+the end — no gap where a click could reach a not-yet-loaded model.
+
 UI states (idle/synthesising/initialising/playing/error) reuse the existing status-circle widget
 (gray/yellow/yellow/green, plus a new red for error) plus one status/error label.
 
