@@ -1,38 +1,22 @@
-# chatterbox-powerd runtime preferences. Reloaded on SIGHUP (or the "reload" socket command) --
-# see docs/power/POWERD.md and chatterbox-powerd_spec_v0.1.md.
-#
-# This file is validated at load (chatterbox/power/config.py:load_config()): a missing file,
-# malformed YAML, or an out-of-range value never crashes powerd -- it's logged and the built-in
-# defaults (identical to the values below) are used instead. Edit freely; a typo here degrades
-# gracefully rather than taking the daemon down.
-
 power:
   t_dim_s: 30
   t_dark_s: 180
-  t_deep_s: 1200          # null / 0 disables the DEEP timer backstop
-  deep_manual_only: false # true => only the put_away command reaches DEEP
-
+  t_deep_s: 1200
+  deep_manual_only: false
 display:
-  backlight: auto          # or an explicit node name under /sys/class/backlight
+  backlight: auto
   brightness_active: 255
   brightness_dim: 60
-  # max_brightness is read from sysfs at startup, not configured here
-
 amp:
-  sd_pin: 23                # BCM numbering -- CONFIRM against wiring before trusting on real hardware
-  enable_active_high: true  # true: HIGH = amp enabled -- CONFIRM SD polarity on the modded board
-  on_watchdog_s: 30         # force OFF if amp left on longer than this
-  settle_ms: 80             # delay after amp_ack before playback starts (let the SD line settle)
-  preroll_ms: 50            # additional delay before playback starts (avoid a power-on pop)
-  tail_ms: 50                # delay after playback finishes before amp_off
-
-switches: []                 # optional physical buttons; each: {pin, action, pull_up, bounce_ms}
-  # - { pin: 5, action: PUT_AWAY, pull_up: true, bounce_ms: 50 }
-  # - { pin: 6, action: SPEAK,    pull_up: true, bounce_ms: 50 }
-
+  sd_pin: 23
+  enable_active_high: true
+  on_watchdog_s: 30
+  settle_ms: 80
+  preroll_ms: 50
+  tail_ms: 50
+switches: []
 evdev:
-  devices: auto             # auto-detect touchscreen+keyboards, or a list of explicit device paths
-
+  devices: auto
 socket:
   path: /run/chatterbox/powerd.sock
   group: chatterbox
