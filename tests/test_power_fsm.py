@@ -242,3 +242,37 @@ def test_set_config_swaps_thresholds_used_by_the_next_tick():
     clock.advance(5)
     fsm.on_tick()
     assert fsm.state == ACTIVE  # would have hit DIM under the old config
+
+
+def test_set_config_immediately_reapplies_brightness_for_the_current_state():
+    """Real-hardware bug report: changing brightness_active in Settings had no visible effect
+    until the FSM happened to transition again -- set_config() must re-apply the current state's
+    brightness right away, not wait for a future on_tick()/on_activity()."""
+    fsm, backlight, amp, broadcasts, halts, clock = make_fsm()
+    assert fsm.state == ACTIVE
+    calls_before = len(backlight.brightness_calls)
+
+    fsm.set_config(make_cfg(brightness_active=42))
+    assert backlight.brightness_calls[calls_before:] == [42]
+    assert broadcasts == []  # re-applying is not a transition -- no broadcast
+
+
+def test_set_config_reapplies_dim_brightness_when_currently_dim():
+    fsm, backlight, amp, broadcasts, halts, clock = make_fsm()
+    clock.advance(10)
+    fsm.on_tick()
+    assert fsm.state == DIM
+    calls_before = len(backlight.brightness_calls)
+
+    fsm.set_config(make_cfg(brightness_dim=7))
+    assert backlight.brightness_calls[calls_before:] == [7]
+
+
+def test_set_config_while_deep_does_not_reapply_or_reraise():
+    fsm, backlight, amp, broadcasts, halts, clock = make_fsm()
+    fsm.on_command("PUT_AWAY")
+    assert fsm.state == DEEP
+    off_calls_before = backlight.off_calls
+
+    fsm.set_config(make_cfg())  # must not raise, must not re-run entry actions (terminal)
+    assert backlight.off_calls == off_calls_before
