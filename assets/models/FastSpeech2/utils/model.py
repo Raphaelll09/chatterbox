@@ -10,6 +10,37 @@ from transformers import FlaubertModel, FlaubertTokenizer
 
 import chatterbox.config.paths as paths
 
+
+class _LazyFlaubertModel:
+    """Defers the ~1.4 GB FlaubertModel.from_pretrained() checkpoint load until the first actual
+    forward call, instead of paying it on every do_tts.py/--gui startup. That load is the single
+    biggest cost in bringing up the pipeline (FastSpeech2's own checkpoint is 621 MB, HiFi-GAN's is
+    3.7 MB), yet the FlauBERT encoder it produces is only ever used by preprocess_styleTag()
+    (chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py) when a free-text
+    <STYLE_TAG=...> tag is present -- unreachable from the GUI today (gui_styleTag_control: False
+    in config_tts.yaml) and rare even from the CLI. Tokenizer loading stays eager: it only reads
+    small vocab/merges files and is fast.
+    """
+
+    def __init__(self, modelname):
+        self._modelname = modelname
+        self._model = None
+
+    def _ensure_loaded(self):
+        if self._model is None:
+            print("Loading of FlauBERT")
+            self._model, _log = FlaubertModel.from_pretrained(self._modelname, output_loading_info=True)
+            self._model.requires_grad_ = False
+            print("FlauBERT loaded")
+        return self._model
+
+    def __call__(self, *args, **kwargs):
+        return self._ensure_loaded()(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._ensure_loaded(), name)
+
+
 def get_model(args, configs, device, train=False, mode_batch=False, use_bert=False):
     (preprocess_config, model_config, train_config) = configs
 
@@ -17,13 +48,10 @@ def get_model(args, configs, device, train=False, mode_batch=False, use_bert=Fal
         # Load FlauBERT pre-trained model
         modelname = str(paths.FLAUBERT_DIR)
 
-        print("Loading of FlauBERT")
-        # Load pretrained model and tokenizer
-        flaubert, log = FlaubertModel.from_pretrained(modelname, output_loading_info=True)
+        # Load pretrained model (lazily -- see _LazyFlaubertModel) and tokenizer (cheap, eager)
+        flaubert = _LazyFlaubertModel(modelname)
         flaubert_tokenizer = FlaubertTokenizer.from_pretrained(modelname, do_lowercase=True)
-        print("FlauBERT loaded")
 
-        flaubert.requires_grad_ = False
         flaubert_tokenizer.requires_grad_ = False
     else:
         flaubert = None

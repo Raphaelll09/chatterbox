@@ -24,10 +24,13 @@ installing dependencies — there is no nested `embedded_tts/` subfolder inside 
     `FR_V2` (French, fine-tuned on multi-speaker FastSpeech2 mel spectrograms).
   - `Waveglow/` — alternative vocoder, currently disabled in `config_tts.yaml` (commented
     out under `vocoder_models`).
-  - `flaubert/` — pretrained FlauBERT-large model/tokenizer, loaded whenever the active
-    TTS model's `styleTag_encoder.use_styleTag_encoder` is `True` (it is, in the shipped
-    `ALL_corpus` config), but only actually run per-utterance when a `<STYLE_TAG=...>` free-text
-    tag is present in the input.
+  - `flaubert/` — pretrained FlauBERT-large model/tokenizer. Tokenizer loads eagerly at model-load
+    time whenever the active TTS model's `styleTag_encoder.use_styleTag_encoder` is `True` (it is,
+    in the shipped `ALL_corpus` config); the ~1.4 GB model checkpoint itself is wrapped in a
+    `_LazyFlaubertModel` proxy (`assets/models/FastSpeech2/utils/model.py`) and only actually
+    loaded from disk on the first per-utterance call where a `<STYLE_TAG=...>` free-text tag is
+    present in the input — deferred since that's the dominant cost of a fresh startup and the tag
+    is rarely used (see `docs/context/CHANGELOG.md` 2026-07-22 "Lazy-load FlauBERT").
 - `assets/audio/` — `reference/` (postprocessing before/after demo WAVs) and `prompts/` (on-screen
   keyboard phoneme WAVs, read by `chatterbox/gui/app.py`).
 

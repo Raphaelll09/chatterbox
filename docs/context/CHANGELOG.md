@@ -15,6 +15,97 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Background the startup model load in the GUI (startup-latency phase 2)
+
+- What: `chatterbox/gui/app.py:create_gui()` used to call `_select_tts_model()`/
+  `_select_vocoder_model()` for the default models synchronously, before any of the rest of the
+  window's widgets were built and before `window.mainloop()` -- so the window never painted until
+  FastSpeech2+HiFi-GAN had fully loaded (phase 1 already removed FlauBERT from that wait; this
+  phase removes the remainder). Fix: the startup call-site now only does the cheap part
+  immediately -- `state.update_selected_tts()`/`update_selected_vocoder()` (so anything below that
+  only needs to know which model is selected, e.g. `_apply_keyboard_capabilities()`, already sees
+  the right answer) and a "Chargement du modèle…" placeholder label in the options-panel's spot
+  (row 2) -- then lets the rest of `create_gui()` build every other widget (menu, entry, keyboard,
+  nav, etc.) exactly as before. The actual `loading_script()` calls for both models move to a new
+  background thread (`_start_initial_model_load()`/`_initial_model_load_work()`), scheduled via
+  `window.after(50, ...)` right before `mainloop()` -- the same pattern already used for warm-up
+  (`_start_warmup()`). Its completion (`_finish_initial_model_load()`, run back on the Tk thread via
+  the existing `post()`/`_pump()` machinery) destroys the placeholder, builds the real options
+  panel (`gui_generic_controls()`, which needs the just-loaded model's config), re-applies keyboard
+  capabilities, then chains straight into `_start_warmup()` -- which can no longer be scheduled
+  independently since it also needs a loaded model. `busy` goes `True` before a single further
+  widget is built (so `on_speak()`/`on_replay()`'s existing busy-guards block any click for the
+  whole load, with no gap), then briefly back to `False` right before `_start_warmup()`'s own
+  busy-guard sets it `True` again -- both happen synchronously in one Tk-thread callback with no
+  event processing in between, so there's no window for a click to slip through either transition.
+  `_select_tts_model()`/`_select_vocoder_model()` themselves are unchanged and still run
+  synchronously for an interactive Settings -> Advanced model switch -- only the startup path is
+  backgrounded.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new `loading_model_label` string).
+- Why: continues the "FlauBERT takes forever, GUI appears a while later" fix from phase 1 -- with
+  FlauBERT lazy, FastSpeech2's 621 MB checkpoint was still the dominant remaining startup cost, and
+  it was still blocking `mainloop()` the same way FlauBERT used to.
+- Verify: `pytest tests/` (242 passed, 1 pre-existing skip, unchanged). Manually: launched
+  `do_tts.py --gui` with real weights and per-line wall-clock timestamps -- "TTS .../390000 loaded"
+  and "Vocoder .../g_00570000 loaded" only print ~4-5s after process start, and since those calls
+  only run from inside `_initial_model_load_work()`, itself only reachable via the
+  `window.after(50, _start_initial_model_load)` timer callback -- which Tk can only fire once
+  `mainloop()` is already pumping events -- the window is structurally guaranteed to have started
+  painting before that load completes, not just empirically observed to. No exceptions through the
+  full load -> options-panel-build -> keyboard-capability-refresh -> warm-up chain.
+- Notes/gotchas: if `_start_warmup()`'s own busy-guard or its call site ever changes, re-check the
+  `busy = False` right before `_start_warmup()` in `_finish_initial_model_load()` -- without it,
+  warm-up silently no-ops forever (busy stays `True` from the load, `_start_warmup()`'s `if busy:
+  return` fires immediately), which is exactly the bug this phase's implementation hit and fixed
+  before landing.
+
+---
+
+## 2026-07-22 — Lazy-load FlauBERT (startup-latency phase 1)
+
+- What: `FlaubertModel.from_pretrained()` (a ~1.4 GB checkpoint -- bigger than
+  FastSpeech2's own 621 MB checkpoint and HiFi-GAN's 3.7 MB combined) was being
+  loaded eagerly on every `do_tts.py`/`--gui` startup as part of
+  `get_model()`, even though the FlauBERT encoder it produces is only ever
+  used by `preprocess_styleTag()`
+  (`chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py`) when
+  a free-text `<STYLE_TAG=...>` tag is present in the input -- a path the GUI
+  doesn't expose at all today (`gui_styleTag_control: False` in
+  `config_tts.yaml`) and rarely used from the CLI either. This was the
+  dominant contributor to the "FlauBERT takes forever to launch, GUI appears a
+  while later" complaint: in `chatterbox/gui/app.py:create_gui()`, model
+  loading (`_select_tts_model()`) runs synchronously before `window.mainloop()`
+  is reached, so the whole load -- FlauBERT included -- blocks the window from
+  ever painting.
+  Fix: `assets/models/FastSpeech2/utils/model.py`'s `get_model()` now wraps
+  the FlauBERT *model* in a `_LazyFlaubertModel` proxy that defers the actual
+  `from_pretrained()` checkpoint load until the first real forward call
+  (`__call__`/`__getattr__`); the tokenizer stays eager since it only reads
+  small vocab/merges files and is fast. No other call site changed --
+  `_LazyFlaubertModel` is a drop-in stand-in wherever `flaubert_model` used to
+  be passed around.
+- Files: `assets/models/FastSpeech2/utils/model.py`.
+- Why: cut everyday `do_tts.py`/`--gui` startup latency without touching the
+  free-text style-tag feature itself; see the earlier chat's analysis (not a
+  separate doc) for the full breakdown of file sizes / load path. This is
+  phase 1 of a multi-step plan; phase 2 (backgrounding the remaining model
+  load in the GUI so the window paints before `_select_tts_model()` finishes)
+  is still open.
+- Verify: `pytest tests/` (242 passed, 1 pre-existing skip, unchanged from
+  before this change). Manually: `do_tts.py` free-text with a plain sentence
+  no longer prints "Loading of FlauBERT"/"FlauBERT loaded" at startup; a
+  sentence starting with `<STYLE_TAG=...>` still prints those two lines (now
+  at the point of first use, inside that synthesis call) and produces the
+  correct `StyleTag: ...` output identical to before.
+- Notes/gotchas: only the FlauBERT *model* is proxied, not the tokenizer --
+  keep it that way unless tokenizer loading is ever shown to be slow too,
+  since a second lazy-proxy class isn't worth the complexity for a sub-second
+  load. The standalone `assets/models/FastSpeech2/synthesize.py` script (its
+  own `main()`, not part of the chatterbox daily-use path) calls the same
+  `get_model()` and gets the same lazy behavior for free.
+
+---
+
 ## 2026-07-22 — Interchangeable-backend GUI, phase 1/5: contract formalization
 
 - What: the user wants to be able to swap the FastSpeech2+HiFi-GAN backend for a

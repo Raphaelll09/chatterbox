@@ -728,8 +728,27 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             # 2/3" -- 0.6, a fixed constant (_KEYBOARD_SCREEN_SHARE), replaces the picker instead
             # of adding yet another option to it).
 
-    _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
-    _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
+    # Startup default load (phase 2 of the startup-latency work -- see docs/context/CHANGELOG.md
+    # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
+    # (still synchronous -- fine for a deliberate, rare Settings -> Advanced click), the *default*
+    # load at startup used to run right here, blocking every widget below this line -- and
+    # mainloop() itself -- behind FastSpeech2+HiFi-GAN loading. Register the selected indices
+    # immediately (cheap, no weights touched) so anything below that only needs to know WHICH
+    # model is selected (e.g. _apply_keyboard_capabilities() further down) already sees the right
+    # answer; the actual loading_script() calls move to a background thread kicked off only once
+    # the window is fully built (_start_initial_model_load(), scheduled near mainloop() below),
+    # the same pattern already used for warm-up. busy=True goes up right here, before a single
+    # further widget is built, so there's no gap where a click could reach on_speak()/on_replay()
+    # before a model is loaded (both already busy-guard, see on_speak()/on_replay() above). A
+    # placeholder label stands in for the options panel (gui_generic_controls()'s frame, which
+    # can't be built before the model is loaded -- it reads the loaded model's own config) until
+    # the load's completion callback replaces it.
+    global busy
+    busy = True
+    state.update_selected_tts(default_tts + 1)
+    state.update_selected_vocoder(default_vocoder + 1)
+    _loading_placeholder = tk.Label(master=window, text=i18n.t("loading_model_label"), fg="gray")
+    _loading_placeholder.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
 
     # Add input field
     ent_text_input = tk.Entry(master=window, width=main_panel_config["input_width"])
@@ -1030,9 +1049,46 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             global _refresh_orientation
             _refresh_orientation = lambda: _apply_current_orientation(force=True)
 
-    # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
-    # it doesn't delay the first paint. Runs on the busy/worker machinery above.
-    window.after(50, _start_warmup)
+    def _initial_model_load_work():
+        """Worker thread -- NO Tk calls. Runs the two loading_script() calls the startup call-site
+        above used to make synchronously; posts the (fast, Tk-only) finish step back once done."""
+        tts_model = tts_config["tts_models"][default_tts]
+        vocoder_model = tts_config["vocoder_models"][default_vocoder]
+        tts_loading_script = getattr(registry.BACKEND, tts_model["load_script"])
+        tts_loading_script(tts_model, device)
+        vocoder_loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
+        vocoder_loading_script(vocoder_model, device)
+        post(lambda: _finish_initial_model_load(tts_model))
+
+    def _finish_initial_model_load(tts_model):
+        """Tk thread. Replaces the loading placeholder with the real options panel (needs the
+        just-loaded model's config, see the startup call-site's comment above), then chains
+        straight into warm-up -- which itself needs a loaded model, so it can no longer be
+        scheduled independently the way it used to be. busy briefly goes back to False right
+        before _start_warmup() re-sets it True -- both happen synchronously in this same Tk-thread
+        callback with no event processing in between, so there's no window for a click to slip
+        through; without this reset, _start_warmup()'s own busy-guard (correctly written for its
+        original "always the first thing after mainloop" call site) would see busy still True from
+        the load above and silently skip warm-up entirely."""
+        global busy
+        _loading_placeholder.destroy()
+        gui_script = globals()[tts_model["gui_script"]]
+        gui_script(tts_model, main_panel_config)
+        if _refresh_keyboard_capabilities is not None:
+            _refresh_keyboard_capabilities()
+        busy = False
+        _start_warmup()
+
+    def _start_initial_model_load():
+        _set_ui_state("initialising")
+        _set_action_buttons_state("disabled")
+        threading.Thread(target=_initial_model_load_work, daemon=True).start()
+
+    # Startup model load + warm-up (spec Sec6) both run in the background, scheduled after the
+    # window is fully built, right before mainloop, so neither delays the first paint -- warm-up
+    # itself now runs chained after the load finishes (_finish_initial_model_load() above) instead
+    # of being scheduled here directly, since it needs a loaded model to warm up.
+    window.after(50, _start_initial_model_load)
 
     window.mainloop()
 

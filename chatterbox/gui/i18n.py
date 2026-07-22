@@ -69,6 +69,7 @@ STRINGS = {
         "orientation_landscape": "Paysage",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
+        "loading_model_label": "Chargement du modèle…",
     },
 }
 
