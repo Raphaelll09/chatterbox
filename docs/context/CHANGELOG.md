@@ -93,6 +93,45 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 3/5: describe_controls() schema, dict gui_control
+
+- What: third phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `FastSpeech2HifiGanBackend.describe_controls()` now emits the full
+  `"controls"` schema mirroring exactly what `gui_fastspeech2()` used to
+  hand-build directly from `config_tts.yaml`: style chip grid (`TOKEN13-16`
+  placeholders hidden via `hidden_pattern`), style-intensity slider, pitch/
+  energy/speed sliders, 5 "bias" sliders, StyleTag free-text entry -- read from
+  the same YAML keys it already had (no new YAML schema for the controls
+  themselves).
+  1. `load_fastspeech2()` now keeps the `config_tts.yaml` model entry itself
+     (`self.tts_model_config`) alongside the parsed FastSpeech2 sub-configs
+     (`self.configs`) -- `describe_controls()` needs it.
+  2. `syn_fastspeech2()`'s `gui_control` unpacking changed from a fixed
+     12-element positional list to a dict keyed by the same "key"s
+     `describe_controls()` declares -- the fragile part of the old contract a
+     different backend couldn't conform to. Uses `.get(key, <yaml default>)`
+     throughout so an undeclared control falls back to the model's own
+     configured default instead of a `KeyError`, matching today's actual
+     behavior (a hidden-but-created slider/entry still contributes its
+     default value).
+  3. Bias sliders get an `"advanced"` flag from `gui_control_bias` -- phase 4's
+     generic panel will add one shared "advanced controls" reveal toggle for
+     these, where today there was none at all (`gui_control_bias: False` meant
+     permanently absent, no way to reveal from the GUI). A small, low-risk UX
+     improvement that falls out of building this generically, not a design
+     goal on its own.
+- Files: `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`,
+  `tests/test_backend_describe_controls.py` (new, 7 tests).
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (241 passed/1 skipped -- 7 new).
+- Notes/gotchas: phase 4 (`app.py`'s generic control panel + duration rows) is
+  next -- until then `gui_fastspeech2()` in `app.py` still builds the panel the
+  old, hand-written way and does NOT yet call `describe_controls()["controls"]`
+  at all; this phase only prepared the data the backend side will hand over.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
