@@ -15,6 +15,48 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Fourth feedback round: powerd reload bug, settings scroll, keyboard sizing
+
+- What: nine fixes from a fourth feedback pass, across three commits:
+  1. **Real daemon bug**: `PowerFSM.set_config()` only swapped the config dict -- brightness only
+     re-applied on the NEXT actual state transition, which might never come soon after a Settings
+     save (daemon usually already sitting in ACTIVE/DIM). Now re-runs the current state's entry
+     actions immediately (skipped in DEEP, terminal). 3 new FSM tests.
+  2. Preset-dropdown custom ("actuel") values now format in the same s/min/h units as the presets
+     (1200s showed as "1200 s (actuel)" next to "10 min"/"30 min" presets -- now "20 min (actuel)").
+  3. Settings dialog: scrollable content area + a FIXED footer (error text + Enregistrer/Annuler)
+     -- this round's added fields (timer dropdowns, percent scales, Avancé section) could push the
+     window taller than the actual screen with nothing to scroll it.
+  4. Added an inline warning when `chatterbox-powerd` isn't reachable -- "mettre en veille
+     ineffective"/"brightness doesn't change"/"enregistrer=annuler" most likely all trace to this.
+  5. Orientation radios now `indicatoron=0`+`selectcolor` (chip style) instead of a plain radio
+     dot -- likely why the current selection wasn't visibly registering.
+  6. Speaker chip grid replaced with a dropdown beside "Locuteur :" -- speakers don't change often
+     and some future backends may have only one voice; frees width for the style chip grid.
+  7. Added a "Tout effacer" (clear all) button to the letter keyboard -- only backspace existed.
+  8. **Root-caused** "keyboard huge/takes all the space" in landscape: `rowspan=20` pulled in the
+     options panel's own large weighted row height, inflating the keyboard's internal weighted
+     buttons vertically too, with no width cap at all. Replaced with natural-height/top-anchored
+     placement + an explicit pixel-width cap (`grid_propagate(False)`), now a configurable
+     Settings -> Advanced fraction (1/2 default, 2/3, 3/4), applied live.
+- Files: `chatterbox/power/fsm.py`, `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`,
+  `chatterbox/gui/i18n.py`, `tests/test_power_fsm.py`.
+- Why: direct user feedback after a fourth testing round.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 233 passed/1 skipped (230 + 3 new FSM
+  tests), unchanged otherwise. Multiple mocked smoke runs confirmed: FSM re-applies brightness
+  immediately in ACTIVE/DIM and leaves DEEP alone; settings dialog's scroll canvas and footer are
+  separate grid rows; a 1200s custom value shows as "20 min (actuel)"; the powerd warning appears
+  (this checkout has none reachable); the speaker dropdown shows AD first and updates the correct
+  underlying index; "Tout effacer" empties the entry; the landscape keyboard measures exactly
+  500px in a 1000px window at 1/2 default and exactly 750px after switching to 3/4 live.
+- Notes/gotchas: two items from this round were deliberately NOT implemented, pending user
+  input -- (a) an ambiguous "timer before assombrissement can't be lower than the time it takes
+  for the screen to dim" comment (asked the user for clarification rather than guess), and (b)
+  whether orientation override should rotate the WHOLE screen (terminal included) vs. just the
+  GUI's own layout (today's behavior) -- presented trade-offs, awaiting the user's decision.
+
+---
+
 ## 2026-07-21 — Third feedback round: settings modal bug, chip defaults, landscape crop root cause
 
 - What: six fixes from a third feedback pass, split across two commits:
