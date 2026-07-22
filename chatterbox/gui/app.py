@@ -477,6 +477,16 @@ _LETTER_ROWS = [
 ]
 
 
+def _wrap_label_to_width(event):
+    """Bound to a widget's own <Configure>: wraps its label to whatever pixel width Tk actually
+    gives it instead of a fixed font/width -- real-hardware bug report: "Tout effacer" rendered as
+    "out effacer", clipped, once the landscape keyboard's width cap (Settings -> Advanced fraction)
+    made its column narrower than the label's natural request. Reused for the style chip grid's
+    long option names (cc_prompt_gui_refactor.md follow-up: cropping/shrinking chips to make more
+    room for the keyboard) for the same reason -- crop by wrapping, never by silent clipping."""
+    event.widget.config(wraplength=max(1, event.width - 4))
+
+
 def _create_letter_keyboard(master, key_board_options):
     """Text-mode soft keyboard: independent of create_keyboard()/keyboards.keys on purpose -- that
     machinery (mirror readonly entry, prerecorded-phone playback, the entry_text_keyboard/
@@ -499,13 +509,6 @@ def _create_letter_keyboard(master, key_board_options):
             )
             btn.grid(row=row_index, column=col_index, sticky=tk.NSEW,
                       padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
-
-    # Control-row buttons wrap their own label to whatever width Tk actually gives them (bound to
-    # each button's own <Configure>) instead of a fixed font/width -- real-hardware bug report:
-    # "Tout effacer" rendered as "out effacer", clipped, once the landscape keyboard's width cap
-    # (Settings -> Advanced fraction) made these columns narrower than the label's natural request.
-    def _wrap_to_width(event):
-        event.widget.config(wraplength=max(1, event.width - 4))
 
     control_row = len(_LETTER_ROWS)
     tk.Grid.rowconfigure(frame, control_row, weight=1)
@@ -537,7 +540,7 @@ def _create_letter_keyboard(master, key_board_options):
                    padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
 
     for _btn in (btn_space, btn_backspace, btn_clear_all, btn_play):
-        _btn.bind("<Configure>", _wrap_to_width)
+        _btn.bind("<Configure>", _wrap_label_to_width)
 
     return frame
 
@@ -769,11 +772,17 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         # 3 slots covers every pipeline shape this repo currently anticipates (two-stage: tts +
         # vocoder + denoiser; monolithic: tts + denoiser, one slot unused/hidden) without having to
         # renumber every row below (replay/put-away/keyboard) for a rarer, wider pipeline.
+        # grid_remove()'d immediately -- real-hardware feedback: gridded-but-blank rows still
+        # claim their row height, leaving a dead, empty-looking gap before any synthesis has run
+        # (and stealing height the options panel's own weighted row could otherwise use, "as the
+        # synthesis data has been reduced, it may be useful to extend the upper window").
+        # update_audio_infos() grids whichever of these are actually in use once real data exists.
         _STAGE_POOL_SIZE = 3
         lbl_audio_infos_stage_pool = []
         for _pool_i in range(_STAGE_POOL_SIZE):
             _lbl = tk.Label(master=window, text="")
             _lbl.grid(row=9 + _pool_i, column=0, columnspan=max_buttons+2)
+            _lbl.grid_remove()
             lbl_audio_infos_stage_pool.append(_lbl)
 
         lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
@@ -985,7 +994,15 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     target_width = max(150, int(window.winfo_width() * _keyboard_landscape_fraction))
                     _kb.grid_propagate(False)
                     _kb.config(width=target_width, height=natural_height)
-                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.N)
+                    # sticky=NSEW (not just N): natural_height above is a MINIMUM, not a cap --
+                    # real-hardware feedback: the keyboard sat anchored at the top of its row span
+                    # with dead space below whenever the span's actual allocated height (governed
+                    # by row 2's weight, same computation either way) exceeded that minimum. NSEW
+                    # tells grid to stretch the frame to fill however much height it actually got;
+                    # keyboard_area's own internal row 1 (weight=1, holding the two keyboard
+                    # frames) and each key's own weighted row/column then grow to fill that,
+                    # matching the user's ask ("the keyboard should use all the space available").
+                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.NSEW)
                 else:
                     _kb.grid_propagate(True)
                     _kb.grid(**_portrait)
@@ -1128,9 +1145,13 @@ def _build_chip_grid_control(frame_options, control, sub_row_index):
     chip_frame = tk.Frame(master=frame_options)
     chip_frame.grid(row=sub_row_index, column=0, columnspan=chips_per_row, sticky=tk.EW)
 
-    # Chip width fits the longest option name -- real-hardware bug report: a fixed width=11
-    # clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each).
-    chip_width = max((len(o) for o in options), default=1) + 1
+    # Chip width fits the longest option name, up to a cap -- real-hardware bug report: a fixed
+    # width=11 clipped "RECONFORTANT"/"ENTHOUSIASTE" (12 chars each); later feedback asked for
+    # smaller/denser chips ("crop a bit the tags... boxes can be a bit smaller too") to leave more
+    # room for the keyboard. A name past the cap wraps (via _wrap_label_to_width below) instead of
+    # forcing every chip as wide as the single longest name.
+    _CHIP_WIDTH_CAP = 9
+    chip_width = min(max((len(o) for o in options), default=1) + 1, _CHIP_WIDTH_CAP)
 
     selection_var = tk.IntVar(frame_options)
     selection_var.set(default_value)
@@ -1152,12 +1173,14 @@ def _build_chip_grid_control(frame_options, control, sub_row_index):
             value=original_index,
             indicatoron=0,
             selectcolor="#ffd54f",
+            font=("TkDefaultFont", 8),
             width=chip_width,
-            padx=4,
-            pady=10,
+            padx=2,
+            pady=4,
             command=None,
         )
-        chip.grid(row=chip_row, column=chip_col, padx=3, pady=3, sticky=tk.NSEW)
+        chip.grid(row=chip_row, column=chip_col, padx=2, pady=2, sticky=tk.NSEW)
+        chip.bind("<Configure>", _wrap_label_to_width)
         chip_frame.grid_columnconfigure(chip_col, weight=1)
         if hidden_re and hidden_re.match(option_text):
             chip.grid_remove()
