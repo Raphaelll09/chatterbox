@@ -15,6 +15,43 @@ state before starting new work.
 
 ---
 
+## 2026-07-21 — Second real-hardware feedback round: landscape width, chip labels, apostrophe
+
+- What: six fixes from a second Pi/PC feedback pass (landscape crop persisted after the first
+  round's fixes; new issues surfaced):
+  1. Landscape keyboard column no longer weighted (was competing with the options panel for
+     extra width -- "keyboard takes a lot of space"); stays at natural/minimum width now.
+  2. Added a horizontal scrollbar to the options-panel canvas as an explicit fallback (still no
+     way to reach horizontally-overflowing content in landscape).
+  3. Speaker/style labels moved to their own row above the chip grid instead of a column to its
+     left -- frees horizontal space for the grid itself.
+  4. Chip width now computed from the longest label in each grid instead of a fixed `width=11` --
+     "RECONFORTANT"/"ENTHOUSIASTE" (12 chars) were being clipped.
+  5. Added an apostrophe key to the letter keyboard -- missing but essential for French.
+  6. Renamed the replay button "Lire" -> "Rejouer" -- was confusable with the keyboards' own "▶"
+     play button (that one re-synthesizes; this one only replays the last audio).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: direct user feedback after testing on the Pi 5 a second time.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Mocked
+  `create_gui()` smoke run confirmed: landscape keyboard column weight is 0 (was 1), the options
+  canvas has a horizontal scrollbar, style label/chip-grid are on consecutive (not shared) rows,
+  the "RECONFORTANT" chip is wide enough (13) not to clip, the apostrophe key inserts `'`
+  correctly, and the replay button reads "Rejouer".
+- Notes/gotchas: three items from this same feedback round are NOT yet addressed, deliberately --
+  they need more than a mechanical fix: (a) "Mettre en veille doesn't seem to be effective" --
+  most likely `chatterbox-powerd` isn't running/reachable on the user's Pi (the client silently
+  no-ops if it can't connect at GUI startup, and doesn't retry), not a code bug in anything
+  touched this session; needs the user to confirm powerd's status before further action. (b) A
+  settings toggle to force portrait/landscape manually (as a persisted override, not just live
+  `<Configure>`-based auto-detection) -- open design question on where it lives / how it's
+  persisted. (c) A "Maintenance access" entry to re-enable wifi/bluetooth/terminal once the kiosk
+  is boot-locked (`scripts/kiosk_finalize.sh`) -- a security-sensitive feature (`dtoverlay=disable-
+  wifi/-bt` in `config.txt` needs a reboot to take effect, isn't a runtime toggle; a kiosk-escape
+  terminal needs real access-control thought) that needs a design conversation, not blind
+  implementation.
+
+---
+
 ## 2026-07-21 — PC-GUI feedback: menu reorg, settings auto-size, style/speaker defaults
 
 - What: five corrections from user testing on PC (not the Pi):
