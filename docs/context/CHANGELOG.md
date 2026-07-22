@@ -237,6 +237,40 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Seventh feedback round: keyboard fills available height, denser style chips
+
+- What: real-hardware landscape screenshots (800x480-ish) showed the keyboard -- "the most
+  important aspect of the GUI" -- sitting small and anchored to the top of its column, with a lot
+  of dead space below it, while the Style chip grid read as comparatively large.
+  1. The landscape keyboard now grids with `sticky=tk.NSEW` instead of `sticky=tk.N`. The
+     previously-computed `natural_height` (via `grid_propagate(False)` + explicit `height=`,
+     sixth round) is still the *minimum* -- still protects against the earlier "huge letters"
+     regression -- but the frame now stretches to fill however much height its row span actually
+     has, instead of anchoring at its own natural minimum and leaving blank space below.
+     `keyboard_area`'s own weighted internal row (and each keyboard's own weighted button rows/
+     columns) grow to fill that, so the keys themselves get physically bigger.
+  2. Style chips: width capped at 9 characters (was sized to fit the single longest option name,
+     "RECONFORTANT"/"ENTHOUSIASTE" at 12 chars, forcing every chip that wide), smaller font (8pt)
+     and padding, with each chip's label bound to wrap to its own actual rendered width (the
+     existing letter-keyboard "Tout effacer" wraplength-on-`<Configure>` fix extracted into a
+     shared `_wrap_label_to_width()` helper) so a name past the cap wraps onto two lines instead
+     of forcing an oversized button or silently clipping.
+  3. Duration-info pool rows (added in the interchangeable-backend refactor, phase 4) now start
+     `grid_remove()`'d instead of gridded-with-blank-text -- they previously still claimed their
+     row height before any synthesis had run, leaving a dead, empty-looking gap and denying that
+     height to the options panel's own weighted row. Real-hardware feedback: "as the synthesis
+     data has been reduced, it may be useful to extend the upper window" -- this reclaims that
+     space for the options panel automatically via the existing weight mechanism.
+- Files: `chatterbox/gui/app.py`.
+- Why: seventh real-hardware feedback round (landscape, 800x480-ish kiosk screen).
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test at a real
+  800x480 landscape geometry confirmed: keyboard height now matches the full window height (480,
+  was capped at its ~263px natural minimum); duration pool rows unmapped before any synthesis, all
+  three mapped after a 3-stage result; a 12-char style-chip label is capped at `width=9` with a
+  nonzero `wraplength` instead of forcing a wide button.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
