@@ -307,6 +307,44 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Ninth feedback round: stale scrollregion, cropped Synthèse, chip columns per orientation
+
+- What: real-hardware feedback on the previous round.
+  1. Landscape: clicking "Contrôles avancés" made the checkbox itself disappear and "Biais de
+     hauteur" render partly out of frame. Root cause: `canvas.config(scrollregion=canvas.bbox(
+     "all"))` was computed once at build time and never recomputed -- revealing more rows below
+     the fold (via `grid()`/`grid_remove()`) grows `frame_options`' actual content height, but the
+     canvas's scrollbar range stayed capped at the original, smaller size, so the newly-revealed
+     rows became genuinely unreachable by scrolling. Fixed by binding `frame_options`' own
+     `<Configure>` to recompute the scrollregion whenever its rendered size actually changes (the
+     standard Tkinter scrollable-frame idiom) instead of a one-time computation.
+  2. Landscape: "Synthèse is partly hidden by 'Texte à saisir'." That label's own unweighted
+     column left too little of the row's remaining width for the weighted Synthèse-button column,
+     clipping it to "nthè". Shortened the label to "Saisie" per the user's own suggestion.
+  3. Landscape: "Rejouer and Mettre en veille buttons can be placed slightly upper." The status/
+     error label (row 13) permanently reserved a blank row between the duration info and those two
+     buttons even with nothing to show. Now `grid_remove()`'d whenever there's no error (`_set_ui_
+     state()`), matching the same hide-when-empty idiom already used for the duration-info pool.
+  4. Portrait: "Styles and cursors can take more space in vertical, there can be 4 styles per
+     row." The chip grid's "target ~4 rows" column computation (introduced for landscape, where
+     the keyboard shares screen width) was being applied in portrait too, where there's no such
+     constraint. `_build_chip_grid_control()` now takes a `landscape` flag (decided once at GUI
+     build time from the window's actual on-screen shape): landscape keeps the narrower ~3-per-row
+     computation, portrait uses a flat 4-per-row (the original, pre-adaptive default).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: ninth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  the canvas scrollregion's height grows after revealing the bias sliders; the "Saisie" label
+  renders; the status label starts unmapped, maps on an error, unmaps again back to idle; the
+  style chip grid renders 3 columns at a landscape-shaped (900x480) window and 4 columns at a
+  portrait-shaped (440x800) one.
+- Notes/gotchas: the chip-grid orientation choice is decided once at build time, not live-
+  reactive to a later manual orientation override in Settings -> Advanced -- consistent with this
+  app's "portrait is native, landscape is maintenance-only" design, not expected to flip mid-
+  session in normal use.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
