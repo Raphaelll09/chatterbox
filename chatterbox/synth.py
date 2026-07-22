@@ -34,11 +34,17 @@ import tools.monitoring.profiling as profiling
 @dataclass
 class AudioResult:
     """Everything callers need to report on a synthesis -- the actual audio clip itself is handed
-    off via the existing chatterbox.audio.playback.AUDIO_EXAMPLE global (unchanged mechanism)."""
+    off via the existing chatterbox.audio.playback.AUDIO_EXAMPLE global (unchanged mechanism).
+
+    stage_durations replaces separate tts_duration_s/vocoder_duration_s/denoiser_duration_s fields
+    (interchangeable-backend GUI refactor, phase 2 -- see docs/context/CHANGELOG.md): a dict,
+    insertion-ordered, keyed by stage name ("tts", "vocoder", "denoiser" today). "vocoder" is
+    present only when the selected TTS model's needs_vocoder flag (config_tts.yaml) is true --
+    a monolithic backend produces a finished wav directly and has no separate vocoder stage to
+    time. Callers (chatterbox/cli.py, chatterbox/gui/app.py) iterate this generically instead of
+    reading named fields, so they don't need to change when a backend's stage set differs."""
     audio_duration_s: float
-    tts_duration_s: float
-    vocoder_duration_s: float
-    denoiser_duration_s: float
+    stage_durations: dict
     gst_weights: Optional[np.ndarray] = None
 
 
@@ -74,6 +80,12 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
         text = "{}{}".format(text, tts_config["default_end_punctuation"])
 
     text_to_syn = text
+
+    # Static per-model capability flag (config_tts.yaml, decidable before any model is loaded --
+    # see chatterbox/synthesis/base.py's describe_controls() docstring): a monolithic backend
+    # produces a finished wav directly during the "tts" call below and has no separate mel->wav
+    # stage to run.
+    needs_vocoder = tts_config['tts_models'][tts_idx].get('needs_vocoder', True)
 
     # Profiling: one recorder per top-level input line (shared across any "§" sub-utterances
     # synthesized below). No-op when profiling is disabled.
@@ -158,12 +170,18 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
         subtitles.write_subtitles(input_text_subtitles, processed_input_text_subtitles, duration_by_symbol_subtitles, tts_config["subtitles"]["max_nbr_char"])
 
     end_tts = time.time()
+    stage_durations = {"tts": end_tts - start_tts}
 
-    # Vocoder generates wav
-    start_vocoder = time.time()
-    with profiling_rec.stage("vocoder"):
-        location_wav_file = registry.BACKEND.vocoder(location_mel_file, tts_config['vocoder_models'][voc_idx])
-    end_vocoder = time.time()
+    # Vocoder generates wav -- skipped for a monolithic backend (needs_vocoder: False in
+    # config_tts.yaml), which already wrote a finished wav during the "tts" call above, under the
+    # same output-folder/AUDIO_FILE_NAME convention BACKEND.vocoder() itself returns.
+    if needs_vocoder:
+        start_vocoder = time.time()
+        with profiling_rec.stage("vocoder"):
+            location_wav_file = registry.BACKEND.vocoder(location_mel_file, tts_config['vocoder_models'][voc_idx])
+        stage_durations["vocoder"] = time.time() - start_vocoder
+    else:
+        location_wav_file = os.path.join(location_mel_file, "audio_file")
 
     # Denoise signal
     start_denoise = time.time()
@@ -190,7 +208,11 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
 
         wavfile.write(wav_path, rate, data)
 
-        if tts_config["visual_smoothing"]["activate"]:
+        # Visual/facial-animation params are backend-specific and optional (SynthesisResult.au_path
+        # docstring, chatterbox/synthesis/base.py) -- a backend that doesn't produce an .AU file
+        # (e.g. a monolithic model with no visual output) just skips this block instead of crashing.
+        path_au_for_smoothing = os.path.join(location_mel_file, 'audio_file.AU')
+        if tts_config["visual_smoothing"]["activate"] and os.path.exists(path_au_for_smoothing):
             shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count=4, dtype=np.int32))
             au_len = shape_au[0]
             au_dim = shape_au[1]
@@ -206,6 +228,7 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
             fp.close()
 
         end_denoise = time.time()
+        stage_durations["denoiser"] = end_denoise - start_denoise
 
         path_au = os.path.join(tts_config['tts_models'][tts_idx]["folder"], tts_config['tts_models'][tts_idx]["output_location"], "audio_file.AU")
         if os.path.exists(path_au):
@@ -235,8 +258,6 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
 
     return AudioResult(
         audio_duration_s=audio_duration,
-        tts_duration_s=end_tts - start_tts,
-        vocoder_duration_s=end_vocoder - start_vocoder,
-        denoiser_duration_s=end_denoise - start_denoise,
+        stage_durations=stage_durations,
         gst_weights=gst_weights,
     )

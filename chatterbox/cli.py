@@ -26,6 +26,11 @@ import tools.monitoring.profiling as profiling
 
 device = torch.device("cpu")
 
+# Console display name per AudioResult.stage_durations key (chatterbox/synth.py) -- falls back to
+# the raw key.title() for a stage name a future backend introduces that isn't listed here, so a
+# new backend's stages still get *some* readable console line without a code change here.
+_STAGE_DISPLAY_NAMES = {"tts": "TTS", "vocoder": "Vocoder", "denoiser": "Denoise"}
+
 
 def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
               sentence_id=None, complexity_tag=None, play=True):
@@ -54,12 +59,10 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
     if result is None:
         return  # empty input, same as the pre-refactor early return
 
-    print("TTS duration: {:.3f}s | {:.0f}% of audio".format(
-        result.tts_duration_s, 100 * result.tts_duration_s / result.audio_duration_s))
-    print("Vocoder duration: {:.3f}s | {:.0f}% of audio".format(
-        result.vocoder_duration_s, 100 * result.vocoder_duration_s / result.audio_duration_s))
-    print("Denoise duration: {:.3f}s | {:.0f}% of audio".format(
-        result.denoiser_duration_s, 100 * result.denoiser_duration_s / result.audio_duration_s))
+    for stage_key, stage_duration in result.stage_durations.items():
+        display_name = _STAGE_DISPLAY_NAMES.get(stage_key, stage_key.title())
+        print("{} duration: {:.3f}s | {:.0f}% of audio".format(
+            display_name, stage_duration, 100 * stage_duration / result.audio_duration_s))
 
     if play:
         playback.play_audio()

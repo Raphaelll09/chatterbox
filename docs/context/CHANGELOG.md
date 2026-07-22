@@ -15,6 +15,261 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 1/5: contract formalization
+
+- What: the user wants to be able to swap the FastSpeech2+HiFi-GAN backend for a
+  different TTS technology (possibly a monolithic model with no separate
+  vocoder stage) without rewriting the GUI. This is the first of a planned
+  5-phase refactor (see `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`
+  for the full design) that makes the *existing* backend conform to a generic
+  contract, proving it covers today's needs before any second backend exists.
+  No behavior change in this phase -- purely additive contract/config surface.
+  1. `SynthesisResult` (`chatterbox/synthesis/base.py`) gains `wav_path:
+     Optional[str] = None`. Convention: a two-stage backend (today's FS2+HiFi-
+     GAN) fills `mel_path`, leaves `wav_path=None`; a monolithic backend fills
+     `wav_path` directly, leaves `mel_path=None`. `chatterbox/synth.py`'s
+     `synthesize()` (phase 2) will branch on which one is set to decide whether
+     a vocoder call is needed at all.
+  2. `Synthesizer.describe_controls()`'s docstring formalizes the dict shape a
+     backend returns to drive a *generic* model-options panel: an ordered
+     `"controls"` list of `chip_grid`/`slider`/`text` descriptors (key, label
+     key, options/min/max/default, optional `hidden_pattern`/`advanced`
+     grouping) -- this will replace `gui_fastspeech2()`'s hand-written,
+     FS2-specific widget code in phase 4.
+  3. `config_tts.yaml`: two new static per-`tts_models`-entry capability flags,
+     decidable *before* a model loads (same convention as the existing
+     `gui_style_control`/`gui_control_bias`/`gui_styleTag_control` booleans) --
+     `needs_vocoder` (will hide the Settings -> Advanced Vocodeur picker for a
+     monolithic model, phase 5) and `accepts_phoneme_input` (will drive a new
+     `GUI_config.phoneme_fallback: "translate_labels" | "hide"` setting when a
+     model doesn't understand the Phonemes keyboard's raw phone-code syntax,
+     phase 5). Both default to `True` for the current FastSpeech2 model (no
+     behavior change).
+- Files: `chatterbox/synthesis/base.py`, `chatterbox/config/config_tts.yaml`.
+- Why: user request -- see plan file for the full context/design rationale,
+  including two research passes' findings on exactly what's FS2-specific today
+  (GUI duration labels/control panel, `AudioResult`, `cli.py` reporting, the
+  phoneme-keyboard's "Emmanuelle" custom phone-symbol alphabet with no G2P step).
+- Verify: full test suite (233 passed/1 skipped, unchanged -- nothing reads the
+  new fields yet).
+- Notes/gotchas: this is phase 1 of 5; phases 2-5 (synth.py pipeline, backend.py
+  schema, app.py generic panel, app.py keyboard/vocoder gating) are tracked in
+  the same plan file and will each get their own changelog entry.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 2/5: conditional vocoder + generic stage timing
+
+- What: second phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- makes
+  `chatterbox/synth.py`'s pipeline able to skip the vocoder stage entirely for a
+  monolithic backend, and duration reporting generic instead of 3 named fields.
+  1. `synth.synthesize()` reads phase 1's `needs_vocoder` config flag to decide
+     whether to call `BACKEND.vocoder()` at all -- a monolithic backend's
+     `tts()` call is expected to have already written a finished wav under the
+     same output-folder/`AUDIO_FILE_NAME` convention `BACKEND.vocoder()` itself
+     returns. Denoising stays universal regardless of pipeline shape.
+     Visual-smoothing's `.AU`-file read is now guarded by `os.path.exists()`
+     (matching the existing `gst_weights`/`path_au` exists-check pattern a few
+     lines down) since visual/facial-animation output is backend-optional
+     (`SynthesisResult.au_path`, already `Optional`).
+  2. `AudioResult.stage_durations` (dict, insertion-ordered) replaces the named
+     `tts_duration_s`/`vocoder_duration_s`/`denoiser_duration_s` fields --
+     `"vocoder"` is simply absent when `needs_vocoder` is false.
+  3. `chatterbox/cli.py`'s console reporting and `chatterbox/gui/app.py`'s
+     `_update_audio_info()` updated to read the generic dict (the latter is a
+     minimal compatibility shim for now -- `update_audio_infos()`'s own
+     hardcoded 3-argument signature gets replaced by a generic pooled-row
+     renderer in phase 4).
+- Files: `chatterbox/synth.py`, `chatterbox/cli.py`, `chatterbox/gui/app.py`,
+  `tests/test_synth.py`, `tests/test_gui_worker.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (234 passed/1 skipped -- one new test added
+  confirming "vocoder" can be legitimately absent from `stage_durations`).
+- Notes/gotchas: phase 3 (backend.py's `describe_controls()` schema + dict-keyed
+  `gui_control`) and phase 4 (app.py's generic control panel + duration rows)
+  are next; `update_audio_infos()`'s signature is intentionally still
+  FS2-specific until phase 4.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 3/5: describe_controls() schema, dict gui_control
+
+- What: third phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `FastSpeech2HifiGanBackend.describe_controls()` now emits the full
+  `"controls"` schema mirroring exactly what `gui_fastspeech2()` used to
+  hand-build directly from `config_tts.yaml`: style chip grid (`TOKEN13-16`
+  placeholders hidden via `hidden_pattern`), style-intensity slider, pitch/
+  energy/speed sliders, 5 "bias" sliders, StyleTag free-text entry -- read from
+  the same YAML keys it already had (no new YAML schema for the controls
+  themselves).
+  1. `load_fastspeech2()` now keeps the `config_tts.yaml` model entry itself
+     (`self.tts_model_config`) alongside the parsed FastSpeech2 sub-configs
+     (`self.configs`) -- `describe_controls()` needs it.
+  2. `syn_fastspeech2()`'s `gui_control` unpacking changed from a fixed
+     12-element positional list to a dict keyed by the same "key"s
+     `describe_controls()` declares -- the fragile part of the old contract a
+     different backend couldn't conform to. Uses `.get(key, <yaml default>)`
+     throughout so an undeclared control falls back to the model's own
+     configured default instead of a `KeyError`, matching today's actual
+     behavior (a hidden-but-created slider/entry still contributes its
+     default value).
+  3. Bias sliders get an `"advanced"` flag from `gui_control_bias` -- phase 4's
+     generic panel will add one shared "advanced controls" reveal toggle for
+     these, where today there was none at all (`gui_control_bias: False` meant
+     permanently absent, no way to reveal from the GUI). A small, low-risk UX
+     improvement that falls out of building this generically, not a design
+     goal on its own.
+- Files: `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`,
+  `tests/test_backend_describe_controls.py` (new, 7 tests).
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (241 passed/1 skipped -- 7 new).
+- Notes/gotchas: phase 4 (`app.py`'s generic control panel + duration rows) is
+  next -- until then `gui_fastspeech2()` in `app.py` still builds the panel the
+  old, hand-written way and does NOT yet call `describe_controls()["controls"]`
+  at all; this phase only prepared the data the backend side will hand over.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 4/5: generic control panel + duration pool
+
+- What: fourth (largest) phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `gui_fastspeech2()` -- FS2-specific, hand-written widget code -- is replaced
+  by `gui_generic_controls()`, which renders the panel entirely from the
+  active backend's `describe_controls()`: a speaker dropdown (skipped for a
+  backend with no `speaker_list`) plus one widget per `"controls"` entry,
+  dispatched by `"type"` (`chip_grid`/`slider`/`text`) to small builder
+  helpers reusing the exact logic `gui_fastspeech2()` used to hand-write
+  (stable-sort-default-first, dynamic 4-row chip columns, `hidden_pattern`-
+  gated placeholders).
+  1. `get_gui_controls()` returns a dict (was a fixed 12-element positional
+     list) assembled from `_generic_control_widgets`.
+  2. `describe_controls()` gained `"default_speaker"` (the backend's own
+     configured default speaker index) -- `app.py` no longer reads
+     `config_tts.yaml`'s `default_args` directly at all for the speaker
+     dropdown, keeping it fully generic.
+  3. Bias sliders' `"advanced"` flag now drives one new shared "Contrôles
+     avancés" toggle in the generic panel -- reveals/hides them together
+     instead of `gui_control_bias: False` meaning permanently absent with no
+     way to show them from the GUI (a small, low-risk UX improvement, not a
+     design goal on its own).
+  4. Duration display: the 3 hardcoded tts/vocoder/denoiser labels are
+     replaced by a pool of 3 generic rows, assigned to whichever
+     `stage_durations` keys are present at synthesis time via one shared i18n
+     template (`stage_duration_label`) + a display-name lookup, instead of 3
+     separate pre-written i18n keys -- hides any pool row a synthesis didn't
+     use (e.g. no `"vocoder"` for a monolithic backend). The "Afficher les
+     données de synthèse" menu checkbox now tracks how many pool rows are
+     actually active so re-enabling it doesn't reveal an unused row.
+  5. `config_tts.yaml`'s `gui_script` now points at `gui_generic_controls`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`,
+  `chatterbox/synthesis/base.py`, `chatterbox/synthesis/backends/
+  fastspeech2_hifigan/backend.py`, `chatterbox/config/config_tts.yaml`,
+  `tests/test_backend_describe_controls.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (mocked `describe_controls()`, no pretrained weights) confirmed
+  pixel-identical FS2 layout (speaker dropdown defaults correctly, style grid
+  still 4 rows x 3 cols for 12 named tokens, all 9 sliders present with
+  matching ranges/resolutions/defaults), the new advanced-controls toggle
+  correctly shows/hides bias sliders, `get_gui_controls()`'s keys match what
+  `backend.py`'s `syn_fastspeech2()` reads, and the duration pool correctly
+  handles both a 2-stage (monolithic-shaped) and 3-stage (today's FS2) result.
+- Notes/gotchas: phase 5 (`needs_vocoder`-gated Vocodeur picker + phoneme-
+  keyboard fallback) is last -- until then the Vocodeur picker always shows
+  and the Phonèmes keyboard has no fallback behavior wired up yet even though
+  the capability flags/config setting exist (phase 1).
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 5/5: vocoder gating + phoneme fallback
+
+- What: fifth and final phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- wires
+  up the two static per-model capability flags from phase 1 (`needs_vocoder`,
+  `accepts_phoneme_input`) to actual GUI behavior.
+  1. Settings -> Advanced's Vocodeur picker row is skipped entirely when the
+     selected TTS model's `needs_vocoder` is false (a monolithic model has
+     nothing to pick).
+  2. `_keyboard_emit()` checks the active model's `accepts_phoneme_input`:
+     when false, a phoneme keypress inserts the key's already-computed display
+     label (ordinary French spelling, e.g. "CH"/"ON") instead of the raw phone
+     code (this backend's own custom phone-symbol alphabet -- no G2P step
+     exists anywhere in this pipeline for a different backend to fall back
+     on). Per the user's explicit choice, the fallback itself is a config
+     setting (`GUI_config.phoneme_fallback`): `"translate_labels"` (default)
+     keeps the Phonemes keyboard usable with that substitution;
+     `"hide"` removes the Texte/Phonemes toggle and the phoneme keyboard
+     entirely, forcing Texte-only mode.
+  3. `_apply_keyboard_capabilities()`/`_refresh_keyboard_capabilities` (new,
+     mirrors the existing `_refresh_orientation` pattern) re-evaluates
+     `accepts_phoneme_input` whenever the TTS model is switched live from
+     Settings -> Advanced, not just once at startup.
+  4. Compat fix found via smoke testing: `chatterbox/gui/keyboards.py`'s
+     "Emmanuelle" phoneme keyboard has its own hardcoded mood-shortcut keys
+     (`:D`/`:p`/`:(`/`:O`) that resolve the literal global name
+     `"gst_token_selection"` via `app.py`'s `globals()` to temporarily
+     override the GST style selection around a quick styled phrase. Phase 4
+     removed that global entirely, which broke GUI startup outright (a
+     `KeyError` at button-creation time, not even requiring a keypress).
+     Fixed by keeping `gst_token_selection` as a compat alias, set to the
+     "style" chip_grid's `IntVar` whenever `gui_generic_controls()` builds
+     one (module-level default `None` otherwise, so a backend with no
+     "style" control degrades to a no-op on those keys instead of crashing).
+- Files: `chatterbox/gui/app.py`.
+- Why: see phase 1's entry above for the full user request/context. This
+  closes out the 5-phase refactor -- FastSpeech2+HiFi-GAN now conforms fully
+  to the generic contract; a future backend needs only its own module +
+  `config_tts.yaml` entry, no `app.py`/`synth.py` changes.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (two fake TTS models -- monolithic/no-phonemes vs two-stage/
+  phonemes-ok, mocked `describe_controls()`, no pretrained weights) confirmed:
+  Vocodeur picker absent for the monolithic model, present after switching to
+  the two-stage model; a phoneme keypress inserts "CH " for the no-phonemes
+  model and "s^ " after live-switching to the phonemes-capable one;
+  `phoneme_fallback="hide"` un-maps the Phonemes mode radio button entirely.
+- Notes/gotchas: `keyboards.py`'s "Emmanuelle" mood-shortcut keys and phoneme
+  symbol table remain FS2/GST-specific by design (documented, not touched) --
+  a future backend that also wants phoneme input support would need its own
+  keyboard layout/symbol table, not a reuse of this one.
+
+---
+
+## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
+
+- What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
+  speaker/style options panel gone and "Mettre en veille" cut off past the bottom edge. Root
+  cause, confirmed with a reproduction script driving the real `create_gui()` at 800x480: the
+  landscape keyboard was gridded at a single row (`row=0`), but Tk's grid row height is shared
+  across every column at that row index -- placing the ~263px-tall keyboard there forced row 0 to
+  be ~263px tall for EVERY column, including column 0 where only a small battery label lives. That
+  stole the vertical budget from row 2 (the options panel, the only weighted row), collapsing it
+  from a healthy size to 7px, while the fixed rows below it (Texte a saisir, duree labels, Rejouer,
+  Mettre en veille) kept their natural size and overflowed past the window's bottom edge.
+  Fixed by spanning the keyboard across the same row range the main content stack already
+  occupies (`rowspan=18+index_gst_token`) instead of a single row, so its height gets absorbed by
+  row 2 (still the only weighted row in that span) instead of inflating row 0 alone.
+- Also fixed: the letter keyboard's "Tout effacer" button rendered as "out effacer" -- clipped
+  once the landscape width cap (Settings -> Advanced fraction) made its column narrower than the
+  label's natural width, same class of bug as the earlier GST-token chip clipping. Its control-row
+  buttons (Espace/Effacer/Tout effacer/Play) now bind `wraplength` to their own actual
+  `<Configure>` width, so labels wrap instead of clipping regardless of the chosen fraction.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `_create_letter_keyboard()`).
+- Why: sixth real-hardware feedback round (800x480-ish kiosk screen).
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk reproduction at a real
+  800x480 geometry confirmed: options-panel frame height went from 7px (collapsed) to 270px;
+  "Mettre en veille" (row 17) still ends exactly at the window's bottom edge (480), no longer past
+  it; "Tout effacer" now reports a nonzero `wraplength` (66px) matching its actual rendered width
+  instead of clipping.
+- Notes/gotchas: row 17 (Mettre en veille) still ends EXACTLY at the window's bottom edge with no
+  slack on an 800x480 screen -- any future addition to the fixed-row stack (another always-visible
+  label/button) will need either more vertical budget or to go behind a toggle, the same way
+  audio-info rows already do.
+
+---
+
 ## 2026-07-22 — Fifth feedback round: landscape keyboard zero-height bug, style grid rows
 
 - What: user reported "both keyboards disappeared, whatever dimension we chose" (the landscape

@@ -26,17 +26,24 @@ def test_synthesize_returns_none_for_whitespace_only():
 
 def test_audio_result_field_shape():
     result = AudioResult(
-        audio_duration_s=1.0, tts_duration_s=0.5, vocoder_duration_s=0.3,
-        denoiser_duration_s=0.1, gst_weights=None,
+        audio_duration_s=1.0,
+        stage_durations={"tts": 0.5, "vocoder": 0.3, "denoiser": 0.1},
+        gst_weights=None,
     )
     names = {f.name for f in fields(result)}
-    assert names == {
-        "audio_duration_s", "tts_duration_s", "vocoder_duration_s",
-        "denoiser_duration_s", "gst_weights",
-    }
+    assert names == {"audio_duration_s", "stage_durations", "gst_weights"}
     assert result.gst_weights is None
 
 
 def test_audio_result_gst_weights_defaults_to_none():
-    result = AudioResult(audio_duration_s=1.0, tts_duration_s=0.5, vocoder_duration_s=0.3, denoiser_duration_s=0.1)
+    result = AudioResult(audio_duration_s=1.0, stage_durations={"tts": 0.5})
     assert result.gst_weights is None
+
+
+def test_audio_result_stage_durations_omits_vocoder_for_monolithic_backend():
+    # A monolithic backend (needs_vocoder: False) never runs a separate vocoder stage -- see
+    # chatterbox/synth.py's synthesize(), which only adds "vocoder" to stage_durations when the
+    # active TTS model's needs_vocoder flag is true.
+    result = AudioResult(audio_duration_s=1.0, stage_durations={"tts": 0.5, "denoiser": 0.1})
+    assert "vocoder" not in result.stage_durations
+    assert set(result.stage_durations) == {"tts", "denoiser"}
