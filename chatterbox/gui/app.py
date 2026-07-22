@@ -53,6 +53,14 @@ canvas_circle_figure = None
 lbl_status = None
 lbl_battery = None
 
+# Manual portrait/landscape override (Settings -> Advanced): None means "auto" (today's
+# <Configure>-based detection); "portrait"/"landscape" forces that layout regardless of actual
+# window size -- real-hardware feedback: a kiosk's window may never receive a genuine resize event
+# at runtime, making pure auto-detection unreliable in practice. _refresh_orientation is set (to a
+# callable) only when the embedded keyboard/reflow machinery exists in create_gui() below.
+_orientation_override = None
+_refresh_orientation = None
+
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
 # is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
@@ -303,6 +311,17 @@ def _toggle_settings():
 
 def _show_about():
     messagebox.showinfo(i18n.t("about_title"), i18n.t("about_body"))
+
+
+def _set_orientation_override(value):
+    """Settings -> Advanced's orientation radio buttons. value is "auto"/"portrait"/"landscape";
+    "auto" clears the override (back to <Configure>-based detection). Immediately re-applies the
+    layout via _refresh_orientation() -- set only when the embedded-keyboard reflow machinery
+    exists (gui_config["add_keyboard"] and not detach_keyboard)."""
+    global _orientation_override
+    _orientation_override = None if value == "auto" else value
+    if _refresh_orientation is not None:
+        _refresh_orientation()
 
 
 def _back_action():
@@ -595,6 +614,22 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             list_vocoder_buttons.append(btn)
         select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
 
+        # Manual portrait/landscape override -- only meaningful (and only shown) when the
+        # embedded-keyboard reflow machinery below actually exists (_refresh_orientation is set).
+        # A kiosk's window may never receive a genuine resize event at runtime, making the
+        # <Configure>-based auto-detection unreliable in practice (real-hardware feedback).
+        if _refresh_orientation is not None:
+            tk.Label(master=parent_frame, text=i18n.t("orientation_label")).grid(
+                row=2, column=0, sticky=tk.W, padx=4, pady=2)
+            orientation_var = tk.StringVar(value=_orientation_override or "auto")
+            for col, (value, label_key) in enumerate(
+                    [("auto", "orientation_auto"), ("portrait", "orientation_portrait"),
+                     ("landscape", "orientation_landscape")], start=1):
+                tk.Radiobutton(
+                    master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
+                    value=value, command=lambda v=value: _set_orientation_override(v),
+                ).grid(row=2, column=col, sticky=tk.EW, padx=2, pady=2)
+
     _select_tts_model(tts_config["tts_models"][default_tts], default_tts + 1)
     _select_vocoder_model(tts_config["vocoder_models"][default_vocoder], default_vocoder + 1)
 
@@ -764,7 +799,12 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             def _on_window_configure(event, _state=layout_state, _kb=keyboard_area,
                                       _portrait=keyboard_portrait_grid,
                                       _col=landscape_keyboard_column):
-                landscape = window.winfo_width() > window.winfo_height()
+                if _orientation_override == "landscape":
+                    landscape = True
+                elif _orientation_override == "portrait":
+                    landscape = False
+                else:
+                    landscape = window.winfo_width() > window.winfo_height()
                 if landscape == _state["is_landscape"]:
                     return
                 _state["is_landscape"] = landscape
@@ -782,6 +822,9 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             window.bind("<Configure>", _on_window_configure)
             window.update_idletasks()
             _on_window_configure(None)
+
+            global _refresh_orientation
+            _refresh_orientation = lambda: _on_window_configure(None)
 
     # Warm-up (spec Sec6): scheduled after the window is fully built, right before mainloop, so
     # it doesn't delay the first paint. Runs on the busy/worker machinery above.
