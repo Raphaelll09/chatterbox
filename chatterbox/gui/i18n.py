@@ -63,10 +63,6 @@ STRINGS = {
         "orientation_auto": "Auto",
         "orientation_portrait": "Portrait",
         "orientation_landscape": "Paysage",
-        "keyboard_width_label": "Largeur clavier (paysage) :",
-        "keyboard_width_half": "1/2",
-        "keyboard_width_two_thirds": "2/3",
-        "keyboard_width_three_quarters": "3/4",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
     },
