@@ -54,6 +54,10 @@ STRINGS = {
         "keyboard_space": "Espace",
         "keyboard_backspace": "Effacer",
         "menu_toggle_audio_info": "Afficher les données de synthèse",
+        "orientation_label": "Orientation :",
+        "orientation_auto": "Auto",
+        "orientation_portrait": "Portrait",
+        "orientation_landscape": "Paysage",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
     },
