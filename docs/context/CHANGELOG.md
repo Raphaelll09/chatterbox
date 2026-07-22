@@ -15,6 +15,39 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Fifth feedback round: landscape keyboard zero-height bug, style grid rows
+
+- What: user reported "both keyboards disappeared, whatever dimension we chose" (the landscape
+  keyboard-width fraction from the fourth round) and asked for the style chip grid to use 4 rows
+  so every style fits once the keyboard takes half the screen.
+  1. Root cause of the disappearing keyboards: `grid_propagate(False)` stops Tk deriving BOTH
+     width and height from a frame's children, not just width -- the landscape reflow
+     (`_apply_current_orientation()`) only ever called `.config(width=...)`, never `height=`, so
+     `keyboard_area` silently collapsed to ~0px tall the moment propagate was turned off,
+     regardless of the configured fraction (the fraction only ever changed the width that was
+     being applied to an invisible frame). Fixed by measuring `winfo_reqheight()` with propagate
+     still on (so it reflects the actual keyboard content) immediately before locking the frame's
+     size, and passing that as an explicit `height=` alongside `width=`.
+  2. GST-style chip grid: columns-per-row was a fixed 4, giving 3 rows for the 12 named tokens --
+     real-hardware feedback was that 4-wide rows overflowed the narrower options column once the
+     landscape keyboard ate half the screen's width. Chips-per-row is now derived from the named
+     (non-`TOKEN*`-placeholder) token count via ceiling division targeting 4 rows, giving 3
+     columns x 4 rows for the current 12-token config instead of 4x3.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `gui_fastspeech2()`'s style
+  chip-grid block).
+- Why: fifth real-hardware/PC feedback round.
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk smoke test (mocked
+  model loading, no pretrained weights) confirmed: landscape `keyboard_area` height is 263px (not
+  ~0) after a resize + fraction change; the 12 named style chips land on grid rows 0-3 (4 rows)
+  across columns 0-2 (3 columns).
+- Notes/gotchas: `_CHIPS_PER_ROW` is no longer shared between the speaker dropdown and the style
+  grid -- it now only sizes the speaker dropdown's columnspan; the style grid computes its own
+  `_style_chips_per_row`. If the named-token count changes (a new style trained, or a placeholder
+  promoted to real), the column count reflows automatically to keep ~4 rows rather than needing a
+  manual constant update.
+
+---
+
 ## 2026-07-21 — Power-timer presets: eliminate overlap between adjacent ranges
 
 - What: user clarified the ambiguous "timer before assombrissement" comment from the fourth
