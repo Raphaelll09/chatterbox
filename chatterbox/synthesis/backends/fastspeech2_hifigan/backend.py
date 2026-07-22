@@ -70,6 +70,7 @@ class FastSpeech2HifiGanBackend:
 
     def __init__(self):
         self.tts_model = None
+        self.tts_model_config = None
         self.configs = None
         self.flaubert_model = None
         self.flaubert_tokenizer = None
@@ -81,6 +82,11 @@ class FastSpeech2HifiGanBackend:
     # ---- Loading (was loading_modules.py) --------------------------------
 
     def load_fastspeech2(self, tts_model, device):
+        # Kept for describe_controls() below (interchangeable-backend GUI refactor) -- the config_
+        # tts.yaml model entry itself, not just the parsed FastSpeech2 preprocess/model/train
+        # configs self.configs already holds.
+        self.tts_model_config = tts_model
+
         model_folder = tts_model["folder"]
         default_args = tts_model["default_args"]
         model_ckpt = tts_model["checkpoint_file"]
@@ -185,18 +191,25 @@ class FastSpeech2HifiGanBackend:
         styleTag = ""
 
         if not (gui_control is None):
-            args['speaker_id'] = gui_control[0]
-            args['pitch_control'] = gui_control[1]
-            args['energy_control'] = gui_control[2]
-            args['duration_control'] = gui_control[3]
-            args['pitch_control_bias'] = gui_control[4]
-            args['energy_control_bias'] = gui_control[5]
-            args['duration_control_bias'] = gui_control[6]
-            args['pause_control_bias'] = gui_control[7]
-            args['liaison_control_bias'] = gui_control[8]
-            args['gst_token_index'] = gui_control[9]
-            args['style_intensity'] = gui_control[10]
-            styleTag = gui_control[11]
+            # gui_control is a dict keyed by the same "key"s describe_controls() declares below
+            # (interchangeable-backend GUI refactor -- was a fixed 12-element positional list,
+            # too fragile for a different backend to conform to; see docs/context/CHANGELOG.md).
+            # .get(key, <yaml default>) so a control describe_controls() doesn't declare (e.g. a
+            # differently-configured model that hides style entirely) falls back to this model's
+            # own configured default instead of a KeyError -- matches today's actual behavior,
+            # where a hidden-but-still-created slider/entry contributes its default value.
+            args['speaker_id'] = gui_control.get('speaker', args['speaker_id'])
+            args['pitch_control'] = gui_control.get('pitch', args['pitch_control'])
+            args['energy_control'] = gui_control.get('energy', args['energy_control'])
+            args['duration_control'] = gui_control.get('speed', args['duration_control'])
+            args['pitch_control_bias'] = gui_control.get('pitch_bias', args['pitch_control_bias'])
+            args['energy_control_bias'] = gui_control.get('energy_bias', args['energy_control_bias'])
+            args['duration_control_bias'] = gui_control.get('speed_bias', args['duration_control_bias'])
+            args['pause_control_bias'] = gui_control.get('pause_bias', args['pause_control_bias'])
+            args['liaison_control_bias'] = gui_control.get('liaison_bias', args['liaison_control_bias'])
+            args['gst_token_index'] = gui_control.get('style', args['gst_token_index'])
+            args['style_intensity'] = gui_control.get('style_intensity', args['style_intensity'])
+            styleTag = gui_control.get('style_tag', styleTag)
 
         pitch_control = args["pitch_control"]
         energy_control = args["energy_control"]
@@ -369,6 +382,65 @@ class FastSpeech2HifiGanBackend:
     def describe_controls(self):
         """Speaker list read from the currently loaded model's preprocessed_path -- closes
         gui_utils.py:355's leak of re-opening the FastSpeech2 preprocess.yaml directly just to
-        get this (docs/REORG_PROPOSAL.md Sec5)."""
+        get this (docs/REORG_PROPOSAL.md Sec5).
+
+        The "controls" list (interchangeable-backend GUI refactor -- see chatterbox/synthesis/
+        base.py's describe_controls() docstring for the general shape) mirrors exactly what
+        gui_fastspeech2() used to hand-build directly from config_tts.yaml: a style chip grid
+        (with the unnamed TOKEN13-16 placeholders hidden behind an "advanced" toggle), a style-
+        intensity slider, pitch/energy/speed sliders, 5 "bias" sliders grouped behind the same
+        advanced toggle as gui_control_bias used to gate, and a free-text StyleTag entry. gui/
+        app.py's gui_generic_controls() renders one widget per entry in order and collects values
+        into a dict keyed by "key" -- syn_fastspeech2() above reads that same dict by key."""
         speakers_location = os.path.join(self.configs[0]['path']['preprocessed_path'], "speakers.json")
-        return {"speaker_list": text_pipeline.get_speaker_list(speakers_location)}
+        tts_model = self.tts_model_config
+        default_args = tts_model["default_args"]
+
+        controls = []
+
+        if tts_model.get("gui_style_control", True):
+            controls.append({
+                "type": "chip_grid", "key": "style", "label_key": "style_label",
+                "options": [*tts_model["gst_token_list"]],
+                "default": default_args["gst_token_index"],
+                "hidden_pattern": r"^TOKEN\d+$",
+            })
+            controls.append({
+                "type": "slider", "key": "style_intensity", "label_key": "style_intensity_label",
+                "min": 0.0, "max": 1.0, "resolution": 0.05, "default": default_args["style_intensity"],
+            })
+
+        controls.append({"type": "slider", "key": "pitch", "label_key": "pitch_label",
+                          "min": -15.0, "max": 15.0, "resolution": 1.0,
+                          "default": default_args["pitch_control"]})
+        controls.append({"type": "slider", "key": "energy", "label_key": "energy_label",
+                          "min": -20.0, "max": 20.0, "resolution": 1.0,
+                          "default": default_args["energy_control"]})
+        controls.append({"type": "slider", "key": "speed", "label_key": "speed_label",
+                          "min": 0.5, "max": 1.5, "resolution": 0.1,
+                          "default": default_args["duration_control"]})
+
+        gui_control_bias = tts_model.get("gui_control_bias", False)
+        controls.append({"type": "slider", "key": "pitch_bias", "label_key": "pitch_bias_label",
+                          "min": -6.0, "max": 6.0, "resolution": 0.5,
+                          "default": default_args["pitch_control_bias"], "advanced": not gui_control_bias})
+        controls.append({"type": "slider", "key": "energy_bias", "label_key": "energy_bias_label",
+                          "min": -5.0, "max": 5.0, "resolution": 1.0,
+                          "default": default_args["energy_control_bias"], "advanced": not gui_control_bias})
+        controls.append({"type": "slider", "key": "speed_bias", "label_key": "speed_bias_label",
+                          "min": 0.5, "max": 1.5, "resolution": 0.1,
+                          "default": default_args["duration_control_bias"], "advanced": not gui_control_bias})
+        controls.append({"type": "slider", "key": "pause_bias", "label_key": "pause_bias_label",
+                          "min": -2.0, "max": 2.0, "resolution": 0.1,
+                          "default": default_args["pause_control_bias"], "advanced": not gui_control_bias})
+        controls.append({"type": "slider", "key": "liaison_bias", "label_key": "liaison_bias_label",
+                          "min": -2.0, "max": 2.0, "resolution": 0.1,
+                          "default": default_args["liaison_control_bias"], "advanced": not gui_control_bias})
+
+        if tts_model.get("gui_styleTag_control", False):
+            controls.append({"type": "text", "key": "style_tag", "label_key": "styletag_label"})
+
+        return {
+            "speaker_list": text_pipeline.get_speaker_list(speakers_location),
+            "controls": controls,
+        }
