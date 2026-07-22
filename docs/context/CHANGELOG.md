@@ -58,6 +58,41 @@ state before starting new work.
 
 ---
 
+## 2026-07-22 — Interchangeable-backend GUI, phase 2/5: conditional vocoder + generic stage timing
+
+- What: second phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- makes
+  `chatterbox/synth.py`'s pipeline able to skip the vocoder stage entirely for a
+  monolithic backend, and duration reporting generic instead of 3 named fields.
+  1. `synth.synthesize()` reads phase 1's `needs_vocoder` config flag to decide
+     whether to call `BACKEND.vocoder()` at all -- a monolithic backend's
+     `tts()` call is expected to have already written a finished wav under the
+     same output-folder/`AUDIO_FILE_NAME` convention `BACKEND.vocoder()` itself
+     returns. Denoising stays universal regardless of pipeline shape.
+     Visual-smoothing's `.AU`-file read is now guarded by `os.path.exists()`
+     (matching the existing `gst_weights`/`path_au` exists-check pattern a few
+     lines down) since visual/facial-animation output is backend-optional
+     (`SynthesisResult.au_path`, already `Optional`).
+  2. `AudioResult.stage_durations` (dict, insertion-ordered) replaces the named
+     `tts_duration_s`/`vocoder_duration_s`/`denoiser_duration_s` fields --
+     `"vocoder"` is simply absent when `needs_vocoder` is false.
+  3. `chatterbox/cli.py`'s console reporting and `chatterbox/gui/app.py`'s
+     `_update_audio_info()` updated to read the generic dict (the latter is a
+     minimal compatibility shim for now -- `update_audio_infos()`'s own
+     hardcoded 3-argument signature gets replaced by a generic pooled-row
+     renderer in phase 4).
+- Files: `chatterbox/synth.py`, `chatterbox/cli.py`, `chatterbox/gui/app.py`,
+  `tests/test_synth.py`, `tests/test_gui_worker.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (234 passed/1 skipped -- one new test added
+  confirming "vocoder" can be legitimately absent from `stage_durations`).
+- Notes/gotchas: phase 3 (backend.py's `describe_controls()` schema + dict-keyed
+  `gui_control`) and phase 4 (app.py's generic control panel + duration rows)
+  are next; `update_audio_infos()`'s signature is intentionally still
+  FS2-specific until phase 4.
+
+---
+
 ## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
 
 - What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
