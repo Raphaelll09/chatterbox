@@ -39,14 +39,34 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs, `SynthesisRequest`/`SynthesisResult`
     dataclasses (the latter's `wav_path` vs `mel_path` is how a monolithic backend signals "already
     a finished wav, no vocoding needed" — see "Interchangeable backends" below); `registry.py` —
-    the `BACKEND` singleton, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script`
-    strings, unchanged, now resolved via `getattr(registry.BACKEND, name)` instead of a flat
-    module).
+    `BACKEND`, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script`/`gui_script`
+    strings, resolved via `getattr(registry.BACKEND, name)`, same as before the Piper integration).
+    `BACKEND` is now a small resolving proxy (`_BackendProxy`), not a bare singleton instance —
+    added when a second backend (Piper) proved the original bare-singleton design couldn't
+    disambiguate `tts()`/`describe_controls()` (identically named on every backend by design) once
+    more than one was registered; `activate_tts_backend(name)`, called by `cli.py`/`gui/app.py`
+    immediately before resolving a `tts_models[i]` entry's `load_script` (per that entry's new
+    `backend` field, e.g. `"piper"` — omitted defaults to `"fastspeech2_hifigan"`), tells the proxy
+    which concrete backend colliding names should resolve against. See
+    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for the full contract-gap writeup.
   - `synthesis/backends/fastspeech2_hifigan/` — `backend.py` (was `loading_modules.py` +
     `synthesis_modules.py`'s model-calling functions, now a `FastSpeech2HifiGanBackend` class owning
     loaded-model state as instance attributes) + `text_pipeline.py` (was `synthesis_modules.py`'s
     text-processing functions: control-tag parsing, pronunciation/punctuation cleanup) +
-    `rules/*.csv` (the regex rule files).
+    `rules/*.csv` (the regex rule files — heavily FS2-`{phonetic}`-syntax-specific despite the
+    substitution mechanism itself being generic regex replace; see `synthesis/backends/piper/`'s
+    own note on why it doesn't reuse `parse_pronunciation_mistakes()` unconditionally).
+  - `synthesis/backends/piper/` — the second backend (`backend.py`'s `PiperBackend`: `load_piper`,
+    `tts`, `describe_controls`; `text_frontend.py`'s own tag-parsing/speaker-resolution, deliberately
+    not routed through `fastspeech2_hifigan/text_pipeline.py`'s FS2-specific machinery beyond the
+    genuinely orthographic `trim_punctuation_mistakes()`). Monolithic (`needs_vocoder: false`), no
+    style dimension, `piper-tts` (optional, GPL-3.0-or-later — install manually, not in
+    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 3 voices
+    (`fr_FR-siwis-medium`/`upmc-medium`/`tom-medium`, fetched by `scripts/fetch_piper_voices.sh`
+    into `assets/models/Piper/`, not committed). See its own `README.md` for provenance/licence and
+    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what this integration found and fixed in the
+    contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
+    `gui_generic_controls()` — see that section, not repeated here).
   - `synthesis/audio_postprocess.py` — unchanged from pre-reorg `audio_postprocess.py`.
   - `synthesis/subtitles.py` — subtitle/duration-alignment file writers (was part of
     `audio_utils.py`).
@@ -139,10 +159,16 @@ module names/paths predate the Phase 3 reorg above; cross-check against this fil
 
 ## Interchangeable backends
 
-The GUI/synthesis-result layer is generic, not hardcoded to FastSpeech2 — a future backend swap
-(e.g. a monolithic state-of-the-art model with no separate vocoder stage) should need **no**
-changes to `chatterbox/gui/app.py` or `chatterbox/synth.py`, only its own backend module +
-`config_tts.yaml` entry conforming to this contract:
+The GUI/synthesis-result layer is generic, not hardcoded to FastSpeech2 — a backend swap (e.g. a
+monolithic state-of-the-art model with no separate vocoder stage) needs **no** changes to
+`chatterbox/gui/app.py` or `chatterbox/synth.py`, only its own backend module + `config_tts.yaml`
+entry conforming to this contract. **No longer just a design goal**: the Piper (fr_FR) backend
+(`chatterbox/synthesis/backends/piper/`) proved this against a real second backend, and found that
+`chatterbox/synthesis/registry.py` itself needed a small fix first (a bare-singleton `BACKEND`
+couldn't resolve which backend's `tts()`/`describe_controls()` a caller meant once a second one
+existed) plus a stale-Tk-variable bug in `gui/app.py`'s `gui_generic_controls()` — both fixed, both
+documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither required touching
+`synth.py`. The contract described below is what actually held up under that test:
 
 - **Model-options panel**: `Synthesizer.describe_controls()` (`chatterbox/synthesis/base.py`,
   docstring has the full return shape) returns `speaker_list`/`default_speaker` plus an ordered

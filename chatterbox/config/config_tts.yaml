@@ -147,6 +147,69 @@ tts_models:
       style_intensity: 1.0
       enforce_linking_duration: True
 
+  # Piper (fr_FR, piper-tts==1.5.0) -- monolithic text->wav backend, see
+  # chatterbox/synthesis/backends/piper/backend.py and docs/context/CHANGELOG.md. "backend" is a
+  # new per-entry field (chatterbox/synthesis/registry.py's _BackendProxy) telling cli.py/gui/
+  # app.py which concrete backend class to activate before resolving load_script -- omitted
+  # entirely on the FastSpeech2 entry above, which defaults to "fastspeech2_hifigan". All 3 Piper
+  # voices share one output_location: only one is ever "active" at a time, same as FS2's single
+  # model, so switching voices mid-session just overwrites the same audio_file.wav.
+  # apply_custom_regex_rules defaults to false (opt-in): confirmed live during Phase B that
+  # custom_regex_rules.csv/url_regex_rules.csv (rules/) are full of FS2's own "{phonetic}" bracket
+  # syntax ("test" -> "{t e^ s t}", every URL rule, etc.) -- Piper's phonemizer has no notion of
+  # that syntax and would mispronounce it as literal text. See
+  # chatterbox/synthesis/backends/piper/text_frontend.py's module docstring.
+  - label: "Piper fr_FR (siwis, medium)"
+    backend: "piper"
+    load_script: "load_piper"
+    syn_script: "syn_piper"
+    gui_script: "gui_generic_controls"
+    folder: "assets/models/Piper"
+    checkpoint_file: "fr_FR-siwis-medium.onnx"
+    output_location: "output/audio"
+    gst_token_list: {}
+    needs_vocoder: false
+    accepts_phoneme_input: false
+    default_args:
+      length_scale: 1.0
+      noise_scale: 0.667
+      noise_w_scale: 0.8
+      apply_custom_regex_rules: false
+
+  - label: "Piper fr_FR (upmc, medium)"
+    backend: "piper"
+    load_script: "load_piper"
+    syn_script: "syn_piper"
+    gui_script: "gui_generic_controls"
+    folder: "assets/models/Piper"
+    checkpoint_file: "fr_FR-upmc-medium.onnx"
+    output_location: "output/audio"
+    gst_token_list: {}
+    needs_vocoder: false
+    accepts_phoneme_input: false
+    default_args:
+      length_scale: 1.0
+      noise_scale: 0.667
+      noise_w_scale: 0.8
+      apply_custom_regex_rules: false
+
+  - label: "Piper fr_FR (tom, medium)"
+    backend: "piper"
+    load_script: "load_piper"
+    syn_script: "syn_piper"
+    gui_script: "gui_generic_controls"
+    folder: "assets/models/Piper"
+    checkpoint_file: "fr_FR-tom-medium.onnx"
+    output_location: "output/audio"
+    gst_token_list: {}
+    needs_vocoder: false
+    accepts_phoneme_input: false
+    default_args:
+      length_scale: 1.0
+      noise_scale: 0.667
+      noise_w_scale: 0.8
+      apply_custom_regex_rules: false
+
 vocoder_models:
   - label: "Hifi-GAN V2 FR 570000"
     load_script: "load_hifigan"

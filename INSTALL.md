@@ -52,6 +52,29 @@ The script:
 - Installs and enables (but does not start) the `chatterbox-powerd` systemd units (below) —
   non-fatal if this step fails; it's an optional appliance-mode feature.
 
+## Optional: Piper (fr_FR) backend
+
+A second TTS backend (`chatterbox/synthesis/backends/piper/`) alongside FastSpeech2+HiFi-GAN —
+not installed by `scripts/setup_pi.sh` and not in `requirements-pi.txt`: it's a whole optional
+*backend* selected by `config_tts.yaml`, licensed GPL-3.0-or-later (the OHF-voice/piper1-gpl fork),
+not a runtime-guarded optional import like `smbus2`/`gpiozero`. Skip this section entirely if you
+only want the default FastSpeech2+HiFi-GAN pipeline.
+
+```bash
+source ~/chatterbox/venv/bin/activate   # or your PC .venv
+pip install piper-tts==1.5.0
+./scripts/fetch_piper_voices.sh
+```
+
+Installs a single prebuilt wheel (aarch64 on the Pi 5; a Windows wheel exists too, for local PC
+dev/testing) — no source build, no separate `espeak-ng` system dependency (1.5.0 bundles its own
+phonemizer). The fetch script downloads and sha256-verifies 3 fr_FR voices
+(`fr_FR-siwis-medium`/`upmc-medium`/`tom-medium`) into `assets/models/Piper/` (gitignored, same
+"weights not in git" policy as every other vendored model). See
+`chatterbox/synthesis/backends/piper/README.md` for voice provenance/licence and
+`docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for the backend's own design notes. Select it with
+`do_tts.py --default_tts <piper-voice-index>` or via the GUI's Settings → Advanced picker.
+
 ## chatterbox-powerd (kiosk power management)
 
 Optional always-on daemon owning the ACTIVE→DIM→DARK→DEEP power state machine, backlight,

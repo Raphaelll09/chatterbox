@@ -42,6 +42,10 @@ STRINGS = {
         "speed_bias_label": "Biais de vitesse (coef) :",
         "pause_bias_label": "Biais de pause :",
         "liaison_bias_label": "Biais de liaison :",
+        # Piper backend controls (chatterbox/synthesis/backends/piper/backend.py's
+        # describe_controls()) -- length_scale reuses speed_label above, these two are new.
+        "variability_label": "Variabilité :",
+        "phoneme_duration_variability_label": "Variabilité de durée des phonèmes :",
         "audio_duration_label": "Durée audio : {duration:.3f}s",
         # One generic template for every AudioResult.stage_durations entry (interchangeable-
         # backend GUI refactor -- replaces the old tts_duration_label/vocoder_duration_label/

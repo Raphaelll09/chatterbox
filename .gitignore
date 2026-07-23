@@ -36,6 +36,12 @@ assets/models/Waveglow/*.txt
 # Ignore models in FlauBERT
 assets/models/flaubert/flaubert_large_cased/pytorch_model.bin
 
+# Ignore Piper voices (fetched by scripts/fetch_piper_voices.sh -- see
+# chatterbox/synthesis/backends/piper/README.md for provenance/sha256)
+assets/models/Piper/*.onnx
+assets/models/Piper/*.onnx.json
+assets/models/Piper/output/
+
 # Ignore Virtual Env
 python3.11.1_embedded_tts/
 .venv/
