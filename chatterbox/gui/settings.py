@@ -141,13 +141,25 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # percent scales, and the "Avancé" section), the auto-sized window could exceed the actual
     # screen height with nothing to scroll it, leaving Enregistrer/Annuler unreachable. The footer
     # itself never scrolls, so it's always visible regardless of how tall the field area gets.
+    #
+    # Horizontal scrollbar added alongside the pre-existing vertical one (Piper integration,
+    # docs/context/CHANGELOG.md): the "Avancé" TTS/vocoder picker row can grow wider than the
+    # screen (app.py's _build_advanced_settings() now wraps it, the actual fix for that specific
+    # case) -- but width had no cap or scroll mechanism of its own at all before this, unlike
+    # height a few lines below, so ANY future content wider than the screen would still open a
+    # dialog whose own title bar/close button is off-screen and unreachable (confirmed live on the
+    # Pi in landscape). Mirrors gui_generic_controls()'s own canvas, which already learned this
+    # same lesson (vertical AND horizontal scrollbars, "content still overflowed the canvas
+    # viewport horizontally" -- see that function's own comment).
     win.grid_rowconfigure(0, weight=1)
     win.grid_columnconfigure(0, weight=1)
     scroll_canvas = tk.Canvas(win, highlightthickness=0)
     scroll_canvas.grid(row=0, column=0, sticky=tk.NSEW)
     scroll_vsb = tk.Scrollbar(win, orient="vertical", command=scroll_canvas.yview)
     scroll_vsb.grid(row=0, column=1, sticky="ns")
-    scroll_canvas.configure(yscrollcommand=scroll_vsb.set)
+    scroll_hsb = tk.Scrollbar(win, orient="horizontal", command=scroll_canvas.xview)
+    scroll_hsb.grid(row=1, column=0, sticky="ew")
+    scroll_canvas.configure(yscrollcommand=scroll_vsb.set, xscrollcommand=scroll_hsb.set)
     content = tk.Frame(scroll_canvas)
     scroll_canvas.create_window((0, 0), window=content, anchor="nw")
 
@@ -218,7 +230,7 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # Fixed footer (row 1 of win, NOT inside the scrollable canvas) -- error text and
     # Enregistrer/Annuler must always be reachable regardless of how tall the field area gets.
     footer = tk.Frame(win)
-    footer.grid(row=1, column=0, columnspan=2, sticky=tk.EW)
+    footer.grid(row=2, column=0, columnspan=2, sticky=tk.EW)  # row 1 is now scroll_hsb
 
     footer_row = 0
     if not power_client.get_client().is_connected():
@@ -269,16 +281,23 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     tk.Button(btn_frame, text="Enregistrer", command=on_save).grid(row=0, column=0, padx=8)
     tk.Button(btn_frame, text="Annuler", command=close).grid(row=0, column=1, padx=8)
 
-    # Cap the scrollable area's height to fit the actual screen (leaving room for the footer/title
-    # bar/margins) instead of letting the window auto-size past it -- PC-GUI bug report ("no
-    # scroll bar... enregistrer/annuler outside the window"). If the content is shorter than that,
-    # the canvas just matches it exactly (no dead scroll space, no visible scrollbar-for-nothing).
+    # Cap the scrollable area's height AND width to fit the actual screen (leaving room for the
+    # footer/title bar/margins) instead of letting the window auto-size past it -- PC-GUI bug
+    # report ("no scroll bar... enregistrer/annuler outside the window") originally fixed height
+    # only; width had no cap at all until the Piper integration's "Avancé" TTS/vocoder picker row
+    # grew wide enough to trigger the exact same class of bug for width (confirmed live on the Pi
+    # in landscape: the whole dialog opened wider than the screen, its own title bar/close button
+    # unreachable since it's modal -- docs/context/CHANGELOG.md). If content fits within the
+    # screen on either axis, the canvas just matches it exactly (no dead scroll space, no visible
+    # scrollbar-for-nothing) -- same behavior as before on the axis that already had a cap.
     content.update_idletasks()
     footer.update_idletasks()
     content_width = content.winfo_reqwidth()
     content_height = content.winfo_reqheight()
     max_height = max(200, win.winfo_screenheight() - footer.winfo_reqheight() - 120)
-    scroll_canvas.configure(width=content_width, height=min(content_height, max_height),
+    max_width = max(200, win.winfo_screenwidth() - scroll_vsb.winfo_reqwidth() - 40)
+    scroll_canvas.configure(width=min(content_width, max_width),
+                             height=min(content_height, max_height),
                              scrollregion=(0, 0, content_width, content_height))
 
     win.protocol("WM_DELETE_WINDOW", close)
