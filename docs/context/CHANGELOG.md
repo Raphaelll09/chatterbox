@@ -59,14 +59,59 @@ state before starting new work.
     `"synth"` `profiling_rec.stage()`, not separate `"phonemize"`/`"synth"` stages as originally
     sketched — avoids double-phonemizing every sentence for a stage split the public API can't
     actually support without redundant work.
+  - **Three more real bugs, found only by actually running `do_tts.py --default_tts <piper_index>
+    --benchmark --join` on the Pi 5** — none caught by the 254-test suite, the real-weights
+    backend-level smoke test, or the Tk repro script, because none of those exercise the full
+    `cli.py` → `chatterbox.synth.synthesize()` → backend chain together with a real
+    `needs_vocoder: false` model selected via `load_models()`:
+    1. `cli.py:syn_audio()` reads `state.VOCODER_INDEX` unconditionally
+       (`getattr(state, "VOCODER_INDEX")`), but `load_models()`'s `needs_vocoder` guard (this same
+       session, added as an earlier "optional" step) skipped `state.update_selected_vocoder()`
+       entirely for a monolithic model, so the attribute was never set →
+       `AttributeError: module 'chatterbox.state' has no attribute 'VOCODER_INDEX'` on the very
+       first sentence. Fixed by keeping `state.update_selected_vocoder()` unconditional and only
+       guarding the actual `vocoder_loading_script()` call (the expensive part) — `gui/app.py`'s
+       equivalent path was already correct (it sets both state indices unconditionally at
+       `create_gui()` build time, before the loading work even starts), so only `cli.py` needed
+       this fix.
+    2. `chatterbox/synth.py`'s subtitle-writing path unconditionally reads
+       `audio_file_duration.npy` — FastSpeech2-specific per-symbol duration output its own
+       duration predictor writes, that no other backend produces — gated only by the top-level
+       `subtitles.create_file` flag, with no per-model capability check. Fixed by adding
+       `supports_subtitles` (new static per-model flag, same pattern as `needs_vocoder`/
+       `accepts_phoneme_input`) to the contract, defaulting `true` (every existing FS2 entry's
+       real behavior) and `false` on all 3 Piper entries; `synth.py` now ANDs it with
+       `subtitles.create_file`. The `"|"`-separated multi-utterance ("§") branch remains
+       unconditionally FS2-specific below this fix (raw `.WAVEGLOW`/`.AU` binary concatenation) —
+       documented as a known, deliberately out-of-scope remaining gap, not silently left for
+       someone to rediscover.
+    3. **`PiperBackend.tts()`'s own return value was wrong** — it returned
+       `os.path.join(out_dir, "audio_file")` (a file-path prefix), but `chatterbox/synth.py`'s
+       `needs_vocoder=False` branch treats whatever `tts()` returns as a *directory* and builds
+       the base wav path itself via `os.path.join(location_mel_file, "audio_file")` — exactly
+       matching FS2's own `tts()` contract (`fastspeech2_hifigan/backend.py:330` returns a
+       directory too). The double-join produced a nonexistent
+       `.../audio_file/audio_file.wav` and crashed every single sentence. This was a plain
+       implementation slip, not a misunderstanding — the correct contract was already documented
+       correctly in this same integration's own planning notes; the code just didn't match its
+       own docstring. The unit test written earlier (`test_tts_writes_wav_at_location_mel_file_plus_dot_wav`)
+       asserted the *wrong* (buggy) behavior and passed, because it encoded the same mistake as
+       the implementation — only a real run through the actual `synth.py` code, which has its own
+       independent opinion about the contract, could catch this. Fixed: `tts()` now returns
+       `out_dir` directly; the regression test (renamed
+       `test_tts_returns_output_dir_not_a_file_prefix`) now asserts against the shape `synth.py`
+       actually expects instead of mirroring the backend's own (previously wrong) output.
 - Files:
   - New: `chatterbox/synthesis/backends/piper/{__init__.py,backend.py,text_frontend.py,README.md}`,
     `scripts/fetch_piper_voices.sh`, `tests/{test_registry_backend_proxy.py,
     test_piper_describe_controls.py,test_piper_backend.py,test_gui_keyboards.py}`.
-  - Modified: `chatterbox/synthesis/registry.py` (proxy), `chatterbox/cli.py`/`chatterbox/gui/app.py`
-    (activation call sites + the stale-global reset in `gui_generic_controls()`),
-    `chatterbox/gui/keyboards.py` (None-guard), `chatterbox/gui/i18n.py` (2 new label keys),
-    `chatterbox/config/config_tts.yaml` (3 new `tts_models` entries: siwis/upmc/tom), `.gitignore`
+  - Modified: `chatterbox/synthesis/registry.py` (proxy), `chatterbox/synth.py` (`supports_subtitles`
+    gate — the one genuinely necessary change to this file, documented per `cc_prompt_piper_backend.md`
+    §0 rather than avoided at all costs), `chatterbox/cli.py`/`chatterbox/gui/app.py`
+    (activation call sites, the `needs_vocoder` state-vs-load-call fix, the stale-global reset in
+    `gui_generic_controls()`), `chatterbox/gui/keyboards.py` (None-guard),
+    `chatterbox/gui/i18n.py` (2 new label keys), `chatterbox/config/config_tts.yaml` (3 new
+    `tts_models` entries: siwis/upmc/tom, each with `supports_subtitles: false`), `.gitignore`
     (Piper voice files, matching every other vendored model's "weights not in git" pattern).
 - Why: `cc_prompt_piper_backend.md`'s explicit purpose — prove or disprove the interchangeable-
   backend contract against a real second backend, not just the one it was extracted from.
@@ -79,6 +124,14 @@ state before starting new work.
   path. Ad hoc Tk repro script (`docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.2's convention) drove a
   real `create_gui()` at 800×480 through FS2→siwis→upmc→tom→FS2, all 11 checks passing (no crash,
   style grid/speaker dropdown present exactly when expected, mood-shortcut keys no-op cleanly).
+  **Then, on real Pi 5 hardware** (the step that actually caught the 3 bugs above):
+  `do_tts.py --default_tts 1 --benchmark --join` (siwis) — full 11-execution run, console shows
+  `TTS`/`Denoise` lines only (no `Vocoder` line, correctly), `Wrote 11 sentence rows, 44 stage
+  rows`; free-text single-sentence runs against `--default_tts 2` (upmc) and `--default_tts 3`
+  (tom), both producing real playback audio; `do_tts.py --benchmark --join` (FS2, no
+  `--default_tts`, i.e. the original default) re-run afterward and produces the same
+  `TTS`/`Vocoder`/`Denoise` pattern and magnitudes as before any of this session's changes —
+  confirms all three fixes together leave FS2 untouched.
 - Notes/gotchas: `piper-tts` is a whole optional *backend* selected by config (GPL-3.0-or-later),
   not a runtime-guarded optional import like `smbus2`/`gpiozero` — deliberately **not** added to
   `requirements-pi.txt`; install manually (`pip install piper-tts==1.5.0`) per `INSTALL.md`. Voice

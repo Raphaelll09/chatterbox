@@ -300,15 +300,20 @@ def main():
         tts_loading_script = getattr(registry.BACKEND, default_tts["load_script"])
         tts_loading_script(default_tts, device)
 
-        # Load Vocoder -- skipped for a monolithic TTS model (needs_vocoder: false, e.g. Piper),
-        # which has no separate mel->wav stage and never calls registry.BACKEND.vocoder() (see
-        # chatterbox/synth.py:178-184). Without this guard, selecting such a model still loaded a
-        # full HiFi-GAN unconditionally -- wasted RAM/time, never a crash (load_hifigan/vocoder
-        # are unique names, still resolve fine via registry.py's proxy fallback), found during the
-        # Piper integration (docs/context/CHANGELOG.md).
+        # state.update_selected_vocoder() stays unconditional -- syn_audio() reads
+        # state.VOCODER_INDEX unconditionally (getattr(state, "VOCODER_INDEX")) regardless of the
+        # active TTS model, so leaving it unset for a needs_vocoder: false model raised
+        # AttributeError the first time this was actually exercised end-to-end on the Pi (Piper
+        # integration, docs/context/CHANGELOG.md) -- a real regression from an earlier version of
+        # this guard that skipped it, not just a theoretical risk. Only the actual heavy
+        # vocoder_loading_script() call (HiFi-GAN weights) is skipped: a monolithic TTS model has
+        # no separate mel->wav stage and never calls registry.BACKEND.vocoder() (see
+        # chatterbox/synth.py:178-184), so loading one unconditionally was wasted RAM/time, never
+        # a crash on its own (load_hifigan/vocoder are unique names, still resolve fine via
+        # registry.py's proxy fallback).
+        default_vocoder = tts_config["vocoder_models"][args.default_vocoder]
+        state.update_selected_vocoder(args.default_vocoder+1)
         if default_tts.get("needs_vocoder", True):
-            default_vocoder = tts_config["vocoder_models"][args.default_vocoder]
-            state.update_selected_vocoder(args.default_vocoder+1)
             vocoder_loading_script = getattr(registry.BACKEND, default_vocoder["load_script"])
             vocoder_loading_script(default_vocoder, device)
 

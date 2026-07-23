@@ -95,7 +95,19 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
 
     start_tts = time.time()
 
-    if tts_config["subtitles"]["create_file"]:
+    # audio_file_duration.npy (per-symbol duration data) is FastSpeech2-specific output -- its own
+    # duration predictor writes it alongside the mel/.AU files; no other backend produces it. The
+    # top-level subtitles.create_file flag was the only gate here, so selecting a backend without
+    # this data (Piper) crashed with FileNotFoundError the first time this was actually exercised
+    # end-to-end (Piper integration, docs/context/CHANGELOG.md) -- not caught by unit/smoke tests
+    # that call registry.BACKEND.tts()/PiperBackend.tts() directly, bypassing this code entirely.
+    # supports_subtitles (new static per-model flag, same "read before that model is loaded"
+    # pattern as needs_vocoder/accepts_phoneme_input, config_tts.yaml) defaults True -- every
+    # existing FS2 entry's real behavior -- and is false on Piper's entries.
+    subtitles_supported = tts_config['tts_models'][tts_idx].get('supports_subtitles', True)
+    write_subtitles = tts_config["subtitles"]["create_file"] and subtitles_supported
+
+    if write_subtitles:
         input_text_subtitles = ''
         processed_input_text_subtitles = ''
         duration_by_symbol_subtitles = []
@@ -117,12 +129,19 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
 
             location_mel_file, processed_sub_text = registry.BACKEND.tts(sub_utt, tts_config['tts_models'][tts_idx], gui_control, linking_utt)
 
-            if tts_config["subtitles"]["create_file"]:
+            if write_subtitles:
                 sub_duration_by_symbol = (np.load(os.path.join(location_mel_file, 'audio_file_duration.npy')) * duration_by_frame).tolist()
                 duration_by_symbol_subtitles += sub_duration_by_symbol
                 input_text_subtitles = "{}{}".format(input_text_subtitles, sub_utt[1:])
                 processed_input_text_subtitles = "{}{}".format(processed_input_text_subtitles, processed_sub_text)
 
+            # NOTE: this whole "|"-separated multi-utterance branch concatenates mel/.AU data in
+            # FastSpeech2's own binary format below, unconditionally (not gated by write_subtitles
+            # or needs_vocoder) -- it remains FS2-specific and unsupported by a monolithic backend
+            # like Piper regardless of supports_subtitles; a Piper user including "|" in free text
+            # will still hit a FileNotFoundError here. Not fixed as part of the Piper integration
+            # (docs/context/CHANGELOG.md) -- out of scope, a real remaining gap, documented rather
+            # than silently left for someone to rediscover the hard way.
             shape_mel = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.WAVEGLOW'), count=2, dtype=np.int32))
             shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count=4, dtype=np.int32))
             au_len = shape_au[0]
@@ -159,12 +178,12 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     else:
         location_mel_file, processed_text_to_syn = registry.BACKEND.tts(text_to_syn, tts_config['tts_models'][tts_idx], gui_control, False)
 
-        if tts_config["subtitles"]["create_file"]:
+        if write_subtitles:
             duration_by_symbol_subtitles = (np.load(os.path.join(location_mel_file, 'audio_file_duration.npy')) * duration_by_frame).tolist()
             input_text_subtitles = text_to_syn[1:]
             processed_input_text_subtitles = processed_text_to_syn
 
-    if tts_config["subtitles"]["create_file"]:
+    if write_subtitles:
         duration_by_frame = tts_config["subtitles"]["duration_by_frame"]["hop_length"] / tts_config["subtitles"]["duration_by_frame"]["sampling_rate"]
         subtitles.write_duration_alignements(input_text_subtitles, processed_input_text_subtitles, duration_by_symbol_subtitles)
         subtitles.write_subtitles(input_text_subtitles, processed_input_text_subtitles, duration_by_symbol_subtitles, tts_config["subtitles"]["max_nbr_char"])

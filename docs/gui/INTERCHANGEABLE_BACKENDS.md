@@ -339,3 +339,46 @@ controls loop, so each call starts clean regardless of what the previous backend
   `{phonetic}` bracket syntax that Piper's phonemizer can't interpret — found by actually running a
   synthesis (`"test"` → literal `{t e^ s t}` in Piper's input text), not by reading the regex
   mechanism alone. Piper's own `text_frontend.py` therefore keeps this opt-in and off by default.
+
+### 3.4 Three more gaps — found only by an actual `do_tts.py --benchmark` run on the Pi 5, none of them caught by §3.1-§3.3's own tests/repro script
+
+The pattern across all three: they only manifest when `cli.py`'s `load_models()` and
+`chatterbox.synth.synthesize()` run together, end to end, with a real `needs_vocoder: false`
+model selected — something no unit test, backend-level smoke test, or the Tk repro script
+actually exercises (they each call `PiperBackend.tts()`/`describe_controls()` directly, or mock
+`registry.BACKEND`'s methods entirely). This is the concrete argument for treating a real
+`--benchmark` run on real hardware as part of "done," not an optional afterthought — see
+`cc_prompt_piper_backend.md`'s own Definition of Done, which already listed it.
+
+1. **`chatterbox.state.VOCODER_INDEX` went unset.** `cli.py:syn_audio()` reads it unconditionally
+   (`getattr(state, "VOCODER_INDEX")`); an earlier version of the `needs_vocoder` optimization (§
+   above, "Non-blocking follow-on finding") skipped `state.update_selected_vocoder()` itself, not
+   just the heavy load call, for a monolithic model → `AttributeError` on the very first
+   synthesis. `gui/app.py`'s equivalent path was already correct (`create_gui()` sets both state
+   indices unconditionally at build time, well before any loading work runs) — only `cli.py`
+   needed the fix, and the fix is to keep the *state* update unconditional while still skipping
+   only the actual weight-loading call.
+2. **`chatterbox/synth.py`'s subtitle path assumed FastSpeech2's own `audio_file_duration.npy`
+   output exists for any backend** — gated only by the top-level `subtitles.create_file` config
+   flag, with no per-model capability check at all. Added `supports_subtitles` (`false` on all 3
+   Piper entries) to the *same family* of static per-model flags as `needs_vocoder`/
+   `accepts_phoneme_input` (§2.3) — a contract addition, not just a Piper-side workaround, since
+   any future backend without duration-alignment output will need it too. The `"|"`-separated
+   multi-utterance ("§") branch a few lines away is a related, *still-open* gap: it unconditionally
+   reads/writes FS2's raw `.WAVEGLOW`/`.AU` binary format regardless of `supports_subtitles` or
+   `needs_vocoder`, so a Piper user who includes `"|"` in free text will still hit a
+   `FileNotFoundError` — deliberately left unfixed (would need real work: WAV-level audio
+   concatenation instead of mel-level, backend-specific either way) and documented in `synth.py`
+   itself rather than silently left for a future session to rediscover.
+3. **`PiperBackend.tts()`'s own return value violated the contract its own docstring described.**
+   `synth.py`'s `needs_vocoder=False` branch treats whatever `tts()` returns as a *directory* and
+   builds the wav path itself (`os.path.join(location_mel_file, "audio_file")`) — exactly
+   matching what §2.3/`fastspeech2_hifigan/backend.py:330` already established FS2's own `tts()`
+   returns. The implementation returned `os.path.join(out_dir, "audio_file")` instead — a
+   file-prefix, not a directory — producing a nonexistent double-nested path and crashing every
+   sentence. The unit test written for this *at the time* asserted the wrong (buggy) value and
+   passed, because it was written by re-deriving the expectation from the same (wrong)
+   implementation instead of independently from `synth.py`'s actual code — a caution about what
+   a same-session unit test can and can't catch: it can catch a regression from *this* behavior,
+   but not a version of the contract that was wrong from the start. Only a real run through the
+   unmodified `synth.py` — which has its own, independent opinion about the shape — caught it.
