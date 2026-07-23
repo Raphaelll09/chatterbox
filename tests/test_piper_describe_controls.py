@@ -37,7 +37,7 @@ def _make_backend(speaker_id_map=None, default_speaker_id=0, **model_config_over
 
 
 def test_single_speaker_voice_omits_speaker_list():
-    backend = _make_backend(speaker_id_map={})  # siwis/tom shape
+    backend = _make_backend(speaker_id_map={})  # siwis shape
     result = backend.describe_controls()
     assert "speaker_list" not in result
     assert "default_speaker" not in result
@@ -68,3 +68,18 @@ def test_controls_use_model_config_defaults():
     assert by_key["noise_w_scale"]["default"] == 0.9
     assert by_key["noise_scale"]["advanced"] is True
     assert by_key["noise_w_scale"]["advanced"] is True
+
+
+def test_all_sliders_declare_a_resolution():
+    # Regression test: gui/app.py's gui_generic_controls() (the generic tk.Scale builder)
+    # defaults to resolution=1 when a slider control doesn't specify one -- on length_scale's
+    # 0.0-2.0 range that left only 2 selectable values (confirmed live: user-reported "cursor
+    # only has two values" -- docs/context/CHANGELOG.md). Every slider Piper declares must set
+    # its own resolution explicitly, same as every FS2 slider already does.
+    backend = _make_backend()
+    controls = backend.describe_controls()["controls"]
+    sliders = [c for c in controls if c["type"] == "slider"]
+    assert sliders, "expected at least one slider control"
+    for control in sliders:
+        assert "resolution" in control, control["key"]
+        assert 0 < control["resolution"] < (control["max"] - control["min"]), control["key"]

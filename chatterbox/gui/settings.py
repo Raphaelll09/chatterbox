@@ -127,9 +127,21 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
 
     win = tk.Toplevel(parent)
     win.title("Réglages")
-    # No fixed geometry() -- PC-GUI feedback: the hardcoded 420x420 didn't scale to the actual
-    # content (worse once the "Avancé" model-picker section was added). Tk's default behavior
-    # (no explicit geometry) is to size the window to fit its packed/gridded children exactly.
+    # No fixed *size* geometry() -- PC-GUI feedback: the hardcoded 420x420 didn't scale to the
+    # actual content (worse once the "Avancé" model-picker section was added). Tk's default
+    # behavior (no explicit size) is to size the window to fit its packed/gridded children exactly
+    # (still true -- see the width/height cap further down, which only clamps an oversized
+    # request, it doesn't force a fixed size).
+    #
+    # *Position* is set explicitly, though (Piper integration, docs/context/CHANGELOG.md): left
+    # unset, a Toplevel's default placement is decided by the WM -- confirmed live on the Pi in
+    # landscape, that default centered the dialog vertically in a way that pushed its own title
+    # bar off-screen (the same class of bug as the main window's -- see create_gui()'s own
+    # comment on why a title bar drawn *outside* the requested content area needs a margin, not a
+    # flush edge). Positioned near the left edge (not centered) with a top margin reserved for the
+    # title bar, per explicit user preference over guessing a centered position again.
+    _TITLE_BAR_MARGIN_PX = 60
+    win.geometry("+{}+{}".format(20, _TITLE_BAR_MARGIN_PX))
     win.transient(parent)
     win.grab_set()  # modal -- PC-GUI bug report: without this, clicks landed on the main window
     # behind instead of this dialog (no exclusive input grab meant nothing actually stopped them

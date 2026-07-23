@@ -36,7 +36,14 @@ STRINGS = {
         "style_intensity_label": "Intensité du style :",
         "pitch_label": "Hauteur (demi-tons) :",
         "energy_label": "Énergie (dB) :",
-        "speed_label": "Vitesse (coef) :",
+        # "Vitesse" is really a duration multiplier (FastSpeech2's own d_control -- model/modules.py:
+        # predicted_duration = ... * d_control -- and Piper's length_scale share this same "higher
+        # = slower" direction, confirmed by reading FS2's code, not assumed), which reads backwards
+        # against the label's own name -- confirmed as real user confusion on Piper's slider
+        # (docs/context/CHANGELOG.md: default 1.0 sounds normal, the slider's top end sounds
+        # "super slow", easy to read as broken rather than just unlabeled direction). One shared
+        # label fixes it for both backends without changing FS2's own behavior/values.
+        "speed_label": "Vitesse (+ = plus lent) :",
         "pitch_bias_label": "Biais de hauteur (demi-tons) :",
         "energy_bias_label": "Biais d'énergie (dB) :",
         "speed_bias_label": "Biais de vitesse (coef) :",

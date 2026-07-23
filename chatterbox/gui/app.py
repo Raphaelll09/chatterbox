@@ -574,7 +574,35 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # Create the main window
     window = tk.Tk()
     window.title(main_panel_config['name_window'])
-    window.geometry("{}x{}".format(main_panel_config["width"], main_panel_config["height"]))
+    # main_panel_config["width"]/["height"] (440x800, portrait-shaped) is a fixed config value,
+    # not screen-aware -- on a landscape display shorter than 800px tall, a window manager's
+    # default placement centers a too-tall window, pushing roughly half its height (including the
+    # title bar and its maximize/close controls) above the visible screen entirely -- confirmed
+    # live on the Pi in landscape (docs/context/CHANGELOG.md): unreachable window, no way to even
+    # get to Settings to test anything else.
+    #
+    # First attempt pinned the window at +0+0 exactly filling the screen -- wrong: .geometry("WxH")
+    # sizes the *content* area only, and the WM draws its title bar *outside* that (typically
+    # above it) -- with content already flush to y=0, the title bar itself lands at a negative Y,
+    # off-screen, even though the content area "perfectly fits, as if fullscreen" (confirmed live
+    # on the Pi -- exactly that symptom).
+    #
+    # Real fix (PC-GUI feedback): maximize instead of guessing a size/position by hand at all --
+    # the WM knows its own title bar height, so it places a maximized window correctly by
+    # construction, sidestepping the whole class of margin-estimation bug above. '-zoomed' is the
+    # X11/Tk maximize call (Linux/the Pi's actual target -- chatterbox targets X11 via xwayland
+    # under Wayland per apt-packages-pi.txt); not every WM/platform supports it (Tk raises
+    # TclError if not), so the centered-with-margin geometry from the first fix attempt is kept as
+    # a fallback for that case, not deleted.
+    try:
+        window.attributes("-zoomed", True)
+    except tk.TclError:
+        _TITLE_BAR_MARGIN_PX = 60
+        win_w = min(main_panel_config["width"], window.winfo_screenwidth())
+        win_h = min(main_panel_config["height"], window.winfo_screenheight() - _TITLE_BAR_MARGIN_PX)
+        pos_x = max(0, (window.winfo_screenwidth() - win_w) // 2)
+        pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
+        window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
 
     # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres" opens the settings dialog
     # (the physical "Réglages" button was removed -- PC-GUI feedback: it sat right above the
@@ -1335,7 +1363,7 @@ def gui_generic_controls(tts_config, main_panel_config):
     # values -- Piper integration finding (docs/context/CHANGELOG.md): FS2 is always today's
     # startup default, so speaker_selection/gst_token_selection become real Tk variables the
     # first time this runs; without an explicit reset here, switching to a backend that declares
-    # neither "style" nor a non-empty speaker_list (e.g. Piper's siwis/tom voices) left both
+    # neither "style" nor a non-empty speaker_list (e.g. Piper's siwis voice) left both
     # pointing at FS2's now-torn-down widgets instead of None, which the "stays None"/"compat
     # shim" comments below and in chatterbox/gui/keyboards.py's play_and_clear_with_style() both
     # assume. Only a stale-reference issue (not a crash -- confirmed via a real Tk repro script,

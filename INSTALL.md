@@ -68,8 +68,8 @@ pip install piper-tts==1.5.0
 
 Installs a single prebuilt wheel (aarch64 on the Pi 5; a Windows wheel exists too, for local PC
 dev/testing) — no source build, no separate `espeak-ng` system dependency (1.5.0 bundles its own
-phonemizer). The fetch script downloads and sha256-verifies 3 fr_FR voices
-(`fr_FR-siwis-medium`/`upmc-medium`/`tom-medium`) into `assets/models/Piper/` (gitignored, same
+phonemizer). The fetch script downloads and sha256-verifies 2 fr_FR voices
+(`fr_FR-siwis-medium`/`upmc-medium`) into `assets/models/Piper/` (gitignored, same
 "weights not in git" policy as every other vendored model). See
 `chatterbox/synthesis/backends/piper/README.md` for voice provenance/licence and
 `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for the backend's own design notes. Select it with

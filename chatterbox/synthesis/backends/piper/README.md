@@ -17,13 +17,13 @@ wheel, independent of any system-installed `espeak-ng`.
 
 ## Voices
 
-All three downloaded from the [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+Both downloaded from the [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
 HuggingFace dataset (`fr/fr_FR/<voice>/medium/`), CC0/public-domain-adjacent per that dataset's own
 licensing — see the dataset page for the authoritative statement per voice. Fetch with
 `./scripts/fetch_piper_voices.sh` from the repo root (verifies sha256 against the values below,
 captured from a real download during this integration).
 
-Sample rate: **22050 Hz** for all three (the `medium` quality tier) — matches the existing
+Sample rate: **22050 Hz** for both (the `medium` quality tier) — matches the existing
 FastSpeech2+HiFi-GAN output exactly, so the shared playback/denoise/postprocess path in
 `chatterbox/synth.py` needs no resampling step regardless of which backend produced the audio.
 
@@ -31,11 +31,14 @@ FastSpeech2+HiFi-GAN output exactly, so the shared playback/denoise/postprocess 
 |---|---|---|---|
 | `fr_FR-siwis-medium` | 1 (default) | `641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99` | `39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959` |
 | `fr_FR-upmc-medium` | 2 (`jessica`, `pierre`) | `9abb3800c199148897a9ed64e100d224f3de83579f100044174ad19418f1786f` | `e8636ec15dfd5d72db37a02cb5320a20f2b8d339f2a0e4337da64c58a33a5868` |
-| `fr_FR-tom-medium` | 1 (default) | `bf65074ccdeeeeaa832e75edb1c0a513c01c9a972bdf085ff8a6e71ea234fd41` | `2f7f885ad5a0aad802e3cc24e4f57239febdcb142b4876de5d238094674361cc` |
+
+`fr_FR-tom-medium` was evaluated alongside these two and removed (`docs/context/CHANGELOG.md`):
+real-hardware listening found it noticeably lower quality and slower to synthesize than either
+remaining voice, with no offsetting benefit. `scripts/fetch_piper_voices.sh` no longer fetches it.
 
 `fr_FR-upmc-medium`'s 2 speakers (`jessica`: id 0, `pierre`: id 1, confirmed live via
 `PiperVoice.config.speaker_id_map`) surface as `describe_controls()`'s `speaker_list`, giving it a
-speaker dropdown in the GUI — `siwis`/`tom` are single-speaker and omit that control entirely, per
+speaker dropdown in the GUI — `siwis` is single-speaker and omits that control entirely, per
 `base.py`'s documented default for a one-voice backend.
 
 ## Contract notes specific to this backend
