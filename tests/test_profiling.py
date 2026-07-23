@@ -232,6 +232,44 @@ def test_recorder_phoneme_count_null_when_never_set(tmp_path):
     assert record["phoneme_count"] is None
 
 
+def test_recorder_finalize_stages_field_matches_first_seen_order(tmp_path):
+    # Piper integration (docs/context/CHANGELOG.md): a backend with a different stage shape than
+    # FS2's front_end/acoustic/vocoder/write (e.g. Piper's "synth"+"write") must still show up
+    # somewhere in the record -- the fixed front_end_ms/acoustic_ms/vocoder_ms/write_ms fields
+    # silently drop any name not in that fixed set.
+    out_path = tmp_path / "per_sentence.jsonl"
+    rec = Recorder(4, "x", str(out_path))
+    with rec.stage("synth"):
+        pass
+    with rec.stage("write"):
+        pass
+    record = rec.finalize()
+
+    names = [s["name"] for s in record["stages"]]
+    assert names == ["synth", "write"]
+    assert "synth_ms" not in record  # no flat per-name field is added -- only the generic list
+    assert all(s["t_end"] is not None for s in record["stages"])
+    assert all(s["duration_ms"] >= 0.0 for s in record["stages"])
+    # The fixed fields stay present (byte-identical shape for old consumers), just zeroed for
+    # stage names this record never used.
+    assert record["front_end_ms"] == 0.0
+    assert record["acoustic_ms"] == 0.0
+    assert record["vocoder_ms"] == 0.0
+    assert record["write_ms"] > 0.0 or record["write_ms"] == 0.0  # timing-dependent, just present
+
+
+def test_recorder_stage_order_does_not_duplicate_repeated_stage_names(tmp_path):
+    out_path = tmp_path / "per_sentence.jsonl"
+    rec = Recorder(5, "A§B", str(out_path))
+    for _ in range(3):
+        with rec.stage("acoustic"):
+            pass
+    with rec.stage("write"):
+        pass
+    record = rec.finalize()
+    assert [s["name"] for s in record["stages"]] == ["acoustic", "write"]
+
+
 # ---------------------------------------------------------------------------
 # join.py
 # ---------------------------------------------------------------------------
@@ -284,6 +322,44 @@ def test_stage_window_front_end_absent_falls_back_to_synth_start():
     t_start, t_end = join._stage_window(record, "acoustic")
     assert t_start == 10.0
     assert t_end == 12.0
+
+
+def test_stage_windows_uses_generic_stages_field_when_present():
+    # A Piper-shaped record: "synth" then "write", nothing like FS2's 4 fixed names.
+    record = {
+        "t_synth_start": 10.0,
+        "stages": [
+            {"name": "synth", "t_end": 10.6, "duration_ms": 600.0},
+            {"name": "write", "t_end": 10.7, "duration_ms": 100.0},
+        ],
+    }
+    windows = join._stage_windows(record)
+    assert windows == [("synth", 10.0, 10.6), ("write", 10.6, 10.7)]
+
+
+def test_stage_windows_falls_back_to_fixed_stages_for_old_format_record():
+    # No "stages" field at all -- a per_sentence.jsonl written before Recorder.finalize() added
+    # it (re-joining historical data, this module's own supported use case).
+    record = {"t_synth_start": 0.0, "t_front_end_end": None, "t_acoustic_end": 1.0,
+              "t_vocoder_end": 2.0, "t_audio_write_end": 3.0}
+    windows = join._stage_windows(record)
+    assert [name for name, _, _ in windows] == join.STAGES
+
+
+def test_build_per_stage_results_includes_non_fs2_stage_names():
+    record = {
+        "sentence_id": "REF",
+        "t_synth_start": 0.0,
+        "stages": [
+            {"name": "synth", "t_end": 0.5, "duration_ms": 500.0},
+            {"name": "write", "t_end": 0.6, "duration_ms": 100.0},
+        ],
+    }
+    results = join.build_per_stage_results([record], samples=[])
+    stage_names = [r["stage"] for r in results]
+    assert stage_names == ["synth", "write"]
+    synth_row = results[0]
+    assert synth_row["duration_ms"] == pytest.approx(500.0)
 
 
 def test_build_per_sentence_results_end_to_end():

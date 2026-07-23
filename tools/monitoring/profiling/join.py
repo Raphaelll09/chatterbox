@@ -183,13 +183,40 @@ def _stage_window(record, stage):
     return t_start, t_end
 
 
+def _stage_windows(record):
+    """Yields (stage_name, t_start, t_end) for every stage this record actually recorded, in
+    first-seen order, each stage's start chained from the previous stage's end (first stage starts
+    at t_synth_start) -- generalizes the fixed STAGES/_stage_window() pair above beyond FS2's own
+    4-name pipeline shape (Piper integration, docs/context/CHANGELOG.md; Recorder.finalize()'s
+    "stages" field, tools/monitoring/profiling/recorder.py).
+
+    Falls back to the old fixed 4-stage chain for a record with no "stages" field at all --
+    re-joining a per_sentence.jsonl written before this field existed (this module's own
+    docstring already documents re-joining as a supported use case, e.g. after a
+    calibration.json change)."""
+    stages = record.get("stages")
+    if not stages:
+        return [(stage, *_stage_window(record, stage)) for stage in STAGES]
+    windows = []
+    t_prev = record["t_synth_start"]
+    for entry in stages:
+        t_end = entry.get("t_end")
+        windows.append((entry["name"], t_prev, t_end))
+        if t_end is not None:
+            t_prev = t_end
+    return windows
+
+
 def build_per_sentence_results(records, samples):
     results = []
     for r in records:
         t_start, t_end = r["t_synth_start"], r.get("t_audio_write_end")
         window = _window_samples(samples, t_start, t_end)
         energy_j = _integrate_energy_j(window)
-        row = dict(r)
+        # "stages" (the generic per-stage list) belongs in per_stage_results.csv, not this flat
+        # per-sentence sheet -- drop it here rather than let csv.DictWriter stringify a nested list
+        # into an unreadable column.
+        row = {k: v for k, v in r.items() if k != "stages"}
         row["energy_j"] = energy_j
         row["energy_wh"] = (energy_j / 3600.0) if energy_j is not None else None
         row["energy_per_speech_s"] = (
@@ -219,8 +246,7 @@ def build_per_sentence_results(records, samples):
 def build_per_stage_results(records, samples):
     results = []
     for r in records:
-        for stage in STAGES:
-            t_start, t_end = _stage_window(r, stage)
+        for stage, t_start, t_end in _stage_windows(r):
             window = _window_samples(samples, t_start, t_end)
             energy_j = _integrate_energy_j(window)
             amp_energy_j = _integrate_energy_j(window, "ina_power_w")
