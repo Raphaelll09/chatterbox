@@ -15,6 +15,80 @@ state before starting new work.
 
 ---
 
+## 2026-07-23 — Add Piper (fr_FR) as a second synthesis backend
+
+- What: implements `cc_prompt_piper_backend.md`'s Phase A (verification) and Phase B (integration)
+  — Piper becomes a real, selectable second TTS backend alongside FastSpeech2+HiFi-GAN, run
+  through the same `synth.py`/`cli.py`/`gui/app.py` layer, deliberately chosen as an acid test of
+  the interchangeable-backend contract (`docs/gui/INTERCHANGEABLE_BACKENDS.md`) because it's
+  maximally different from FS2 along every axis (monolithic vs. two-stage, ONNX Runtime vs.
+  PyTorch, internal espeak-ng phonemizer vs. no G2P at all, no style dimension, per-voice speaker
+  maps vs. a shared `speakers.json`). Phase A confirmed live on the Pi 5: `piper-tts==1.5.0`
+  (OHF-voice/piper1-gpl fork, GPL-3.0-or-later) installs from a single prebuilt aarch64 wheel, no
+  source build, and needs neither `piper-phonemize` nor `espeakng-loader` — it bundles its own
+  compiled `espeakbridge.so` + `espeak-ng-data` directly in the wheel.
+  - Two real contract gaps found and fixed, both documented in full in
+    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 (not summarized twice here):
+    1. **`registry.BACKEND` was a hardcoded singleton**, unable to resolve `tts()`/
+       `describe_controls()` (identically named on every backend by design) once a second backend
+       existed. Fixed with a small resolving proxy (`_BackendProxy`, `activate_tts_backend()`) in
+       `chatterbox/synthesis/registry.py` — `synth.py` needed zero changes; `cli.py`/`gui/app.py`
+       each got one new line (activating the right backend before resolving `load_script`,
+       explicit rather than a hidden side effect of `load()`, a design reviewed and chosen over
+       the self-registering alternative before implementation).
+    2. **`gst_token_selection`/`speaker_selection` (`gui/app.py`) were only ever set, never
+       reset** — switching from FS2 (always today's startup default) to a style-less/single-
+       speaker Piper voice left both pointing at FS2's torn-down widgets instead of `None`. Not a
+       crash, but contradicted the compat shim's own documented intent; found only by driving a
+       real `tk.Tk()` instance through an actual backend switch (an ad hoc scratch script, not a
+       unit test — see INTERCHANGEABLE_BACKENDS.md §3.2 for why a mocked-widget test can't see
+       this class of bug). Fixed by resetting both to `None` at the top of every
+       `gui_generic_controls()` call.
+  - One additional bug found by actually running a synthesis, not by reading code: FS2's
+    `text_pipeline.parse_pronunciation_mistakes()` substitution *mechanism* is backend-agnostic,
+    but the *data* it substitutes (`custom_regex_rules.csv`/`url_regex_rules.csv`) is full of
+    FS2's own `{phonetic}` bracket syntax (`"test"` → literal `{t e^ s t}`, every URL rule) that
+    Piper's phonemizer can't interpret. Piper's own `text_frontend.py` calls it only when
+    `apply_custom_regex_rules: true` (default **false** in Piper's `config_tts.yaml` entries) —
+    kept as an opt-in A/B flag per the original prompt's intent, not removed outright.
+  - `chatterbox/gui/keyboards.py:play_and_clear_with_style()` crashed (`AttributeError`) if a
+    mood-shortcut key (`:D`/`:p`/`:(`/`:O`) was actually pressed while `gst_token_selection` is
+    `None` (a style-less backend active) — guarded to no-op the style part instead.
+  - `PiperVoice.synthesize_wav()` (the pinned 1.5.0 API) re-phonemizes internally regardless of
+    calling `.phonemize()` first, so `PiperBackend.tts()` times the whole call as a single
+    `"synth"` `profiling_rec.stage()`, not separate `"phonemize"`/`"synth"` stages as originally
+    sketched — avoids double-phonemizing every sentence for a stage split the public API can't
+    actually support without redundant work.
+- Files:
+  - New: `chatterbox/synthesis/backends/piper/{__init__.py,backend.py,text_frontend.py,README.md}`,
+    `scripts/fetch_piper_voices.sh`, `tests/{test_registry_backend_proxy.py,
+    test_piper_describe_controls.py,test_piper_backend.py,test_gui_keyboards.py}`.
+  - Modified: `chatterbox/synthesis/registry.py` (proxy), `chatterbox/cli.py`/`chatterbox/gui/app.py`
+    (activation call sites + the stale-global reset in `gui_generic_controls()`),
+    `chatterbox/gui/keyboards.py` (None-guard), `chatterbox/gui/i18n.py` (2 new label keys),
+    `chatterbox/config/config_tts.yaml` (3 new `tts_models` entries: siwis/upmc/tom), `.gitignore`
+    (Piper voice files, matching every other vendored model's "weights not in git" pattern).
+- Why: `cc_prompt_piper_backend.md`'s explicit purpose — prove or disprove the interchangeable-
+  backend contract against a real second backend, not just the one it was extracted from.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 254 passed, 1 pre-existing skip (Windows).
+  Real-weights smoke test run locally (all 3 voices have a Windows wheel too, convenient for
+  dev-loop testing without SSH): loaded each voice, synthesized, confirmed wav format (22050 Hz/
+  16-bit/mono, matching FS2+HiFi-GAN's own output so the shared playback path needs no resampling
+  regardless of backend), confirmed `<SPEAKER=...>`/`<STYLE=...>` tags strip correctly and
+  discarded tags never leak into Piper's input text, confirmed FlauBERT never loads on the Piper
+  path. Ad hoc Tk repro script (`docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.2's convention) drove a
+  real `create_gui()` at 800×480 through FS2→siwis→upmc→tom→FS2, all 11 checks passing (no crash,
+  style grid/speaker dropdown present exactly when expected, mood-shortcut keys no-op cleanly).
+- Notes/gotchas: `piper-tts` is a whole optional *backend* selected by config (GPL-3.0-or-later),
+  not a runtime-guarded optional import like `smbus2`/`gpiozero` — deliberately **not** added to
+  `requirements-pi.txt`; install manually (`pip install piper-tts==1.5.0`) per `INSTALL.md`. Voice
+  files (`assets/models/Piper/*.onnx*`) are fetched by `scripts/fetch_piper_voices.sh`
+  (sha256-verified against `chatterbox/synthesis/backends/piper/README.md`), not committed.
+  `SynthesisConfig`'s field is `noise_w_scale`, not `noise_w` — the original integration prompt
+  had this wrong throughout its `config_tts.yaml`/`describe_controls()` sketches.
+
+---
+
 ## 2026-07-22 — Background the startup model load in the GUI (startup-latency phase 2)
 
 - What: `chatterbox/gui/app.py:create_gui()` used to call `_select_tts_model()`/

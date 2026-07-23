@@ -655,6 +655,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     global _build_advanced_settings
 
     def _select_tts_model(tts_model, id_button, list_buttons=None):
+        registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
         loading_script = getattr(registry.BACKEND, tts_model["load_script"])
         gui_script = globals()[tts_model["gui_script"]]
         loading_script(tts_model, device)
@@ -1054,10 +1055,14 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         above used to make synchronously; posts the (fast, Tk-only) finish step back once done."""
         tts_model = tts_config["tts_models"][default_tts]
         vocoder_model = tts_config["vocoder_models"][default_vocoder]
+        registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
         tts_loading_script = getattr(registry.BACKEND, tts_model["load_script"])
         tts_loading_script(tts_model, device)
-        vocoder_loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
-        vocoder_loading_script(vocoder_model, device)
+        # Skipped for a monolithic TTS model (needs_vocoder: false, e.g. Piper) -- see the
+        # matching guard/comment in chatterbox/cli.py:load_models().
+        if tts_model.get("needs_vocoder", True):
+            vocoder_loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
+            vocoder_loading_script(vocoder_model, device)
         post(lambda: _finish_initial_model_load(tts_model))
 
     def _finish_initial_model_load(tts_model):
@@ -1303,9 +1308,21 @@ def gui_generic_controls(tts_config, main_panel_config):
     instead of hand-written per-field code, so a different backend's describe_controls() renders
     through the exact same code path with zero changes here."""
     global speaker_selection
+    global gst_token_selection
     global canvas
     global _generic_control_widgets
 
+    # Reset both compat globals at the top of every call, not just their module-level initial
+    # values -- Piper integration finding (docs/context/CHANGELOG.md): FS2 is always today's
+    # startup default, so speaker_selection/gst_token_selection become real Tk variables the
+    # first time this runs; without an explicit reset here, switching to a backend that declares
+    # neither "style" nor a non-empty speaker_list (e.g. Piper's siwis/tom voices) left both
+    # pointing at FS2's now-torn-down widgets instead of None, which the "stays None"/"compat
+    # shim" comments below and in chatterbox/gui/keyboards.py's play_and_clear_with_style() both
+    # assume. Only a stale-reference issue (not a crash -- confirmed via a real Tk repro script,
+    # not just static reading), but the comments' own claims should actually hold.
+    speaker_selection = None
+    gst_token_selection = None
     _generic_control_widgets = {}
     sub_row_index = 0
     _CHIPS_PER_ROW = 4  # width (grid units) for the speaker dropdown row and the shared
@@ -1401,8 +1418,9 @@ def gui_generic_controls(tts_config, main_panel_config):
                 # name (create_keyboard()'s globals()[key_arg] resolution) to set/restore the GST
                 # style selection around a quick styled phrase. Those are themselves FS2/GST-
                 # specific (unchanged, out of scope here) -- keep the name they already depend on
-                # working rather than touching that table.
-                global gst_token_selection
+                # working rather than touching that table. (global gst_token_selection is already
+                # declared once, at the top of this function -- a second `global` statement here
+                # is a SyntaxError once an assignment under the first one has already happened.)
                 gst_token_selection = selection_var
             continue
 

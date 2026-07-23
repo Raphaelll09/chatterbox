@@ -240,10 +240,12 @@ record.
 
 ### 2.5 Current state / explicitly not done
 
-- **No second backend has been implemented.** The scope was deliberately "make the existing
-  backend conform to a generic contract and prove it fits" — a future Matcha-TTS-style (or truly
-  monolithic) backend should need only its own module + a `config_tts.yaml` entry, zero changes
-  to `app.py`/`synth.py`, but this has not been exercised against a real second backend.
+- **A second backend has since been implemented and exercised — see §3.** This section originally
+  said the contract had never been tested against a real second backend; the Piper fr_FR
+  integration (`docs/context/CHANGELOG.md`) did exactly that and found two real gaps the 5-phase
+  refactor above missed. The scope of *this* section (2.1-2.4) was deliberately "make the existing
+  backend conform to a generic contract and prove it fits" — read §3 for what happened when that
+  claim was actually tested.
 - **`docs/context/ARCHITECTURE.md` was intentionally left untouched** — it was already flagged
   stale (module names/paths predate the Phase 3 reorg) pending its own separately-tracked
   rewrite; re-describing the interchangeable-backend contract there was out of scope for this
@@ -275,3 +277,65 @@ record.
   detailed per-phase entries.
 - `tests/test_backend_describe_controls.py`, `tests/test_synth.py`, `tests/test_gui_worker.py` —
   the pytest coverage added/updated for this refactor.
+
+## 3. Piper integration — the acid test (docs/context/CHANGELOG.md has the full session log)
+
+`cc_prompt_piper_backend.md` set out to add Piper (fr_FR, `piper-tts==1.5.0`) as a second backend
+specifically to test whether §2's contract actually holds for a backend that's maximally different
+from FastSpeech2+HiFi-GAN along every axis (monolithic vs. two-stage, ONNX Runtime vs. PyTorch, no
+G2P frontend of its own vs. an internal espeak-ng phonemizer, no style dimension, per-voice speaker
+maps instead of a shared `speakers.json`). It found two real gaps — one blocking, one silent.
+
+### 3.1 Gap 1 (blocking): `registry.BACKEND` was a hardcoded singleton, not a dispatcher
+
+`chatterbox/synthesis/registry.py`'s original `BACKEND = FastSpeech2HifiGanBackend()` — a single
+concrete instance — was fine with one backend but couldn't actually resolve a second one:
+`tts()`/`describe_controls()` are defined identically-named on every backend by design (that's the
+whole point of the shared contract), so a bare `getattr(BACKEND, name)` had no way to tell *which*
+backend's `tts()` a caller meant once two were registered. §2.2/§2.3 above describe the contract
+correctly, but registry.py's own docstring claim — "nothing else... would need to change" for a
+second backend — was untested and turned out to only be true once registry.py itself became a
+small resolving proxy: `_BackendProxy.__getattr__` resolves colliding names (`tts`,
+`describe_controls`) against whichever backend was most recently activated via the new
+`activate_tts_backend(name)`, called explicitly from `cli.py:load_models()` and
+`gui/app.py:_select_tts_model()`/`_initial_model_load_work()` (one new line each, immediately
+before their existing `getattr(registry.BACKEND, tts_model["load_script"])`) — and falls back to a
+plain name search for uniquely-named methods (`load_script`/`syn_script` strings, which never
+collide by construction). `chatterbox/synth.py` needed **zero** changes — all 3 of its
+`registry.BACKEND` call sites still just resolve through the proxy transparently.
+
+A `backend` field was added to each `config_tts.yaml` `tts_models[i]` entry (`"piper"` for Piper's
+3 voices; omitted — defaults to `"fastspeech2_hifigan"` — on the original FS2 entry, so it needed
+no yaml edit).
+
+### 3.2 Gap 2 (silent, found only by driving a real `tk.Tk()` instance, not by reading the code): stale `gst_token_selection`/`speaker_selection`
+
+`gui/app.py`'s `gst_token_selection` (§2.3's own compat shim for `keyboards.py`'s mood-shortcut
+keys) and `speaker_selection` were only ever *set* to a real Tk variable inside
+`gui_generic_controls()` when the active backend's `describe_controls()` actually declared a
+`"style"` control / non-empty `speaker_list` — never *reset* to `None` otherwise. Static reading
+made this look safe (their module-level default is `None`), but in the realistic sequence — FS2
+(which always loads first, `default_tts: 0`) sets a real variable, user later switches to a
+style-less/single-speaker Piper voice via Settings → Advanced — both globals were left pointing at
+FS2's now-torn-down widgets instead of resetting to `None`. Not a crash (a `tk.IntVar` can still
+have `.set()` called after its owning frame is destroyed; Piper's `gui_control` dict simply never
+reads a `"style"` key either way), but stale state that contradicted the shim's own documented
+intent. **Only surfaced by building an ad hoc script that drives a real `tk.Tk()` instance through
+an actual FS2→Piper→FS2 switch and inspects the globals afterward** — a widget-mocking unit test,
+or reading `gui_generic_controls()`'s code in isolation, cannot see this (exactly the class of bug
+§1's own closing paragraph already flagged this project's ad hoc-Tk-script convention for). Fixed
+by resetting both globals to `None` at the top of every `gui_generic_controls()` call, before the
+controls loop, so each call starts clean regardless of what the previous backend left behind.
+
+### 3.3 Smaller corrections (API drift / doc inaccuracies, not contract gaps)
+
+- `base.py`'s `describe_controls()` docstring says `speaker_list` is `[str, ...]` (a list) with
+  `default_speaker` as a list-index — the real `FastSpeech2HifiGanBackend` implementation returns
+  a **dict** `{name: index}` with `default_speaker` as a raw id. `PiperBackend` matches the real
+  shape, not the docstring — the docstring itself is now known-stale on this point.
+- `text_pipeline.parse_pronunciation_mistakes()`'s substitution *mechanism* (regex replace) is
+  genuinely backend-agnostic, but the *data* it substitutes (`custom_regex_rules.csv`,
+  `url_regex_rules.csv`, part of `symbols_regex_rules.csv`) is heavily laden with FS2's own
+  `{phonetic}` bracket syntax that Piper's phonemizer can't interpret — found by actually running a
+  synthesis (`"test"` → literal `{t e^ s t}` in Piper's input text), not by reading the regex
+  mechanism alone. Piper's own `text_frontend.py` therefore keeps this opt-in and off by default.

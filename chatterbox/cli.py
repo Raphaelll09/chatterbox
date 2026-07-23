@@ -296,14 +296,21 @@ def main():
         # Load TTS
         default_tts = tts_config["tts_models"][args.default_tts]
         state.update_selected_tts(args.default_tts+1)
+        registry.activate_tts_backend(default_tts.get("backend", "fastspeech2_hifigan"))
         tts_loading_script = getattr(registry.BACKEND, default_tts["load_script"])
         tts_loading_script(default_tts, device)
 
-        # Load Vocoder
-        default_vocoder = tts_config["vocoder_models"][args.default_vocoder]
-        state.update_selected_vocoder(args.default_vocoder+1)
-        vocoder_loading_script = getattr(registry.BACKEND, default_vocoder["load_script"])
-        vocoder_loading_script(default_vocoder, device)
+        # Load Vocoder -- skipped for a monolithic TTS model (needs_vocoder: false, e.g. Piper),
+        # which has no separate mel->wav stage and never calls registry.BACKEND.vocoder() (see
+        # chatterbox/synth.py:178-184). Without this guard, selecting such a model still loaded a
+        # full HiFi-GAN unconditionally -- wasted RAM/time, never a crash (load_hifigan/vocoder
+        # are unique names, still resolve fine via registry.py's proxy fallback), found during the
+        # Piper integration (docs/context/CHANGELOG.md).
+        if default_tts.get("needs_vocoder", True):
+            default_vocoder = tts_config["vocoder_models"][args.default_vocoder]
+            state.update_selected_vocoder(args.default_vocoder+1)
+            vocoder_loading_script = getattr(registry.BACKEND, default_vocoder["load_script"])
+            vocoder_loading_script(default_vocoder, device)
 
     # --gui, --benchmark, and --p4-sweep are mutually exclusive top-level modes (checked in this
     # priority order below) -- previously a silent override with no indication --gui had been
