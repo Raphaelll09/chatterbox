@@ -61,9 +61,11 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     not routed through `fastspeech2_hifigan/text_pipeline.py`'s FS2-specific machinery beyond the
     genuinely orthographic `trim_punctuation_mistakes()`). Monolithic (`needs_vocoder: false`), no
     style dimension, `piper-tts` (optional, GPL-3.0-or-later — install manually, not in
-    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 3 voices
-    (`fr_FR-siwis-medium`/`upmc-medium`/`tom-medium`, fetched by `scripts/fetch_piper_voices.sh`
-    into `assets/models/Piper/`, not committed). See its own `README.md` for provenance/licence and
+    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 2 voices
+    (`fr_FR-siwis-medium`/`upmc-medium`, fetched by `scripts/fetch_piper_voices.sh` into
+    `assets/models/Piper/`, not committed — a third voice, `tom-medium`, was evaluated and removed
+    after real-hardware listening found it noticeably lower quality and slower than either of
+    these). See its own `README.md` for provenance/licence and
     `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what this integration found and fixed in the
     contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
     `gui_generic_controls()` — see that section, not repeated here).

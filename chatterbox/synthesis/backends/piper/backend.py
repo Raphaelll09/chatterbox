@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class PiperBackend:
     def __init__(self):
         self._voices = {}  # checkpoint_file -> loaded PiperVoice, so switching between siwis/
-                            # upmc/tom within one session doesn't re-load a voice already loaded
+                            # upmc within one session doesn't re-load a voice already loaded
         self._active_voice = None
         self._active_model_config = None
 
@@ -124,19 +124,28 @@ class PiperBackend:
         default_args = model_config["default_args"]
         result = {
             "controls": [
+                # "resolution" must be set explicitly -- gui/app.py's gui_generic_controls() (the
+                # generic tk.Scale builder) defaults to resolution=1 when a control doesn't
+                # specify one, which on a 0.5-2.0 range only leaves 0.5/1.5 selectable (confirmed
+                # live: user-reported "cursor only has two values" -- docs/context/CHANGELOG.md).
+                # FS2's own sliders (fastspeech2_hifigan/backend.py's describe_controls()) all set
+                # this explicitly; these three were the oversight, not a gap in the generic
+                # contract itself.
                 {"type": "slider", "key": "length_scale", "label_key": "speed_label",
-                 "min": 0.5, "max": 2.0, "default": default_args["length_scale"]},
+                 "min": 0.0, "max": 2.0, "resolution": 0.1, "default": default_args["length_scale"]},
                 {"type": "slider", "key": "noise_scale", "label_key": "variability_label",
-                 "min": 0.0, "max": 1.0, "default": default_args["noise_scale"], "advanced": True},
+                 "min": 0.0, "max": 1.0, "resolution": 0.05,
+                 "default": default_args["noise_scale"], "advanced": True},
                 {"type": "slider", "key": "noise_w_scale",
                  "label_key": "phoneme_duration_variability_label",
-                 "min": 0.0, "max": 1.0, "default": default_args["noise_w_scale"], "advanced": True},
+                 "min": 0.0, "max": 1.0, "resolution": 0.05,
+                 "default": default_args["noise_w_scale"], "advanced": True},
             ],
         }
 
         # speaker_id_map/default_speaker_id are real PiperConfig fields (confirmed live on the Pi
         # against fr_FR-upmc-medium.onnx.json: {"jessica": 0, "pierre": 1}) -- empty {} for a
-        # single-speaker voice (siwis/tom), in which case speaker_list/default_speaker are omitted
+        # single-speaker voice (siwis), in which case speaker_list/default_speaker are omitted
         # entirely, matching base.py's docstring default and FastSpeech2HifiGanBackend's own
         # dict-shaped (not list-shaped) speaker_list (Finding #2 in the Phase B plan).
         speaker_map = self._active_voice.config.speaker_id_map

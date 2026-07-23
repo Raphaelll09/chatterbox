@@ -205,28 +205,10 @@ tts_models:
       noise_w_scale: 0.8
       apply_custom_regex_rules: false
 
-  - label: "Piper fr_FR (tom, medium)"
-    backend: "piper"
-    load_script: "load_piper"
-    syn_script: "syn_piper"
-    gui_script: "gui_generic_controls"
-    folder: "assets/models/Piper"
-    checkpoint_file: "fr_FR-tom-medium.onnx"
-    output_location: "output/audio"
-    gst_token_list: {}
-    needs_vocoder: false
-    accepts_phoneme_input: false
-    # audio_file_duration.npy (FastSpeech2's own per-symbol duration output, chatterbox/synth.py)
-    # is not something Piper produces -- confirmed live via a real --benchmark --join run on the
-    # Pi (docs/context/CHANGELOG.md), which crashed with FileNotFoundError before this flag
-    # existed. False disables the subtitle-writing path for this model regardless of the
-    # top-level subtitles.create_file setting.
-    supports_subtitles: false
-    default_args:
-      length_scale: 1.0
-      noise_scale: 0.667
-      noise_w_scale: 0.8
-      apply_custom_regex_rules: false
+  # "Piper fr_FR (tom, medium)" was removed after real-hardware evaluation (docs/context/
+  # CHANGELOG.md): noticeably lower voice quality and slower inference than siwis/upmc, with no
+  # offsetting benefit. assets/models/Piper/fr_FR-tom-medium.onnx(.json) removed too --
+  # scripts/fetch_piper_voices.sh no longer fetches it.
 
 vocoder_models:
   - label: "Hifi-GAN V2 FR 570000"

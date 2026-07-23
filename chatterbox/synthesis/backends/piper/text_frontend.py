@@ -8,7 +8,7 @@ FS2-specific config dependency there) -- its SPEAKER=... branch requires the (pr
 model_config, train_config) tuple FastSpeech2 loads (to resolve a name against FS2's own
 speakers.json), which Piper doesn't have and shouldn't fake. Piper voices carry their own,
 differently-shaped per-voice speaker map (PiperVoice.config.speaker_id_map -- confirmed live on
-the Pi during Phase B: {} for single-speaker siwis/tom, {"jessica": 0, "pierre": 1} for upmc), so
+the Pi during Phase B: {} for single-speaker siwis, {"jessica": 0, "pierre": 1} for upmc), so
 _parse_tags() below re-implements just the same bracket-scanning shape (up to 4 tags, same
 SPEAKER=/STYLE=/STYLE_INTENSITY=/STYLE_TAG= substring syntax users already know from the FS2 path)
 against that instead.

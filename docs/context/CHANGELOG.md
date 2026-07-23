@@ -15,6 +15,74 @@ state before starting new work.
 
 ---
 
+## 2026-07-23 — Piper GUI fixes from real-hardware feedback, and dropping the tom voice
+
+- What: follow-up to the Piper integration below, driven entirely by testing the real GUI in
+  landscape on the Pi 5 kiosk display (none of these were caught by the Tk repro script's mocked
+  backends, the pytest suite, or the CLI/`--benchmark` verification — all genuinely needed eyes on
+  the physical screen):
+  1. **Main window and Settings dialog both opened off-screen in landscape.** Root cause in both
+     cases: `.geometry("WxH")` sizes the *content* area only; the window manager draws its title
+     bar *outside* that (typically above it). The main window's fixed `440x800` (portrait-shaped)
+     config value, applied with no position and no screen-size awareness, let the WM's default
+     placement center a too-tall window with its title bar entirely above the visible screen. The
+     Settings dialog had the same problem from unset position, once its own content also grew
+     wide/tall enough (see the Piper integration entry below). Fixed properly, not by re-guessing
+     pixel margins: the main window now tries `window.attributes("-zoomed", True)` (X11 maximize)
+     first, falling back to a centered-with-margin geometry only if unsupported; the Settings
+     dialog is now explicitly positioned near the left edge with a top margin reserved for the
+     title bar, per explicit user preference over centering again.
+  2. **Piper's speed slider only had two selectable values.** `gui_generic_controls()`'s slider
+     builder defaults to `resolution=1` when a control doesn't declare one; `PiperBackend.
+     describe_controls()`'s three sliders (`length_scale`, `noise_scale`, `noise_w_scale`) all
+     omitted it (every FS2 slider sets this explicitly — this was purely an oversight, not a gap
+     in the generic contract). On `length_scale`'s 0.5-2.0 range that left only 0.5/1.5 reachable.
+     Fixed: `length_scale` now spans 0.0-2.0 in 0.1 steps (confirmed 0.0 doesn't crash — a
+     real-hardware check on the Pi showed it just produces a near-silent ~0.01s clip), the two
+     advanced noise sliders get 0.05 steps. Added a regression test asserting every Piper slider
+     declares a resolution.
+  3. **"Piper voices are super slow"** turned out not to be a bug: length_scale=1.0 (the default,
+     untouched slider) produces 4.249s for the benchmark's REF sentence on the Pi — essentially
+     identical to FS2's 4.203s for the same sentence. The "7.4s" originally reported was measured
+     with the slider pushed to its old max (2.0), which produces 7.721s — matching almost exactly.
+     Confirmed via FastSpeech2's own code (`predicted_duration = ... * d_control`,
+     `assets/models/FastSpeech2/model/modules.py`) that FS2's "Vitesse" slider already has this
+     same "higher = slower" direction — a pre-existing ambiguity, not something Piper introduced.
+     Rather than inverting Piper's value (which would make it *inconsistent* with FS2 instead of
+     fixing the real problem), fixed the shared `speed_label` i18n string to state the direction
+     explicitly (`"Vitesse (coef)"` → `"Vitesse (+ = plus lent)"`) — benefits both backends, zero
+     behavior change.
+  4. **`fr_FR-tom-medium` removed.** Real-hardware listening (user evaluation, all 3 voices heard
+     directly on the Pi) found it noticeably lower quality and slower to synthesize than either
+     `siwis` or `upmc`, with no offsetting benefit — not a bug, a deliberate choice given the
+     evidence. Removed its `config_tts.yaml` entry, its `fetch_piper_voices.sh` download, its two
+     `assets/models/Piper/fr_FR-tom-medium.onnx(.json)` files, and updated every doc/comment that
+     named it or counted "3 voices". `siwis`/`upmc` keep their existing indices (`tom` was last in
+     the list, so no renumbering).
+- Files: `chatterbox/gui/app.py` (window maximize/fallback geometry, button-wrap comment),
+  `chatterbox/gui/settings.py` (dialog position), `chatterbox/gui/i18n.py` (`speed_label` text),
+  `chatterbox/synthesis/backends/piper/backend.py` (slider resolutions, tom removed from
+  comments), `chatterbox/config/config_tts.yaml` (tom entry removed), `scripts/
+  fetch_piper_voices.sh` (tom removed, voice count now dynamic), `chatterbox/synthesis/backends/
+  piper/README.md`, `CLAUDE.md`, `INSTALL.md`, `docs/gui/INTERCHANGEABLE_BACKENDS.md` (voice
+  count/mentions updated), `tests/test_piper_describe_controls.py` (new slider-resolution
+  regression test, comment fixes).
+- Why: the previous entry's GUI verification only covered a Tk repro script with mocked backends
+  at a dev-machine resolution — this entry is what actually running it on the real kiosk display
+  in landscape, and listening to all 3 voices, turned up.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 263 passed, 1 pre-existing skip (Windows).
+  Each fix pushed individually to the Pi and re-verified: `-zoomed`/settings position via user
+  confirmation on the physical screen ("window is fixed"); slider steps via
+  `describe_controls()` output inspection; tom's removal via `scripts/fetch_piper_voices.sh`
+  reporting "All 2 Piper fr_FR voices present" and a clean `pytest` run with both local voice
+  files deleted first.
+- Notes/gotchas: the Wayland-vs-X11 caveat from the main-window fix still applies —
+  `-zoomed` is an X11 attribute; Tk reaches the display via xwayland under the Pi's Wayland
+  session, and if a WM ever stops honoring it, the geometry fallback is what actually keeps the
+  window fully on-screen (size, not position, is the load-bearing part of that fallback).
+
+---
+
 ## 2026-07-23 — Add Piper (fr_FR) as a second synthesis backend
 
 - What: implements `cc_prompt_piper_backend.md`'s Phase A (verification) and Phase B (integration)

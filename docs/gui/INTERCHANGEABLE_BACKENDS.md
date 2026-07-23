@@ -304,9 +304,11 @@ plain name search for uniquely-named methods (`load_script`/`syn_script` strings
 collide by construction). `chatterbox/synth.py` needed **zero** changes — all 3 of its
 `registry.BACKEND` call sites still just resolve through the proxy transparently.
 
-A `backend` field was added to each `config_tts.yaml` `tts_models[i]` entry (`"piper"` for Piper's
-3 voices; omitted — defaults to `"fastspeech2_hifigan"` — on the original FS2 entry, so it needed
-no yaml edit).
+A `backend` field was added to each `config_tts.yaml` `tts_models[i]` entry (`"piper"` for each
+Piper voice; omitted — defaults to `"fastspeech2_hifigan"` — on the original FS2 entry, so it
+needed no yaml edit). Piper started with 3 voices; a 3rd, `tom`, was evaluated and removed after
+real-hardware listening found it noticeably lower quality and slower than the other two
+(`docs/context/CHANGELOG.md`) — 2 remain today.
 
 ### 3.2 Gap 2 (silent, found only by driving a real `tk.Tk()` instance, not by reading the code): stale `gst_token_selection`/`speaker_selection`
 

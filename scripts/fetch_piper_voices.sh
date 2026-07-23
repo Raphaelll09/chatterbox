@@ -20,10 +20,11 @@ BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR"
 mkdir -p "$DEST_DIR"
 
 # voice_dir:checkpoint_stem:sha256(.onnx):sha256(.onnx.json)
+# "tom" was removed (docs/context/CHANGELOG.md) after real-hardware evaluation found noticeably
+# lower voice quality and slower inference than siwis/upmc, with no offsetting benefit.
 VOICES=(
   "siwis:fr_FR-siwis-medium:641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99:39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959"
   "upmc:fr_FR-upmc-medium:9abb3800c199148897a9ed64e100d224f3de83579f100044174ad19418f1786f:e8636ec15dfd5d72db37a02cb5320a20f2b8d339f2a0e4337da64c58a33a5868"
-  "tom:fr_FR-tom-medium:bf65074ccdeeeeaa832e75edb1c0a513c01c9a972bdf085ff8a6e71ea234fd41:2f7f885ad5a0aad802e3cc24e4f57239febdcb142b4876de5d238094674361cc"
 )
 
 verify_sha256() {
@@ -58,4 +59,4 @@ for entry in "${VOICES[@]}"; do
 done
 
 echo
-echo "All 3 Piper fr_FR voices present and sha256-verified in $DEST_DIR"
+echo "All ${#VOICES[@]} Piper fr_FR voices present and sha256-verified in $DEST_DIR"
