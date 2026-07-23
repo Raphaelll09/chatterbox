@@ -47,6 +47,13 @@ class Recorder:
         # single sentence record must sum them rather than overwrite.
         self.durations = {}
         self.extra = {}
+        # First-seen order of distinct stage names (Piper integration,
+        # docs/context/CHANGELOG.md) -- generalizes finalize()'s output beyond the 4 names it used
+        # to hardcode (front_end/acoustic/vocoder/write), so a backend with a different stage
+        # shape (e.g. Piper's "synth") isn't silently dropped. Repeated stage() calls for the same
+        # name (the "§" case above) don't re-append -- self.durations/self.timestamps already
+        # collapse those into one entry per name, same as before.
+        self.stage_order = []
 
     @contextlib.contextmanager
     def stage(self, name):
@@ -55,6 +62,8 @@ class Recorder:
             yield
         finally:
             t1 = time.monotonic()
+            if name not in self.durations:
+                self.stage_order.append(name)
             self.durations[name] = self.durations.get(name, 0.0) + (t1 - t0)
             self.timestamps["t_{}_end".format(name)] = t1
 
@@ -99,6 +108,20 @@ class Recorder:
             "n_samples": self.extra.get("n_samples"),
             "sample_rate": self.extra.get("sample_rate"),
             "rtf": rtf,
+            # Generic, order-preserving stage list -- alongside (not replacing) the fixed FS2
+            # fields above, which stay byte-identical for backward compatibility. join.py's
+            # build_per_stage_results() reads this when present (any backend, including FS2 going
+            # forward) and falls back to the fixed front_end/acoustic/vocoder/write chain only for
+            # records written before this field existed (re-joining historical per_sentence.jsonl
+            # files -- see join.py's own module docstring on that use case).
+            "stages": [
+                {
+                    "name": name,
+                    "t_end": self.timestamps.get("t_{}_end".format(name)),
+                    "duration_ms": self.durations.get(name, 0.0) * 1000.0,
+                }
+                for name in self.stage_order
+            ],
         }
 
         os.makedirs(os.path.dirname(self.out_path), exist_ok=True)

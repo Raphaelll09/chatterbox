@@ -342,6 +342,9 @@ controls loop, so each call starts clean regardless of what the previous backend
 
 ### 3.4 Three more gaps — found only by an actual `do_tts.py --benchmark` run on the Pi 5, none of them caught by §3.1-§3.3's own tests/repro script
 
+(A fourth, found by then actually *inspecting the CSV output* of that run rather than trusting the
+console — see §3.5 — brings the real total to four.)
+
 The pattern across all three: they only manifest when `cli.py`'s `load_models()` and
 `chatterbox.synth.synthesize()` run together, end to end, with a real `needs_vocoder: false`
 model selected — something no unit test, backend-level smoke test, or the Tk repro script
@@ -382,3 +385,45 @@ actually exercises (they each call `PiperBackend.tts()`/`describe_controls()` di
    a same-session unit test can and can't catch: it can catch a regression from *this* behavior,
    but not a version of the contract that was wrong from the start. Only a real run through the
    unmodified `synth.py` — which has its own, independent opinion about the shape — caught it.
+
+### 3.5 Gap 4 — found by inspecting the CSV output of a *successful* run, not by reading code or trusting the console
+
+Everything above was caught by a crash. This one wasn't — the fixed Piper run's console output
+looked completely correct (`TTS`/`Denoise` lines, sensible durations, `"Wrote 11 sentence rows, 44
+stage rows"`), and it was only inspecting `per_stage_results.csv` directly that showed something
+wrong: every stage column read `front_end_ms: 0.0, acoustic_ms: 0.0, vocoder_ms: 0.0, write_ms:
+74.4` — FS2's own 4 stage names, despite Piper never running any of them, with no `synth` column
+anywhere. `tools/monitoring/profiling/recorder.py`'s `Recorder.stage(name)` genuinely accumulates
+any name into `self.durations`/`self.timestamps` — but `Recorder.finalize()` only ever read back
+4 **hardcoded** names into the JSON record it writes; a `"synth"` stage was computed correctly,
+then silently discarded at serialization. Pre-existing profiling-subsystem behavior — Piper was
+just the first caller to ever pass `.stage()` a 5th name.
+
+This is a genuinely different class of bug than §3.1-§3.4: those all crashed, forcing the gap to
+be found. This one produced a *plausible-looking, silently wrong* result — the kind that could
+have shipped into an actual research dataset unnoticed if the CSV hadn't been opened and read.
+
+Fixed properly (not just worked around for Piper — the user was asked and chose the full fix over
+a one-line rename), spanning three files with three different scopes:
+
+- `recorder.py`: `Recorder.finalize()` now also writes a generic, order-preserving `"stages"`
+  list (`[{"name", "t_end", "duration_ms"}, ...]`) covering every stage actually recorded — the 4
+  fixed fields stay byte-identical alongside it, for backward compatibility.
+- `tools/monitoring/profiling/join.py`: `build_per_stage_results()` now derives each sentence's
+  stage rows from that generic list (a new `_stage_windows()`, chaining each stage's start from
+  the previous stage's end), falling back to the old fixed 4-stage chain only for historical
+  records with no `"stages"` field — re-joining old data (this module's own documented use case)
+  still works unchanged.
+- `tools/measurement/benchmark/export_to_xlsx.py` was **deliberately left un-generalized** — its
+  entire layout is bound to a specific external spreadsheet template
+  (`Chatterbox_Power_Measurements_final.xlsx`), not something to redesign as a side effect of a
+  backend integration. Instead it gained a loud guard (`_check_stage_shape()`): a stage name
+  outside the fixed 4 now raises `SystemExit` with a clear message, rather than silently
+  mis-slicing rows into misaligned blocks — the same silent-wrongness class of bug as the one this
+  gap started as, now made structurally impossible for this tool instead of just fixed once.
+
+Re-verified on the Pi: a fresh Piper run now reports `"Wrote 11 sentence rows, 22 stage rows"`
+(the real `synth`+`write` shape), `per_stage_results.csv` has real `synth` rows with energy/CPU
+data, and re-running FS2 afterward still reports `44` stage rows with its original 4 names —
+confirms the generalization is additive, not a behavior change for the backend it was designed
+around.

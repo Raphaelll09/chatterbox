@@ -76,7 +76,36 @@ def load_per_stage_rows(profile_dir):
     if not os.path.exists(path):
         return []
     with open(path, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
+    _check_stage_shape(rows)
+    return rows
+
+
+def _check_stage_shape(stage_rows):
+    """This tool's whole layout (STAGES, PASS_SIZE * len(STAGES) block splitting, the front_ms/
+    acou_ms/voco_ms/write_ms columns) is bound to a specific external spreadsheet template
+    (Chatterbox_Power_Measurements_final.xlsx's P2P3_Synthesis sheet, this module's own
+    docstring) built around exactly FS2's 4 fixed stage names. join.py's per_stage_results.csv is
+    now genuinely backend-agnostic (tools/monitoring/profiling/join.py's _stage_windows(),
+    Piper integration -- docs/context/CHANGELOG.md) and can contain a different stage count/names
+    for a different backend (e.g. Piper's "synth"+"write") -- silently slicing those rows into
+    fixed len(STAGES)-sized blocks here would misalign every downstream block, corrupting the
+    pasted data with no error at all. Fail loudly instead: this tool only ever supported the FS2
+    4-stage shape, and generalizing its paste-target layout is out of scope (it's bound to a fixed
+    external template, not something to redesign as a side effect of a backend integration)."""
+    if not stage_rows:
+        return
+    seen_stage_names = {row["stage"] for row in stage_rows}
+    if seen_stage_names - set(STAGES):
+        raise SystemExit(
+            "[export_to_xlsx] per_stage_results.csv contains stage name(s) {} not in this tool's "
+            "fixed layout {} -- this run likely used a non-FastSpeech2 backend. export_to_xlsx "
+            "only supports FS2's 4-stage shape (bound to the external "
+            "Chatterbox_Power_Measurements_final.xlsx paste template); read "
+            "per_sentence_results.csv/per_stage_results.csv directly for this run instead.".format(
+                sorted(seen_stage_names - set(STAGES)), STAGES,
+            )
+        )
 
 
 def _split_into_passes(rows, block_size):

@@ -101,6 +101,43 @@ state before starting new work.
        `out_dir` directly; the regression test (renamed
        `test_tts_returns_output_dir_not_a_file_prefix`) now asserts against the shape `synth.py`
        actually expects instead of mirroring the backend's own (previously wrong) output.
+  - **A 4th real bug, found by inspecting the actual `per_stage_results.csv` from the fixed
+    Piper run above, not by reading code**: `PiperBackend.tts()`'s `profiling_rec.stage("synth")`
+    call was silently getting dropped from every joined CSV. `tools/monitoring/profiling/
+    recorder.py`'s `Recorder.stage(name)` *does* accumulate any name generically into
+    `self.durations`/`self.timestamps` — but `Recorder.finalize()` only ever read back 4
+    **hardcoded** names (`front_end`/`acoustic`/`vocoder`/`write`) into the JSON record it writes;
+    a `"synth"` stage was computed correctly then thrown away at serialization, no error, no
+    warning. This is pre-existing profiling-subsystem behavior, not something the Piper
+    integration introduced — just the first thing to ever call `.stage()` with a 5th name.
+    Confirmed live: `front_end_ms: 0.0, acoustic_ms: 0.0, vocoder_ms: 0.0, write_ms: 74.4` in a
+    real per-sentence record, with the correctly-computed `total_synth_ms: 620.2` nowhere broken
+    down. Properly generalized (not just worked around for Piper), after weighing the two options
+    with the user given the blast radius on shared measurement tooling:
+    - `Recorder.finalize()` now also writes a generic, order-preserving `"stages"` list
+      (`[{"name", "t_end", "duration_ms"}, ...]`) alongside the 4 fixed fields, which stay
+      byte-identical for backward compatibility.
+    - `tools/monitoring/profiling/join.py`'s `build_per_stage_results()` now derives each
+      sentence's stage rows from that generic list via a new `_stage_windows()` (chaining each
+      stage's start from the previous stage's end, first stage from `t_synth_start`) — falling
+      back to the old fixed 4-stage chain only for a record with no `"stages"` field at all
+      (re-joining a `per_sentence.jsonl` written before this change existed, a use case the
+      module's own docstring already documents).
+    - `tools/measurement/benchmark/export_to_xlsx.py` was deliberately **not** generalized — its
+      whole layout (`STAGES`, `PASS_SIZE * len(STAGES)` block-splitting, the `front_ms`/`acou_ms`/
+      `voco_ms`/`write_ms` columns) is bound to a specific external spreadsheet template
+      (`Chatterbox_Power_Measurements_final.xlsx`'s `P2P3_Synthesis` sheet, per this module's own
+      docstring), which redesigning wasn't asked for and isn't this integration's call to make.
+      Added a loud guard instead (`_check_stage_shape()`): a run with any stage name outside the
+      fixed 4 now raises a clear `SystemExit` telling the caller to read the CSVs directly, rather
+      than silently mis-slicing rows into misaligned blocks and corrupting the pasted data with no
+      error at all (confirmed live: exporting the Piper run above now fails loudly with exactly
+      that message, instead of producing a corrupted `.xlsx`).
+    Re-verified on the Pi after this fix: a fresh Piper siwis run now writes `"Wrote 11 sentence
+    rows, 22 stage rows"` (11 sentences x the real 2 stages, `synth`+`write` — not the old,
+    silently-wrong `44` = 11 x FS2's 4), with real `synth`/`write` rows (including energy/CPU
+    columns) in `per_stage_results.csv`; FS2 re-run afterward still produces `44` stage rows with
+    its original 4 names, confirming the generalization changes nothing for FS2.
 - Files:
   - New: `chatterbox/synthesis/backends/piper/{__init__.py,backend.py,text_frontend.py,README.md}`,
     `scripts/fetch_piper_voices.sh`, `tests/{test_registry_backend_proxy.py,
@@ -112,10 +149,14 @@ state before starting new work.
     `gui_generic_controls()`), `chatterbox/gui/keyboards.py` (None-guard),
     `chatterbox/gui/i18n.py` (2 new label keys), `chatterbox/config/config_tts.yaml` (3 new
     `tts_models` entries: siwis/upmc/tom, each with `supports_subtitles: false`), `.gitignore`
-    (Piper voice files, matching every other vendored model's "weights not in git" pattern).
+    (Piper voice files, matching every other vendored model's "weights not in git" pattern),
+    `tools/monitoring/profiling/recorder.py` (generic `"stages"` field), `tools/monitoring/
+    profiling/join.py` (`_stage_windows()`), `tools/measurement/benchmark/export_to_xlsx.py`
+    (`_check_stage_shape()` guard), `tests/{test_profiling.py,test_export_xlsx.py}` (new coverage
+    for all three), `chatterbox/synthesis/backends/piper/backend.py` (the `location_mel_file` fix).
 - Why: `cc_prompt_piper_backend.md`'s explicit purpose — prove or disprove the interchangeable-
   backend contract against a real second backend, not just the one it was extracted from.
-- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 254 passed, 1 pre-existing skip (Windows).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 262 passed, 1 pre-existing skip (Windows).
   Real-weights smoke test run locally (all 3 voices have a Windows wheel too, convenient for
   dev-loop testing without SSH): loaded each voice, synthesized, confirmed wav format (22050 Hz/
   16-bit/mono, matching FS2+HiFi-GAN's own output so the shared playback path needs no resampling
