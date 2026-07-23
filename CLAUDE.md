@@ -100,11 +100,14 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
   - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
     `docs/context/ARCHITECTURE.md`, stale on paths but not on structure). Each `tts_models[i]` entry
-    carries two static capability flags read *before* that model is loaded (see "Interchangeable
-    backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false)
-    and `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
+    carries three static capability flags read *before* that model is loaded (see "Interchangeable
+    backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false),
+    `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
     `"translate_labels"` or `"hide"`, for when a model doesn't understand the Phonèmes keyboard's
-    phone-code syntax). `config/paths.py` — repo-root-anchored path resolution for the vendored
+    phone-code syntax), and `supports_subtitles` (added for the Piper backend — `false` skips
+    `chatterbox/synth.py`'s subtitle-writing path, which otherwise assumes FastSpeech2's own
+    per-symbol `audio_file_duration.npy` output exists; see
+    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.4). `config/paths.py` — repo-root-anchored path resolution for the vendored
     model dirs (added Phase 0); `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs
     (below), reloadable on SIGHUP.
   - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon

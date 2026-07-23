@@ -63,10 +63,17 @@ class PiperBackend:
     def tts(self, text_to_syn, tts_config, gui_control, linking_utt):
         """Matches syn_script's caller contract (chatterbox/synth.py calls this exactly like
         FastSpeech2HifiGanBackend.tts()): returns (location_mel_file, processed_text), where
-        location_mel_file is actually a suffix-less base *wav* path here (needs_vocoder: false --
-        chatterbox/synth.py:178-184 treats it as os.path.join(location_mel_file, "audio_file") and
-        appends ".wav" itself at synth.py:189; PiperBackend writes straight to that exact location
-        instead of a separate mel stage)."""
+        location_mel_file must be the output *directory* -- exactly like FS2's own tts() return
+        value (fastspeech2_hifigan/backend.py:330's os.path.join(model_folder, output_location)),
+        not a file-path prefix. This matters specifically because needs_vocoder: false is set:
+        chatterbox/synth.py's needs_vocoder=False branch builds the base wav path itself via
+        os.path.join(location_mel_file, "audio_file") and appends ".wav" at synth.py's write step
+        -- returning anything other than the bare directory here double-joins "audio_file" and
+        produces a wrong, nonexistent path (confirmed live: a real --benchmark run on the Pi
+        crashed with FileNotFoundError on .../audio_file/audio_file.wav before this was fixed --
+        docs/context/CHANGELOG.md). PiperBackend still *writes* the real file at
+        <location_mel_file>/audio_file.wav itself, same as always -- only the returned tuple
+        element changed."""
         from piper.config import SynthesisConfig
 
         clean_text, speaker_id = text_frontend.prepare(
@@ -101,7 +108,7 @@ class PiperBackend:
             with wave.open(wav_path, "wb") as wav_file:
                 self._active_voice.synthesize_wav(clean_text, wav_file, syn_config=syn_config)
 
-        return os.path.join(out_dir, "audio_file"), clean_text
+        return out_dir, clean_text
 
     # ---- GUI model-options panel ------------------------------------------------------
 

@@ -52,15 +52,23 @@ def _make_tts_config(tmp_path):
     }
 
 
-def test_tts_writes_wav_at_location_mel_file_plus_dot_wav(tmp_path):
+def test_tts_returns_output_dir_not_a_file_prefix(tmp_path):
+    # Regression test: location_mel_file must be the output *directory*, matching FS2's own
+    # tts() return value -- chatterbox/synth.py's needs_vocoder=False branch does
+    # os.path.join(location_mel_file, "audio_file") itself. An earlier version of this backend
+    # returned os.path.join(out_dir, "audio_file") here (a file-prefix, not a directory), which
+    # synth.py then double-joined into a nonexistent .../audio_file/audio_file.wav path -- only
+    # caught by a real --benchmark run on the Pi going through the real synth.py, not by this
+    # backend's own tests in isolation (docs/context/CHANGELOG.md).
     backend = _make_backend_with_fake_voice()
     tts_config = _make_tts_config(tmp_path)
 
     location_mel_file, processed_text = backend.tts("Bonjour.", tts_config, None, False)
 
-    assert location_mel_file == os.path.join(str(tmp_path), "output", "audio_file")
-    assert not location_mel_file.endswith(".wav")  # synth.py:189 appends the suffix itself
-    assert os.path.exists(location_mel_file + ".wav")
+    assert location_mel_file == os.path.join(str(tmp_path), "output")
+    # Mirrors chatterbox/synth.py's own needs_vocoder=False branch exactly.
+    location_wav_file = os.path.join(location_mel_file, "audio_file")
+    assert os.path.exists(location_wav_file + ".wav")
 
 
 def test_tts_never_imports_flaubert(tmp_path):

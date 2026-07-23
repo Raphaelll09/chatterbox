@@ -170,6 +170,12 @@ tts_models:
     gst_token_list: {}
     needs_vocoder: false
     accepts_phoneme_input: false
+    # audio_file_duration.npy (FastSpeech2's own per-symbol duration output, chatterbox/synth.py)
+    # is not something Piper produces -- confirmed live via a real --benchmark --join run on the
+    # Pi (docs/context/CHANGELOG.md), which crashed with FileNotFoundError before this flag
+    # existed. False disables the subtitle-writing path for this model regardless of the
+    # top-level subtitles.create_file setting.
+    supports_subtitles: false
     default_args:
       length_scale: 1.0
       noise_scale: 0.667
@@ -187,6 +193,12 @@ tts_models:
     gst_token_list: {}
     needs_vocoder: false
     accepts_phoneme_input: false
+    # audio_file_duration.npy (FastSpeech2's own per-symbol duration output, chatterbox/synth.py)
+    # is not something Piper produces -- confirmed live via a real --benchmark --join run on the
+    # Pi (docs/context/CHANGELOG.md), which crashed with FileNotFoundError before this flag
+    # existed. False disables the subtitle-writing path for this model regardless of the
+    # top-level subtitles.create_file setting.
+    supports_subtitles: false
     default_args:
       length_scale: 1.0
       noise_scale: 0.667
@@ -204,6 +216,12 @@ tts_models:
     gst_token_list: {}
     needs_vocoder: false
     accepts_phoneme_input: false
+    # audio_file_duration.npy (FastSpeech2's own per-symbol duration output, chatterbox/synth.py)
+    # is not something Piper produces -- confirmed live via a real --benchmark --join run on the
+    # Pi (docs/context/CHANGELOG.md), which crashed with FileNotFoundError before this flag
+    # existed. False disables the subtitle-writing path for this model regardless of the
+    # top-level subtitles.create_file setting.
+    supports_subtitles: false
     default_args:
       length_scale: 1.0
       noise_scale: 0.667
