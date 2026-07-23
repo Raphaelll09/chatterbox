@@ -677,34 +677,53 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         """Called by settings.open_settings() every time the dialog opens -- rebuilds the picker
         buttons fresh (same pattern as the rest of that dialog), highlighted to match whichever
         model is currently loaded (chatterbox.state.TTS_INDEX/VOCODER_INDEX are 0-based; button ids
-        here are 1-based, matching select_model_from_list()'s existing convention)."""
-        tk.Label(master=parent_frame, text=i18n.t("tts_label")).grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
-        list_tts_buttons = []
-        for tts_index, tts_model in enumerate(tts_config["tts_models"], start=1):
-            btn = tk.Button(
-                master=parent_frame, text=tts_model["label"],
-                command=lambda m=tts_model, i=tts_index, lb=list_tts_buttons: _select_tts_model(m, i, lb),
-            )
-            btn.grid(row=0, column=tts_index, sticky=tk.EW, padx=2, pady=2)
-            list_tts_buttons.append(btn)
+        here are 1-based, matching select_model_from_list()'s existing convention).
+
+        Picker buttons wrap after _MODEL_BUTTONS_PER_ROW instead of growing one unbroken row per
+        model (Piper integration, docs/context/CHANGELOG.md: 4 tts_models entries -> 5 once Piper's
+        3 voices were added, up from FS2's original 1 -- a single row of long text-labeled buttons
+        ("Piper fr_FR (upmc, medium)") grew wider than the actual kiosk screen. settings.py's
+        scroll_canvas sizes itself to content's *natural* width with no cap of its own (unlike its
+        height, already capped+scrollable from an earlier PC-GUI bug report -- see that module's
+        own comment) -- confirmed live on the Pi in landscape: the Settings dialog opened wider
+        than the screen, its own title bar (and thus close/maximize controls) unreachable, since
+        it's modal (grab_set()). Wrapping here fixes the actual width growth at its source, rather
+        than only relying on settings.py's own defensive width cap/horizontal scroll (added
+        alongside this, for any future content that grows wide some other way)."""
+        _MODEL_BUTTONS_PER_ROW = 2  # long text labels -- keep touch targets roomy on a kiosk
+
+        def _grid_model_buttons(models, start_row, select_fn):
+            """Returns (list_of_buttons, next_free_row)."""
+            buttons = []
+            for index, model in enumerate(models, start=1):
+                row = start_row + (index - 1) // _MODEL_BUTTONS_PER_ROW
+                col = 1 + (index - 1) % _MODEL_BUTTONS_PER_ROW
+                btn = tk.Button(
+                    master=parent_frame, text=model["label"],
+                    command=lambda m=model, i=index, lb=buttons: select_fn(m, i, lb),
+                )
+                btn.grid(row=row, column=col, sticky=tk.EW, padx=2, pady=2)
+                buttons.append(btn)
+            rows_used = -(-len(models) // _MODEL_BUTTONS_PER_ROW)  # ceil division
+            return buttons, start_row + max(rows_used, 1)
+
+        next_row = 0
+        tk.Label(master=parent_frame, text=i18n.t("tts_label")).grid(
+            row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+        list_tts_buttons, next_row = _grid_model_buttons(
+            tts_config["tts_models"], next_row, _select_tts_model)
         select_model_from_list(state.TTS_INDEX + 1, list_tts_buttons)
 
         # Vocodeur picker is skipped entirely for a monolithic TTS model (needs_vocoder: false,
         # config_tts.yaml, interchangeable-backend GUI refactor) -- nothing to pick, since that
         # model produces a finished wav directly with no separate mel->wav stage (chatterbox/
-        # synth.py). Row 1 is simply left blank in that case rather than renumbering rows 2/3
-        # below -- a cosmetic-only gap for a case that doesn't exist with today's one real backend.
+        # synth.py).
         selected_tts_model = tts_config["tts_models"][state.TTS_INDEX]
         if selected_tts_model.get("needs_vocoder", True):
-            tk.Label(master=parent_frame, text=i18n.t("vocoder_label")).grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
-            list_vocoder_buttons = []
-            for voc_index, vocoder_model in enumerate(tts_config["vocoder_models"], start=1):
-                btn = tk.Button(
-                    master=parent_frame, text=vocoder_model["label"],
-                    command=lambda m=vocoder_model, i=voc_index, lb=list_vocoder_buttons: _select_vocoder_model(m, i, lb),
-                )
-                btn.grid(row=1, column=voc_index, sticky=tk.EW, padx=2, pady=2)
-                list_vocoder_buttons.append(btn)
+            tk.Label(master=parent_frame, text=i18n.t("vocoder_label")).grid(
+                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+            list_vocoder_buttons, next_row = _grid_model_buttons(
+                tts_config["vocoder_models"], next_row, _select_vocoder_model)
             select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
 
         # Manual portrait/landscape override -- only meaningful (and only shown) when the
@@ -713,7 +732,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         # <Configure>-based auto-detection unreliable in practice (real-hardware feedback).
         if _refresh_orientation is not None:
             tk.Label(master=parent_frame, text=i18n.t("orientation_label")).grid(
-                row=2, column=0, sticky=tk.W, padx=4, pady=2)
+                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
             orientation_var = tk.StringVar(value=_orientation_override or "auto")
             for col, (value, label_key) in enumerate(
                     [("auto", "orientation_auto"), ("portrait", "orientation_portrait"),
@@ -722,7 +741,7 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                     master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
                     value=value, indicatoron=0, selectcolor="#ffd54f",
                     command=lambda v=value: _set_orientation_override(v),
-                ).grid(row=2, column=col, sticky=tk.EW, padx=2, pady=2)
+                ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
             # No user-configurable keyboard-width picker anymore (real-hardware feedback: tried
             # 1/2 through 3/4 across several rounds; "the right share seems to be between 1/2 and
