@@ -15,6 +15,38 @@ state before starting new work.
 
 ---
 
+## 2026-07-23 — Add compare_runs.py for side-by-side FS2 vs. Piper benchmark comparison
+
+- What: new `tools/measurement/benchmark/compare_runs.py` — takes 2+ already-joined
+  `profile/run_.../` directories (`do_tts.py --default_tts <idx> --benchmark --join`) and prints a
+  per-sentence side-by-side comparison (`total_synth_ms`, `audio_duration_s`, `rtf`, `energy_wh`,
+  `peak_temp`, with a ratio column when comparing exactly 2 runs) plus an overall summary
+  (totals/means per run, "X is Nx the total synth time/energy of Y" for the 2-run case). `--out
+  FILE.csv` writes a combined wide-format CSV (one row per benchmark position, one column trio per
+  run/metric) for pivoting in a spreadsheet. Reads only `per_sentence_results.csv` — deliberately
+  not `per_stage_results.csv`, which stays FS2-shape-specific (`export_to_xlsx.py`'s
+  `_check_stage_shape()` guard exists for exactly that reason, not repeated here). Runs are
+  compared by row *position*, not by joining on `sentence_id` — the fixed benchmark set repeats
+  "REF" as both the first and last sentence, so `sentence_id` alone isn't a unique key; mismatched
+  row counts or `sentence_id`s between runs print a warning rather than silently misaligning rows.
+- Files: `tools/measurement/benchmark/compare_runs.py` (new), `tests/test_compare_runs.py` (new,
+  5 tests against fake CSVs — no real profile run needed).
+- Why: asked directly, after the Piper integration/fixes above were done — "is there an efficient
+  way to run the benchmark to compare the performances of FS2 and Piper?" No dedicated comparison
+  tool existed; `export_to_xlsx.py` is bound to an external template and FS2-only by design.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 268 passed, 1 pre-existing skip (Windows).
+  Run live on the Pi against 3 real runs (FS2, siwis, upmc from the previous entry's testing):
+  2-run (FS2 vs. siwis) and 3-run (FS2/siwis/upmc) invocations both produced correct output —
+  e.g. "siwis is 0.48x the total synth time of FS2" / "0.46x the total energy" — and `--out`
+  produced a valid, correctly-shaped CSV (confirmed via `csv.DictReader` round-trip).
+- Notes/gotchas: an early version's "Overall" header printed `rows[0]["position"] + 1` (always
+  `1`, the *first* row's position) instead of `len(rows)` — caught immediately by actually running
+  it against real data (printed "Overall (1 sentences each)" for an 11-sentence run), not by the
+  unit tests (which used 1-2 fake rows, too small to expose an off-by-construction bug like this).
+  Fixed before shipping.
+
+---
+
 ## 2026-07-23 — Piper GUI fixes from real-hardware feedback, and dropping the tom voice
 
 - What: follow-up to the Piper integration below, driven entirely by testing the real GUI in
