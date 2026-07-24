@@ -15,6 +15,56 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Extend settings persistence with a gui: section (landscape-refactor plan)
+
+- What: second implementation phase. Phase 0 discovery found persistence was much narrower than
+  assumed: only power-timer/brightness settings survived a restart; TTS model, orientation,
+  keyboard layout, theme, language all lived in session-only runtime globals. Extends the existing
+  mechanism (`chatterbox/power/config.py`'s load/merge/atomic-write, already field-by-field
+  defaulted and crash-proof) rather than inventing a second one, per the plan's own instruction.
+  - New `"gui"` top-level section in `user_prefs.yaml`'s schema (`DEFAULTS` + a new `_merge_gui()`,
+    same field-by-field-fallback-to-default philosophy as every other section): `theme`,
+    `language`, `keyboard_layout`, `postprocess_enabled`, `show_chatbox`, `show_data`,
+    `chatbox_masked`, `selected_tts_model`, and three per-model dicts (`selected_speaker`/
+    `selected_style`/`slider_values`, keyed by `tts_models[i]["label"]` so switching models
+    doesn't clobber another model's own choices). New `_validate_enum_string()`/
+    `_validate_mapping()` validators — the per-model dicts aren't schema-validated beyond "is this
+    a mapping", since their actual shape comes from `config_tts.yaml`, a file this module
+    deliberately knows nothing about.
+  - `chatterbox/gui/settings.py`: new `write_gui_prefs(**updates)` alongside the existing
+    `write_settings()` — same atomic write (extracted into a shared `_atomic_write_yaml()`), but
+    saves immediately on each change rather than gated behind "Enregistrer", matching how TTS/
+    vocoder model switches already take effect immediately elsewhere.
+  - Wired the two GUI features that already exist today: theme and keyboard layout.
+    `_run_gui_session()` now loads persisted `gui:` prefs once per session and calls
+    `theme.set_theme()` before the option database is populated, so the app launches in the
+    last-chosen theme instead of always "light". `_letter_layout_current`'s existing "seed only if
+    None" first-run guard now prefers the persisted value over `config_tts.yaml`'s static default.
+    `_set_theme()`/`_set_keyboard_layout()` each call `write_gui_prefs()` after applying their
+    change live; a save failure is logged, not raised.
+  - Language, chatbox visibility/masking, postprocess toggle, and TTS model/speaker/slider
+    selections are **not** wired to this schema yet — those features don't exist as GUI controls
+    today; they'll be wired to the already-extended schema when their own phases land.
+- Files: `chatterbox/power/config.py`, `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`,
+  `tests/test_power_config.py` (8 new), `tests/test_gui_settings.py` (5 new).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec4, sequenced right after theme so later phases (menu-bar,
+  input row, sliders window) can wire their own new settings into an already-extended schema
+  instead of inventing persistence piecemeal per feature.
+- Verify: full test suite (303 passed/1 skipped). New ad hoc Tk smoke test (monkeypatches
+  `chatterbox.config.paths.USER_PREFS_PATH` to a tmp file, never touches the real one) confirms: a
+  pre-seeded dark theme + qwerty layout are both honored at startup; switching theme live writes it
+  back immediately; switching keyboard layout live writes it back immediately; unrelated `gui:`
+  fields stay untouched by either write.
+- Notes/gotchas: an earlier ad hoc smoke script (the theme phase's own verification, written
+  before this phase existed) did not monkeypatch `USER_PREFS_PATH` and, once `_set_theme()`
+  started persisting, wrote a stray `"gui:"` section into the real, git-tracked
+  `chatterbox/config/user_prefs.yaml` on a routine re-run — caught immediately via `git status`,
+  reverted, and the script fixed to redirect to a tmp path before importing `chatterbox.gui.app`.
+  Any future ad hoc script that ends up calling `write_gui_prefs()` (directly or via `_set_theme()`/
+  `_set_keyboard_layout()`) must do the same.
+
+---
+
 ## 2026-07-24 — Light/dark theme (landscape-refactor plan, phase 1)
 
 - What: first implementation phase of the landscape GUI redesign
