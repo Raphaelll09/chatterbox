@@ -43,6 +43,7 @@ import chatterbox.gui.keyboards as keyboards
 import chatterbox.gui.input as ginput
 import chatterbox.gui.settings as settings
 import chatterbox.gui.i18n as i18n
+import chatterbox.gui.theme as theme
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
 import chatterbox.power.battery as battery
@@ -53,6 +54,11 @@ canvas_circle_figure = None
 lbl_status = None
 lbl_battery = None
 
+# Last state _set_ui_state() was called with -- replayed by _set_theme() (below) so the status
+# circle re-derives the correct color for the new theme instead of staying stuck on the old one.
+_last_ui_state_name = "idle"
+_last_ui_error = None
+
 # Manual portrait/landscape override (Settings -> Advanced): None means "auto" (today's
 # <Configure>-based detection); "portrait"/"landscape" forces that layout regardless of actual
 # window size -- real-hardware feedback: a kiosk's window may never receive a genuine resize event
@@ -60,6 +66,13 @@ lbl_battery = None
 # callable) only when the embedded keyboard/reflow machinery exists in create_gui() below.
 _orientation_override = None
 _refresh_orientation = None
+
+# Set inside create_gui() (landscape-refactor session) to the closure that actually applies a
+# live theme switch -- exposed at module level (same pattern as _refresh_orientation above) so the
+# Theme menu's radiobuttons, and anything else needing to trigger a switch later (e.g. Settings
+# persistence restoring a saved theme on startup), can call it without create_gui() needing to
+# return/thread it through separately.
+_set_theme = None
 
 # Keyboard's share of the screen -- a fixed fraction, no longer user-configurable (real-hardware
 # feedback: tried 1/2 through 3/4 across several rounds; "the right share of keyboard seems to be
@@ -181,16 +194,87 @@ def _handle_power_input(action_str):
     dispatch(action)
 
 
+def _apply_theme_option_db(window):
+    """Populates Tk's X-resources-style option database from the active chatterbox.gui.theme --
+    supplies the DEFAULT bg/fg (etc.) for every widget class *created after this call*, covering
+    plain labels/frames/buttons/entries/scales/menus with zero per-widget-constructor changes
+    (only the handful of semantically-colored widgets -- error text, status circle, battery --
+    read theme.color() directly at their own call sites instead of relying on this). Idempotent --
+    safe to call again on a live theme switch; only affects widgets built after each call, which
+    is why _set_theme() (create_gui()) also calls _retheme_widget_tree() for what already exists."""
+    window.option_add("*Background", theme.color("bg"))
+    window.option_add("*Foreground", theme.color("fg"))
+    window.option_add("*Entry.Background", theme.color("entry_bg"))
+    window.option_add("*Entry.Foreground", theme.color("entry_fg"))
+    window.option_add("*Entry.insertBackground", theme.color("entry_fg"))  # text caret color
+    window.option_add("*Button.Background", theme.color("button_bg"))
+    window.option_add("*Button.Foreground", theme.color("button_fg"))
+    window.option_add("*Button.activeBackground", theme.color("button_bg"))
+    window.option_add("*Button.activeForeground", theme.color("button_fg"))
+    window.option_add("*Radiobutton.selectColor", theme.color("select_color"))
+    window.option_add("*Checkbutton.selectColor", theme.color("select_color"))
+    window.option_add("*Scale.troughColor", theme.color("entry_bg"))
+    window.option_add("*Menu.Background", theme.color("button_bg"))
+    window.option_add("*Menu.Foreground", theme.color("button_fg"))
+    window.option_add("*disabledForeground", theme.color("muted_fg"))
+
+
+# Per-widget-class (bg key, fg key), mirroring _apply_theme_option_db()'s *ClassName.Option
+# mapping -- a blunt "everyone gets theme.color('bg')" walk would flatten Entry/Button/Radiobutton/
+# Checkbutton back to the plain background on every live theme switch, undoing the contrast
+# option_add() gave them at creation time (confirmed by an ad hoc smoke test: an Entry's bg came
+# back as the *plain* bg color, not entry_bg, after a switch, until this mapping was added).
+_RETHEME_BG_FG_BY_CLASS = {
+    "Entry": ("entry_bg", "entry_fg"),
+    "Button": ("button_bg", "button_fg"),
+    "Menubutton": ("button_bg", "button_fg"),
+    "Radiobutton": ("button_bg", "button_fg"),  # always indicatoron=0 ("chip") style in this app
+    "Checkbutton": ("button_bg", "button_fg"),  # -- selectcolor (the actual "selected" highlight)
+                                                 # is set once at construction, not retheme'd here,
+                                                 # since it's the same value in both themes anyway.
+}
+
+
+def _retheme_widget_tree(widget):
+    """Recursively reconfigures bg/fg (class-aware, see _RETHEME_BG_FG_BY_CLASS) on an already-
+    built widget tree for a live theme switch -- option_add() alone only affects widgets created
+    *after* it's called, not ones that already exist. Not every classic-Tk widget class supports
+    both options (a Frame/Canvas has no "fg"), so each is attempted independently and a TclError
+    from an unsupported one is swallowed rather than aborting the walk. Menus attached via
+    window.config(menu=...) aren't reachable through winfo_children() at all -- a menu built
+    before a switch keeps its old colors (a menu opened/rebuilt after the switch picks up the new
+    option_add() values correctly); a known, minor limitation, not silently unhandled."""
+    widget_class = str(widget.winfo_class())
+    bg_key, fg_key = _RETHEME_BG_FG_BY_CLASS.get(widget_class, ("bg", "fg"))
+    try:
+        widget.configure(bg=theme.color(bg_key))
+    except tk.TclError:
+        pass
+    try:
+        widget.configure(fg=theme.color(fg_key))
+    except tk.TclError:
+        pass
+    if widget_class == "Scale":
+        try:
+            widget.configure(troughcolor=theme.color("entry_bg"))
+        except tk.TclError:
+            pass
+    for child in widget.winfo_children():
+        _retheme_widget_tree(child)
+
+
 def _set_ui_state(state_name, error=None):
     """idle / synthesising / initialising / playing / error, reusing the existing status-circle
     widget (chatterbox_gui_spec_v0.1.md Sec2.2's UI states) plus one status/error label."""
+    global _last_ui_state_name, _last_ui_error
+    _last_ui_state_name, _last_ui_error = state_name, error
     color = {
-        "idle": "gray",
-        "synthesising": "yellow",
-        "initialising": "yellow",
-        "playing": "green",
-        "error": "red",
-    }.get(state_name, "gray")
+        "idle": theme.color("status_idle"),
+        "synthesising": theme.color("status_busy"),
+        "initialising": theme.color("status_busy"),
+        "playing": theme.color("status_playing"),
+        "error": theme.color("status_error"),
+    }.get(state_name, theme.color("status_idle"))
     if canvas_circle is not None:
         update_circle_color(color, canvas_circle, canvas_circle_figure)
     if lbl_status is not None:
@@ -663,13 +747,17 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
         window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
 
+    # Theme (landscape-refactor session): sets Tk's option database defaults for every widget
+    # class *created after this call* -- covers the classic-Tk widgets built below with no
+    # per-widget-constructor changes needed, since none of them hardcode bg/fg (the handful that do,
+    # for a semantic reason -- error text, the status circle, battery low/ok -- read from
+    # chatterbox.gui.theme directly instead of a literal, see those call sites). _apply_theme()
+    # (below) re-applies this and walks the already-built tree for a live, no-restart switch.
+    _apply_theme_option_db(window)
+
     # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres" opens the settings dialog
     # (the physical "Réglages" button was removed -- PC-GUI feedback: it sat right above the
-    # keyboard area and read as cluttered); "À propos" is last/far right, also per feedback;
-    # "Thème" stays a visible-but-disabled stub -- there's still no second theme table to switch
-    # to (see chatterbox/gui/i18n.py) -- but "Langue" is now real (English Piper voice + live
-    # language switch, docs/context/CHANGELOG.md): a clickable-but-fake entry would be worse than
-    # an honestly-disabled one, but a genuinely wired-up one is better than either.
+    # keyboard area and read as cluttered); "À propos" is last/far right, also per feedback.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
     if main_panel_config.get("add_settings_button", True):
@@ -684,7 +772,33 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         audio_info_visible = tk.BooleanVar(value=True)
         menubar.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
                                  command=lambda: _toggle_audio_info_visibility(audio_info_visible))
-    menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
+
+    global _set_theme
+
+    def _set_theme(name):
+        """Live, no-restart theme switch (landscape-refactor session) -- unlike _set_language()
+        above, a theme change is purely cosmetic and doesn't need a model reload, so a full window
+        rebuild would be wasteful (and would reset the in-progress text input). Updates the option
+        database for anything built after this point (dialogs opened later), walks the already-
+        built tree for everything that exists now, then re-applies the few widgets a blunt bg/fg
+        walk can't get right on its own: lbl_status's error-red text (only ever red, not plain fg)
+        and the status circle (re-derives its color from the last known UI state rather than
+        leaving it stuck on the old theme's shade). lbl_battery's red/normal fg is deliberately
+        left to the next scheduled poll (_BATTERY_POLL_MS, at most 30s) rather than tracked here
+        too -- a briefly-stale battery color is a harmless, self-correcting cosmetic detail."""
+        theme.set_theme(name)
+        _apply_theme_option_db(window)
+        _retheme_widget_tree(window)
+        if lbl_status is not None:
+            lbl_status.configure(fg=theme.color("error_fg"))
+        _set_ui_state(_last_ui_state_name, _last_ui_error)
+
+    theme_menu = tk.Menu(menubar, tearoff=0)
+    theme_var = tk.StringVar(value=theme.get_theme())
+    for theme_name, label_key in (("light", "theme_light"), ("dark", "theme_dark")):
+        theme_menu.add_radiobutton(label=i18n.t(label_key), variable=theme_var, value=theme_name,
+                                    command=lambda n=theme_name: _set_theme(n))
+    menubar.add_cascade(label=i18n.t("menu_theme"), menu=theme_menu)
 
     def _set_language(code):
         """Switches chatterbox/gui/i18n.py's locale, then restarts the whole window onto the
@@ -753,7 +867,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             if reading is None:
                 lbl_battery.grid_remove()
             else:
-                lbl_battery["fg"] = "red" if reading["percent"] < 20 else "black"
+                lbl_battery["fg"] = theme.color("battery_low_fg") if reading["percent"] < 20 else theme.color("battery_ok_fg")
                 lbl_battery["text"] = "\U0001F50B {:.0f}%".format(reading["percent"])
                 lbl_battery.grid()
             window.after(_BATTERY_POLL_MS, _poll_battery)
@@ -855,7 +969,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                      ("landscape", "orientation_landscape")], start=1):
                 tk.Radiobutton(
                     master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
-                    value=value, indicatoron=0, selectcolor="#ffd54f",
+                    value=value, indicatoron=0, selectcolor=theme.color("select_color"),
                     command=lambda v=value: _set_orientation_override(v),
                 ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
@@ -879,7 +993,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             for col, code in enumerate(("azerty", "qwerty"), start=1):
                 tk.Radiobutton(
                     master=parent_frame, text=code.upper(), variable=layout_var,
-                    value=code, indicatoron=0, selectcolor="#ffd54f",
+                    value=code, indicatoron=0, selectcolor=theme.color("select_color"),
                     command=lambda c=code: _refresh_keyboard_layout(c),
                 ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
@@ -902,7 +1016,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     busy = True
     state.update_selected_tts(default_tts + 1)
     state.update_selected_vocoder(default_vocoder + 1)
-    _loading_placeholder = tk.Label(master=window, text=i18n.t("loading_model_label"), fg="gray")
+    _loading_placeholder = tk.Label(master=window, text=i18n.t("loading_model_label"), fg=theme.color("muted_fg"))
     _loading_placeholder.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
 
     # Add input field
@@ -931,7 +1045,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         canvas_circle = tk.Canvas(master=window, width=20, height=20)
         canvas_circle.grid(row=8, column=2)  # Positioned next to the label
         # Create a circle on the canvas
-        canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill="gray")  # Initial color set to gray
+        canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill=theme.color("status_idle"))
 
         # Pool of generic stage-duration rows (interchangeable-backend GUI refactor) -- assigned
         # dynamically to whichever stage keys AudioResult.stage_durations (chatterbox/synth.py)
@@ -969,7 +1083,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- grid_remove()'d
     # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
     # blank row for the common no-error case.
-    lbl_status = tk.Label(master=window, text="", fg="red")
+    lbl_status = tk.Label(master=window, text="", fg=theme.color("error_fg"))
     lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
     lbl_status.grid_remove()
 
@@ -1347,9 +1461,9 @@ def select_model_from_list(id_button, list_buttons):
     for button in list_buttons:
         index_button += 1
         if index_button == id_button:
-            button["bg"] = "yellow"
+            button["bg"] = theme.color("select_color")
         else:
-            button["bg"] = "#f0f0f0"
+            button["bg"] = theme.color("button_bg")
 
 def get_gui_controls():
     """Returns a dict keyed by control "key" (interchangeable-backend GUI refactor -- was a fixed
@@ -1435,7 +1549,7 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
             variable=selection_var,
             value=original_index,
             indicatoron=0,
-            selectcolor="#ffd54f",
+            selectcolor=theme.color("select_color"),
             font=("TkDefaultFont", 9),
             width=chip_width,
             padx=3,
@@ -1523,7 +1637,7 @@ def gui_generic_controls(tts_config, main_panel_config):
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
     # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
     # but a horizontal scrollbar is still added as an explicit fallback for whatever doesn't fit).
-    frame = tk.Frame(window, highlightbackground="black", highlightthickness=2)
+    frame = tk.Frame(window, highlightbackground=theme.color("border"), highlightthickness=2)
     frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)

@@ -18,6 +18,7 @@ import tkinter as tk
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
 import chatterbox.power.config as power_config
+import chatterbox.gui.theme as theme
 
 _window = None  # the single open settings Toplevel, if any -- so Action.BACK can close it
 
@@ -252,11 +253,11 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
         # nothing applies it live. Surface that directly instead of leaving it silently confusing.
         tk.Label(footer, text="chatterbox-powerd n'est pas joignable : les réglages seront "
                  "enregistrés mais pas appliqués tant qu'il ne tourne pas.",
-                 fg="#b36b00", font="Helvetica 10", wraplength=380, justify=tk.LEFT
+                 fg=theme.color("warning_fg"), font="Helvetica 10", wraplength=380, justify=tk.LEFT
                  ).grid(row=footer_row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=(8, 0))
         footer_row += 1
 
-    error_label = tk.Label(footer, text="", fg="red", font="Helvetica 10", wraplength=380, justify=tk.LEFT)
+    error_label = tk.Label(footer, text="", fg=theme.color("error_fg"), font="Helvetica 10", wraplength=380, justify=tk.LEFT)
     error_label.grid(row=footer_row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
     footer_row += 1
 
