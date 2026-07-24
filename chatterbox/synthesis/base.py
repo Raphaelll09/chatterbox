@@ -89,6 +89,14 @@ class Synthesizer(ABC):
                         "default": <value>,    # for chip_grid/slider: the option/value pre-selected
                         "hidden_pattern": <regex str, optional>,  # options matching this start
                                                 # hidden behind an "advanced" toggle (chip_grid only)
+                        "icons": {str: str, ...},  # optional (chip_grid only, landscape-refactor
+                                                # plan): option text -> emoji glyph, rendered as the
+                                                # chip's displayed text instead of the option text
+                                                # itself. An option missing from this dict (or the
+                                                # key omitted entirely) falls back to plain text --
+                                                # a backend opts in per-control, this isn't assumed
+                                                # generically. See fastspeech2_hifigan/backend.py's
+                                                # GST_TOKEN_ICONS for why this stays backend-owned.
                         # slider only:
                         "min": float, "max": float,
                         "advanced": bool,       # optional; groups this control behind an

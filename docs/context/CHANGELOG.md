@@ -15,6 +15,48 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Emotion icons for the style chip grid (emotion-icon-bar phase, landscape-refactor plan, step 1/2)
+
+- What: first of two steps for the emotion icon bar (the second, moving it into a full-height left
+  column, is a separate follow-up given its much larger blast radius across `_run_gui_session()`'s
+  geometry). This step: the 12 named GST style tokens (COLERE/DESOLE/.../SUPPLIANT) now render as
+  emoji glyphs instead of French text on their chip buttons -- confirmed with the user (the earlier
+  icon proposal from before a context compaction wasn't recoverable): Unicode emoji over canvas-
+  drawn schematic faces or a plain-text-only deferral.
+  - `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`: new `GST_TOKEN_ICONS` dict
+    (token name -> emoji, e.g. `"COLERE": "😠"`, `"PENSIF": "🤔"`), FS2/GST-specific by design (same
+    precedent as `keyboards.py`'s own mood-shortcut table) -- not something a generic control
+    descriptor should assume every backend shares. Added as the style chip_grid control's new
+    `"icons"` key in `describe_controls()`. The 4 hidden `TOKEN13-16` placeholders intentionally
+    have no entry.
+  - `chatterbox/synthesis/base.py`: documented the new optional per-chip_grid `"icons"` key in
+    `describe_controls()`'s docstring (`{option text: emoji glyph}`, chip falls back to plain text
+    for anything missing).
+  - `chatterbox/gui/app.py`: `_build_chip_grid_control()` reads `control.get("icons")` and uses
+    `icons.get(option_text, option_text)` as each chip's displayed text -- generic opt-in, a
+    control without an `"icons"` key renders exactly as before. Font bumps to size 20 when a
+    control declares icons (a single emoji reads better bigger; plain-text chips are unaffected).
+- Files: `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`,
+  `chatterbox/synthesis/base.py`, `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, emotion-icon-bar phase.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (fake
+  `describe_controls()` with one iconized chip_grid control and one plain one) confirms: COLERE/
+  NEUTRE chips show their emoji, not raw token text; the hidden TOKEN13 placeholder falls back to
+  plain text; a control with no `"icons"` key at all is unaffected. A real (non-mocked, full 12-
+  token) screenshot on this Windows dev checkout confirmed all 12 render as distinct, legible
+  glyphs -- Windows' font fallback drew them as monochrome outline glyphs (not color Segoe UI
+  Emoji), which happens to match the session's original "monochrome" framing even though that's an
+  incidental font-substitution behavior, not something this code requested.
+- Notes/gotchas: **not verified on real Pi/Linux hardware** -- the user no longer has Pi5 access
+  this session; whether the Pi's font stack has ANY emoji coverage at all (vs. tofu boxes) is
+  unknown and worth checking once hardware is available again, same stated-gap convention as the
+  Stop button's ffplay path (previous entry). The full-height-left-column geometry move is
+  deliberately NOT part of this commit, given its much larger blast radius across
+  `_run_gui_session()`'s widget placements -- a separate, later CHANGELOG entry covers it once it
+  lands.
+
+---
+
 ## 2026-07-24 — Stop button + interruptible playback (input-row phase, landscape-refactor plan)
 
 - What: final sub-step of the input-row phase. Adds a Stop button next to Replay (shared sub-frame,

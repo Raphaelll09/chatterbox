@@ -41,6 +41,29 @@ from inference import main as inference_main
 
 AUDIO_FILE_NAME = "audio_file"
 
+# Emoji glyphs for the style chip grid's emotion icon bar (landscape-refactor plan, confirmed with
+# the user: Unicode emoji over canvas-drawn schematic faces or plain text, for less custom-drawing
+# code -- see docs/context/CHANGELOG.md). FS2/GST-specific by design, same as keyboards.py's own
+# mood-shortcut table and phone-symbol alphabet -- config_tts.yaml's gst_token_list names (below)
+# are this model's own fixed vocabulary, not something a generic control descriptor should assume
+# every backend shares. TOKEN13-16 (unnamed, hidden behind the "advanced" toggle) intentionally
+# have no entry -- _build_chip_grid_control() falls back to the plain option text for anything
+# missing here.
+GST_TOKEN_ICONS = {
+    "COLERE": "\U0001F620",         # 😠 angry face
+    "DESOLE": "\U0001F614",         # 😔 pensive/sorry face
+    "DETERMINE": "\U0001F624",      # 😤 face with steam (determined)
+    "ENTHOUSIASTE": "\U0001F929",   # 🤩 star-struck
+    "ESPIEGLE": "\U0001F60F",       # 😏 smirking (mischievous)
+    "ETONNE": "\U0001F632",         # 😲 astonished
+    "EVIDENCE": "\U0001F644",       # 🙄 face with rolling eyes ("well, obviously")
+    "INCREDULE": "\U0001F928",      # 🤨 face with raised eyebrow (incredulous)
+    "NEUTRE": "\U0001F610",         # 😐 neutral face
+    "PENSIF": "\U0001F914",         # 🤔 thinking face
+    "RECONFORTANT": "\U0001F917",   # 🤗 hugging face (comforting)
+    "SUPPLIANT": "\U0001F97A",      # 🥺 pleading face
+}
+
 # The FastSpeech2 config/output/preprocessed_data archives are gitignored (downloaded from the
 # Google Drive links in README.md, never committed) and hardcode paths like
 # "FastSpeech2/preprocessed_data/ALL_corpus" -- relative to where FastSpeech2/ used to live at the
@@ -404,6 +427,7 @@ class FastSpeech2HifiGanBackend:
                 "options": [*tts_model["gst_token_list"]],
                 "default": default_args["gst_token_index"],
                 "hidden_pattern": r"^TOKEN\d+$",
+                "icons": GST_TOKEN_ICONS,
             })
             controls.append({
                 "type": "slider", "key": "style_intensity", "label_key": "style_intensity_label",

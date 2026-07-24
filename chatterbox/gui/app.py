@@ -1765,6 +1765,14 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     selection_var = tk.IntVar(frame_options)
     selection_var.set(default_value)
 
+    # Emotion icon bar (landscape-refactor plan, confirmed with the user: Unicode emoji): a
+    # control opts in by declaring "icons" (option text -> emoji glyph) in its describe_controls()
+    # entry -- see chatterbox/synthesis/base.py's docstring. An option missing from that mapping
+    # (or the control not declaring one at all) falls back to its plain option text, so this stays
+    # generic rather than assuming every chip_grid has icons.
+    icons = control.get("icons") or {}
+    chip_font = ("TkDefaultFont", 20) if icons else ("TkDefaultFont", 9)
+
     # Display order: default option first (row 0, col 0) -- real-hardware feedback -- everyone
     # else keeps their original relative order after it (stable sort). value stays each option's
     # ORIGINAL index into options (get_gui_controls()'s collected value, and keyboards.py's
@@ -1777,12 +1785,12 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     for original_index, option_text in display_order:
         chip = tk.Radiobutton(
             master=chip_frame,
-            text=option_text,
+            text=icons.get(option_text, option_text),
             variable=selection_var,
             value=original_index,
             indicatoron=0,
             selectcolor=theme.color("select_color"),
-            font=("TkDefaultFont", 9),
+            font=chip_font,
             width=chip_width,
             padx=3,
             pady=6,
