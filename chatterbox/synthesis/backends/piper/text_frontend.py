@@ -77,15 +77,13 @@ def _parse_tags(text):
     return text, speaker, style, style_intensity, style_tag
 
 
-def prepare(text_to_syn, tts_config, gui_control, active_voice):
-    """Returns (clean_text, speaker_id) ready for PiperVoice.synthesize_wav().
-
-    active_voice is the loaded PiperVoice whose .config.speaker_id_map (possibly empty, for a
-    single-speaker voice) resolves any <SPEAKER=...> tag or the GUI's speaker chip/dropdown
-    selection. speaker_id falls back to active_voice.config.default_speaker_id when neither is
-    present -- SynthesisConfig itself also defaults speaker_id to None, which piper-tts then reads
-    as "use the model's own default", so this fallback is a documentation aid, not load-bearing.
-    """
+def prepare(text_to_syn, tts_config):
+    """Returns (clean_text, tag_speaker_name) -- text cleanup plus whatever <SPEAKER=...> tag name
+    was found (or None), ready for PiperBackend._resolve_speaker() (backend.py) to resolve against
+    either the new multi-checkpoint speakers: list or the legacy per-voice speaker_id_map. Speaker
+    resolution itself moved to backend.py (interchangeable-backend GUI refactor, Piper voice
+    unification) since it now needs `self` to swap self._active_voice across checkpoints -- this
+    function stays a pure text transform with no backend-instance state."""
     text_to_syn, speaker_name, style, style_intensity, style_tag = _parse_tags(text_to_syn)
 
     for tag_name, value in (("STYLE", style), ("STYLE_INTENSITY", style_intensity),
@@ -93,19 +91,6 @@ def prepare(text_to_syn, tts_config, gui_control, active_voice):
         if value is not None:
             logger.debug("Piper: discarding %s=%r tag (not supported by this backend)",
                          tag_name, value)
-
-    speaker_map = active_voice.config.speaker_id_map
-    speaker_id = active_voice.config.default_speaker_id
-
-    if gui_control is not None and "speaker" in gui_control and speaker_map:
-        speaker_id = gui_control["speaker"]
-
-    if speaker_name is not None:
-        if speaker_map and speaker_name in speaker_map:
-            speaker_id = speaker_map[speaker_name]
-        else:
-            logger.debug("Piper: <SPEAKER=%s> not found in this voice's speaker map, ignoring",
-                         speaker_name)
 
     # Opt-in, default False -- see module docstring: parse_pronunciation_mistakes() can inject
     # FS2's "{phonetic}" bracket syntax (custom_regex_rules.csv/url_regex_rules.csv), which
@@ -115,4 +100,4 @@ def prepare(text_to_syn, tts_config, gui_control, active_voice):
         text_to_syn = text_pipeline.parse_pronunciation_mistakes(text_to_syn)
     text_to_syn = text_pipeline.trim_punctuation_mistakes(text_to_syn)
 
-    return text_to_syn, speaker_id
+    return text_to_syn, speaker_name

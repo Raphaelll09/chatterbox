@@ -27,31 +27,51 @@ logger = logging.getLogger(__name__)
 
 class PiperBackend:
     def __init__(self):
-        self._voices = {}  # checkpoint_file -> loaded PiperVoice, so switching between siwis/
-                            # upmc within one session doesn't re-load a voice already loaded
+        self._voices = {}  # checkpoint_file -> loaded PiperVoice, so switching between speakers
+                            # backed by different checkpoints within one session doesn't re-load a
+                            # voice already loaded (also serves same-checkpoint speakers, e.g.
+                            # Jessica/Pierre sharing upmc, at zero extra cost after the first load)
         self._active_voice = None
+        self._active_checkpoint_file = None
         self._active_model_config = None
 
     # ---- Loading ------------------------------------------------------
+
+    def _load_voice(self, folder, checkpoint_file):
+        if checkpoint_file not in self._voices:
+            from piper import PiperVoice
+            model_path = os.path.join(folder, checkpoint_file)
+            self._voices[checkpoint_file] = PiperVoice.load(model_path, model_path + ".json")
+        return self._voices[checkpoint_file]
 
     def load_piper(self, model_config, device):
         """Matches load_script. `device` is accepted for call-site symmetry with the FS2 backend's
         load_fastspeech2(device)/load_hifigan(device) but ignored -- piper-tts's onnxruntime
         session is CPU-only by construction on this project's target (no CUDA path requested)."""
         try:
-            from piper import PiperVoice
+            from piper import PiperVoice  # noqa: F401 -- import-availability check only
         except ImportError as exc:
             raise RuntimeError(
                 "Piper backend selected but piper-tts is not installed in this venv. "
                 "Install it with: pip install piper-tts==1.5.0 (see INSTALL.md)."
             ) from exc
 
-        key = model_config["checkpoint_file"]
-        if key not in self._voices:
-            model_path = os.path.join(model_config["folder"], key)
-            self._voices[key] = PiperVoice.load(model_path, model_path + ".json")
-        self._active_voice = self._voices[key]
         self._active_model_config = model_config
+
+        # speakers: (new, unified multi-checkpoint voice -- e.g. "Piper-tts (Français)" spanning
+        # Siwis/Jessica/Pierre) preloads its first (default) entry's checkpoint here; tts()'s own
+        # _resolve_speaker() may swap to a different cached/newly-loaded checkpoint on a later call
+        # once the GUI selects a different speaker. A legacy single-checkpoint voice (e.g. the
+        # English lessac entry, no speakers: key) just loads its own checkpoint_file directly, as
+        # before this schema existed.
+        speakers = model_config.get("speakers")
+        if speakers:
+            default_entry = speakers[0]
+            checkpoint_file = default_entry["checkpoint_file"]
+        else:
+            checkpoint_file = model_config["checkpoint_file"]
+        self._active_voice = self._load_voice(model_config["folder"], checkpoint_file)
+        self._active_checkpoint_file = checkpoint_file
 
         # Warm-up: one throwaway synthesis, discarded. Required, not optional -- mirrors
         # chatterbox.cli.warmup()'s rationale for the FS2 path (first-call cost of the ONNX
@@ -59,6 +79,49 @@ class PiperBackend:
         self.tts("Bonjour.", model_config, None, False)
 
     # ---- Synthesis ------------------------------------------------------
+
+    def _resolve_speaker(self, tts_config, gui_control, tag_speaker_name):
+        """Returns (voice, speaker_id) for this call. speakers: (see config_tts.yaml's "Piper-tts
+        (Français)" entry) lets one tts_models entry's speakers live in DIFFERENT onnx checkpoints
+        (Siwis's own single-speaker checkpoint; Jessica/Pierre sharing upmc's) -- gui_control's
+        "speaker" is an index into that list (not a raw per-voice speaker_id, unlike the legacy
+        path below), and a <SPEAKER=name> text tag overrides it the same way FS2's own tag
+        handling overrides its GUI controls. Swaps self._active_voice to whichever checkpoint the
+        resolved entry needs, loading (or reusing an already-cached, chatterbox/synthesis/backends/
+        piper/backend.py's self._voices) it as needed -- this always runs on the synthesis worker
+        thread (chatterbox/synth.py -> chatterbox/gui/app.py's worker), never the Tk thread, so a
+        first-time switch to a not-yet-loaded checkpoint costs a moment of synthesis time, not a
+        UI freeze. Falls back to the legacy single-checkpoint per-voice speaker_id_map (e.g. the
+        English lessac entry, which has no speakers: list) when this model has none."""
+        speakers = tts_config.get("speakers")
+        if speakers:
+            entry = None
+            if gui_control and "speaker" in gui_control:
+                index = gui_control["speaker"]
+                if 0 <= index < len(speakers):
+                    entry = speakers[index]
+            if tag_speaker_name is not None:
+                tag_entry = next((s for s in speakers if s["name"] == tag_speaker_name), None)
+                if tag_entry is not None:
+                    entry = tag_entry
+                else:
+                    logger.debug("Piper: <SPEAKER=%s> not found among this model's speakers, "
+                                 "ignoring", tag_speaker_name)
+            if entry is None:
+                entry = speakers[0]
+            voice = self._load_voice(tts_config["folder"], entry["checkpoint_file"])
+            self._active_voice = voice
+            self._active_checkpoint_file = entry["checkpoint_file"]
+            return voice, entry["speaker_id"]
+
+        voice = self._active_voice
+        speaker_map = voice.config.speaker_id_map
+        speaker_id = voice.config.default_speaker_id
+        if gui_control and "speaker" in gui_control and speaker_map:
+            speaker_id = gui_control["speaker"]
+        if tag_speaker_name is not None and speaker_map and tag_speaker_name in speaker_map:
+            speaker_id = speaker_map[tag_speaker_name]
+        return voice, speaker_id
 
     def tts(self, text_to_syn, tts_config, gui_control, linking_utt):
         """Matches syn_script's caller contract (chatterbox/synth.py calls this exactly like
@@ -76,8 +139,8 @@ class PiperBackend:
         element changed."""
         from piper.config import SynthesisConfig
 
-        clean_text, speaker_id = text_frontend.prepare(
-            text_to_syn, tts_config, gui_control, self._active_voice)
+        clean_text, tag_speaker_name = text_frontend.prepare(text_to_syn, tts_config)
+        voice, speaker_id = self._resolve_speaker(tts_config, gui_control, tag_speaker_name)
 
         # Fixed-directory convention, matching FastSpeech2HifiGanBackend.syn_fastspeech2()'s own
         # os.path.join(model_folder, output_location) (chatterbox/synthesis/backends/
@@ -106,7 +169,7 @@ class PiperBackend:
         # as FS2's -- see Finding #5 in the Phase B plan for the fuller reasoning.
         with profiling_rec.stage("synth"):
             with wave.open(wav_path, "wb") as wav_file:
-                self._active_voice.synthesize_wav(clean_text, wav_file, syn_config=syn_config)
+                voice.synthesize_wav(clean_text, wav_file, syn_config=syn_config)
 
         return out_dir, clean_text
 
@@ -143,13 +206,21 @@ class PiperBackend:
             ],
         }
 
-        # speaker_id_map/default_speaker_id are real PiperConfig fields (confirmed live on the Pi
-        # against fr_FR-upmc-medium.onnx.json: {"jessica": 0, "pierre": 1}) -- empty {} for a
-        # single-speaker voice (siwis), in which case speaker_list/default_speaker are omitted
-        # entirely, matching base.py's docstring default and FastSpeech2HifiGanBackend's own
+        # speakers: (new, unified multi-checkpoint voice) builds an ordinary {name: index}
+        # speaker_list/int default_speaker from the config list itself -- gui/app.py needs no
+        # changes at all, it already renders any speaker_list/default_speaker generically. Falls
+        # back to the legacy per-voice speaker_id_map (confirmed live on the Pi against
+        # fr_FR-upmc-medium.onnx.json: {"jessica": 0, "pierre": 1}; empty {} for a single-speaker
+        # voice) for a model with no speakers: list (e.g. English lessac) -- empty/no speaker_list
+        # in that case matches base.py's docstring default and FastSpeech2HifiGanBackend's own
         # dict-shaped (not list-shaped) speaker_list (Finding #2 in the Phase B plan).
-        speaker_map = self._active_voice.config.speaker_id_map
-        if speaker_map:
-            result["speaker_list"] = dict(speaker_map)
-            result["default_speaker"] = self._active_voice.config.default_speaker_id
+        speakers = model_config.get("speakers")
+        if speakers:
+            result["speaker_list"] = {entry["name"]: index for index, entry in enumerate(speakers)}
+            result["default_speaker"] = 0
+        else:
+            speaker_map = self._active_voice.config.speaker_id_map
+            if speaker_map:
+                result["speaker_list"] = dict(speaker_map)
+                result["default_speaker"] = self._active_voice.config.default_speaker_id
         return result

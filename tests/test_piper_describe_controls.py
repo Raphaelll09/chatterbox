@@ -70,6 +70,26 @@ def test_controls_use_model_config_defaults():
     assert by_key["noise_w_scale"]["advanced"] is True
 
 
+def test_speakers_schema_builds_speaker_list_from_config_order():
+    # Piper voice unification (cc_prompt_gui_landscape_v2.md): a model_config with a speakers:
+    # list (config_tts.yaml's "Piper-tts (Français)" entry -- Siwis/Jessica/Pierre spanning two
+    # onnx checkpoints) should get an ordinary {name: index} speaker_list/int default_speaker, the
+    # exact same shape gui/app.py already renders generically for the legacy per-voice
+    # speaker_id_map path -- no gui/app.py changes needed for this schema at all.
+    backend = _make_backend(speaker_id_map={"jessica": 0, "pierre": 1})  # would-be legacy shape
+    backend._active_model_config["speakers"] = [
+        {"name": "Siwis", "checkpoint_file": "fr_FR-siwis-medium.onnx", "speaker_id": None},
+        {"name": "Jessica", "checkpoint_file": "fr_FR-upmc-medium.onnx", "speaker_id": 0},
+        {"name": "Pierre", "checkpoint_file": "fr_FR-upmc-medium.onnx", "speaker_id": 1},
+    ]
+    result = backend.describe_controls()
+    # speakers: takes priority over the active voice's own (irrelevant, stale-from-a-previous-
+    # speaker) speaker_id_map -- the whole point is that the currently active checkpoint alone
+    # can't tell you the full speaker list spanning multiple checkpoints.
+    assert result["speaker_list"] == {"Siwis": 0, "Jessica": 1, "Pierre": 2}
+    assert result["default_speaker"] == 0
+
+
 def test_all_sliders_declare_a_resolution():
     # Regression test: gui/app.py's gui_generic_controls() (the generic tk.Scale builder)
     # defaults to resolution=1 when a slider control doesn't specify one -- on length_scale's

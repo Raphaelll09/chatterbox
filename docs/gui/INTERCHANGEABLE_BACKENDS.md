@@ -308,7 +308,8 @@ A `backend` field was added to each `config_tts.yaml` `tts_models[i]` entry (`"p
 Piper voice; omitted — defaults to `"fastspeech2_hifigan"` — on the original FS2 entry, so it
 needed no yaml edit). Piper started with 3 voices; a 3rd, `tom`, was evaluated and removed after
 real-hardware listening found it noticeably lower quality and slower than the other two
-(`docs/context/CHANGELOG.md`) — 2 remain today.
+(`docs/context/CHANGELOG.md`) — 2 remained at the end of this integration session (siwis, upmc as
+separate `tts_models` entries each); §3.6 below describes a later session unifying them into one.
 
 ### 3.2 Gap 2 (silent, found only by driving a real `tk.Tk()` instance, not by reading the code): stale `gst_token_selection`/`speaker_selection`
 
@@ -429,3 +430,42 @@ Re-verified on the Pi: a fresh Piper run now reports `"Wrote 11 sentence rows, 2
 data, and re-running FS2 afterward still reports `44` stage rows with its original 4 names —
 confirms the generalization is additive, not a behavior change for the backend it was designed
 around.
+
+### 3.6 Follow-up (landscape-refactor session, `cc_prompt_gui_landscape_v2.md`): unifying siwis/upmc into one speaker list
+
+While planning a Model → Language → Speaker menu cascade for the landscape GUI redesign, the user
+pointed out that presenting siwis and upmc as two separate top-level "models" didn't match how
+they actually think about them: "the two models are FastSpeech2 and Piper-tts... I don't think it
+makes much sense to have to select two models from the same bigger model." Dropping upmc to
+simplify was rejected too — it would mean losing the only male voice (`pierre`) for no quality
+gain, just to keep one (excellent) female voice.
+
+The technical wrinkle: siwis and upmc are genuinely two different `.onnx` checkpoints (upmc's
+happens to have 2 speakers baked into its own internal `speaker_id_map`; siwis's is single-speaker)
+— unlike FS2's speakers, which all live inside one already-loaded checkpoint. Resolved by adding
+`speakers:` to a `tts_models[i]` entry — an ordered list of `{name, checkpoint_file, speaker_id}` —
+consolidating siwis/jessica/pierre into one `"Piper-tts (Français)"` entry.
+`PiperBackend.describe_controls()` builds an ordinary `{name: index}` `speaker_list`/int
+`default_speaker` from this list (Siwis=0, Jessica=1, Pierre=2) — the **exact same shape**
+`gui/app.py` already renders generically for any other multi-speaker voice, so **zero GUI changes**
+were needed to support a model whose speakers span multiple checkpoints. All of the new complexity
+lives inside `PiperBackend._resolve_speaker()` (called from `tts()`): it maps `gui_control["speaker"]`
+(now an index into `speakers:`, not a raw per-voice speaker id) to the right checkpoint, swapping
+`self._active_voice` via the existing `self._voices` cache (keyed by `checkpoint_file`, unchanged
+mechanism) if needed, with a `<SPEAKER=name>` text tag overriding the GUI selection the same way
+FS2's own tags already override its GUI controls. Because this reload happens inside `tts()`, which
+only ever runs on the synthesis worker thread, a first-time switch to a not-yet-loaded checkpoint
+costs a moment of synthesis time, never a GUI freeze. `en_US-lessac-medium` (single-checkpoint,
+already true single-voice) keeps using the pre-existing per-voice `speaker_id_map` path unchanged —
+`describe_controls()`/`_resolve_speaker()` both fall back to it when a model config has no
+`speakers:` key at all, so this is purely additive to the contract.
+
+Verified two ways: `tests/test_piper_backend.py` (5 new cases against fake, pre-cached voice
+objects — no real weights) and a real, non-mocked run on this dev checkout (`piper-tts` and all
+three real `.onnx` voices happen to be present): `PiperBackend.tts()` called directly for each of
+Siwis/Jessica/Pierre produced three distinct, valid 22050 Hz mono wavs (1.7s/1.6s/1.8s for the same
+sentence — genuinely different synthesis, not a cached repeat); a real `create_gui()` session
+(mocked nothing) showed the speaker dropdown listing exactly `["Siwis", "Jessica", "Pierre"]`,
+defaulting to Siwis, and selecting each through the real dropdown + `get_gui_controls()` +
+`registry.BACKEND.tts()` produced three distinctly-sized wavs through the full real GUI code path,
+not just the backend in isolation.

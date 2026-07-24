@@ -57,20 +57,31 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     substitution mechanism itself being generic regex replace; see `synthesis/backends/piper/`'s
     own note on why it doesn't reuse `parse_pronunciation_mistakes()` unconditionally).
   - `synthesis/backends/piper/` — the second backend (`backend.py`'s `PiperBackend`: `load_piper`,
-    `tts`, `describe_controls`; `text_frontend.py`'s own tag-parsing/speaker-resolution, deliberately
-    not routed through `fastspeech2_hifigan/text_pipeline.py`'s FS2-specific machinery beyond the
-    genuinely orthographic `trim_punctuation_mistakes()`). Monolithic (`needs_vocoder: false`), no
-    style dimension, `piper-tts` (optional, GPL-3.0-or-later — install manually, not in
-    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 3 voices
-    (`fr_FR-siwis-medium`/`upmc-medium`, `en_US-lessac-medium`, fetched by
-    `scripts/fetch_piper_voices.sh` into `assets/models/Piper/`, not committed — a 4th voice,
-    `fr_FR-tom-medium`, was evaluated and removed after real-hardware listening found it noticeably
-    lower quality and slower than the other fr_FR voices). Each `tts_models[i]` entry also carries
-    a `language` field (defaults to `"fr"` when absent) — `en_US-lessac-medium` is the first entry
+    `tts`, `describe_controls`, `_resolve_speaker` (speaker/checkpoint resolution — see below);
+    `text_frontend.py`'s own tag-parsing (text cleanup + `<SPEAKER=...>` extraction only, not
+    resolution), deliberately not routed through `fastspeech2_hifigan/text_pipeline.py`'s
+    FS2-specific machinery beyond the genuinely orthographic `trim_punctuation_mistakes()`).
+    Monolithic (`needs_vocoder: false`), no style dimension, `piper-tts` (optional,
+    GPL-3.0-or-later — install manually, not in `requirements-pi.txt`) does its own espeak-ng-based
+    phonemization internally. 3 voice files (`fr_FR-siwis-medium`/`upmc-medium`,
+    `en_US-lessac-medium`, fetched by `scripts/fetch_piper_voices.sh` into `assets/models/Piper/`,
+    not committed — a 4th, `fr_FR-tom-medium`, was evaluated and removed after real-hardware
+    listening found it noticeably lower quality and slower than the other fr_FR voices), presented
+    as **2** selectable `tts_models[i]` entries: `"Piper-tts (Français)"` unifies siwis (single
+    speaker) and upmc (`jessica`/`pierre`) via a `speakers:` list (`{name, checkpoint_file,
+    speaker_id}` per entry) — landscape-refactor session, per the user's own framing ("it doesn't
+    make sense to select two models from the same bigger model" when they're all just Piper-tts,
+    French) — `describe_controls()` builds an ordinary `speaker_list`/`default_speaker` from it, so
+    `gui/app.py` needs no changes; picking a speaker backed by a different checkpoint than the one
+    currently loaded costs a (cached-after-first-time) reload inside `tts()`, on the worker thread,
+    never blocking the GUI. `"Piper en_US (lessac, medium)"` stays a separate, ordinary
+    single-speaker entry (no `speakers:` key — `describe_controls()` falls back to the legacy
+    per-voice `speaker_id_map` path for any model config without one). Each `tts_models[i]` entry
+    also carries a `language` field (defaults to `"fr"` when absent) — lessac is the first entry
     with `language: "en"`, letting the GUI's "Langue" menu (below) find it. See its own `README.md`
     for provenance/licence and
-    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what this integration found and fixed in the
-    contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
+    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what the original integration found and fixed in
+    the contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
     `gui_generic_controls()` — see that section, not repeated here).
   - `synthesis/audio_postprocess.py` — unchanged from pre-reorg `audio_postprocess.py`.
   - `synthesis/subtitles.py` — subtitle/duration-alignment file writers (was part of

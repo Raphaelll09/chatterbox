@@ -41,9 +41,21 @@ synthesize than either remaining fr_FR voice, with no offsetting benefit. `scrip
 fetch_piper_voices.sh` no longer fetches it.
 
 `fr_FR-upmc-medium`'s 2 speakers (`jessica`: id 0, `pierre`: id 1, confirmed live via
-`PiperVoice.config.speaker_id_map`) surface as `describe_controls()`'s `speaker_list`, giving it a
-speaker dropdown in the GUI — `siwis`/`lessac` are single-speaker and omit that control entirely,
-per `base.py`'s documented default for a one-voice backend.
+`PiperVoice.config.speaker_id_map`) plus `fr_FR-siwis-medium`'s own single speaker are unified into
+one `config_tts.yaml` `tts_models` entry, `"Piper-tts (Français)"`, via its `speakers:` list (each
+entry: `name`, `checkpoint_file`, `speaker_id`) — landscape-refactor session
+(`cc_prompt_gui_landscape_v2.md`): from the user's own framing, "it doesn't make sense to select
+two models from the same bigger model" when siwis/jessica/pierre are all just Piper-tts, French,
+and dropping upmc to simplify would have meant losing the only male voice for no quality gain.
+`PiperBackend.describe_controls()` builds an ordinary `{name: index}` `speaker_list` from this
+list (Siwis=0, Jessica=1, Pierre=2), the exact same shape the GUI already renders generically for
+any other multi-speaker voice — no `gui/app.py` changes needed. Selecting Siwis vs. Jessica/Pierre
+costs a checkpoint (re)load the first time in a session (`PiperBackend._voices`, cached per
+`checkpoint_file` afterward, same mechanism as before); Jessica↔Pierre is instant, same loaded
+checkpoint. The reload happens inside `PiperBackend.tts()`, on the synthesis worker thread, never
+blocking the GUI. `en_US-lessac-medium` stays a separate, ordinary single-speaker entry (no
+`speakers:` list) — the legacy per-voice `speaker_id_map` path `describe_controls()` falls back to
+when a model config has no `speakers:` key at all.
 
 `en_US-lessac-medium` is `config_tts.yaml`'s first non-`"fr"` `tts_models` entry (`language: "en"`)
 -- selecting English from the GUI's "Langue" menu (`chatterbox/gui/app.py`'s `create_gui()`)
