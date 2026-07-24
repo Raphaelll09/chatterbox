@@ -15,6 +15,59 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Light/dark theme (landscape-refactor plan, phase 1)
+
+- What: first implementation phase of the landscape GUI redesign
+  (`cc_prompt_gui_landscape_v2.md` Sec3.1) — "Thème" was a disabled stub since no second theme
+  table existed. This app uses classic Tk widgets throughout (not `ttk`), which has no automatic
+  system dark-mode support — every color needs to come from one explicit source of truth.
+  - New `chatterbox/gui/theme.py`: `THEMES["light"/"dark"]` color dicts (bg/fg, entry/button
+    colors, `select_color`, error/warning text, status-circle colors per UI state, battery low/ok),
+    plus `set_theme()`/`get_theme()`/`color()` accessors. `select_color` (the chip/radio "selected"
+    highlight) is deliberately identical across themes — it needs to stay recognizable regardless
+    of theme.
+  - `_apply_theme_option_db(window)` sets Tk's option database (`window.option_add`, per widget
+    class) once at window creation — covers every plain widget with zero per-constructor changes,
+    since none of them hardcoded a color already. The handful that did (status circle, error text,
+    battery threshold, chip `selectcolor`, the options-panel border, the model-picker "selected"
+    highlight) now read `theme.color()` directly instead of a literal.
+  - Theme switching is **live**, not a window restart (unlike the existing Langue mechanism) — a
+    cosmetic change doesn't need a model reload, and a restart would reset the in-progress text
+    input for no reason. `_retheme_widget_tree()` walks the already-built tree, **class-aware**
+    (mirrors `_apply_theme_option_db`'s per-class mapping — an early version applied the same bg
+    to every widget uniformly, flattening Entry/Button/Radiobutton back to the plain background
+    instead of their own contrasting color; caught by an ad hoc Tk smoke test, not by inspection),
+    followed by re-applying `lbl_status`'s error-red text and replaying the last known UI state so
+    the status circle re-derives its correct themed color instead of staying stuck. `lbl_battery`'s
+    fg is deliberately left to its next scheduled poll (≤30s) rather than tracked separately — a
+    harmless, self-correcting cosmetic detail.
+  - New "Thème" app-bar cascade (Clair/Sombre), mirroring the existing "Langue" cascade's
+    structure. `_set_theme` is exposed at module level (same pattern as `_refresh_orientation`) so
+    a later persistence phase can restore a saved theme on startup without `create_gui()` needing
+    to thread it through separately.
+  - `chatterbox/gui/settings.py`'s two hardcoded warning/error label colors now read
+    `theme.color()` too — Tk's option database is shared application-wide, so the Settings
+    Toplevel already inherits the rest of the theme for free, no per-widget changes needed there.
+- Files: `chatterbox/gui/theme.py` (new), `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`,
+  `chatterbox/gui/i18n.py` (`theme_light`/`theme_dark` keys), `tests/test_theme.py` (new).
+- Why: `cc_prompt_gui_landscape_v2.md`'s Phase 2 plan, sequenced as its own phase first (theme
+  plumbing is a broad, mechanical pass touching many widget call sites, best isolated before the
+  menu-bar/input-row/emotion-bar work that also touches `app.py` heavily).
+- Verify: full test suite (291 passed/1 skipped — 6 new for the pure color-dict logic). New ad hoc
+  Tk smoke test confirms: the initial (light) theme applies via `option_add` with no widget-
+  specific code; switching to dark live recolors an existing Entry to `entry_bg` (not the plain
+  `bg` — this caught the class-unaware retheme bug above), the status circle to dark's idle color,
+  and `lbl_status`'s fg to dark's error color; switching back to light restores correctly; opening
+  Settings after a dark switch shows it already themed dark via the shared Tk option database.
+- Notes/gotchas: incidentally found and fixed — an older ad hoc smoke script (not part of the
+  pytest suite) assumed synchronous GUI startup and raced a fixed `sleep` guess against the
+  panel-build/teardown of the "Chargement du modèle…" placeholder from an earlier session's
+  backgrounded-model-load change, occasionally hitting `TclError: bad window path name` on a
+  widget mid-destroy. Fixed with a poll-until-ready loop instead of a longer sleep — will recur for
+  any other pre-existing scratch script that assumes startup is still synchronous.
+
+---
+
 ## 2026-07-24 — Unify Piper siwis/upmc into one "Piper-tts (Français)" speaker list
 
 - What: first concrete step of a landscape-GUI redesign (`cc_prompt_gui_landscape_v2.md`, planned
