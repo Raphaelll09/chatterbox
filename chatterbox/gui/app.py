@@ -1177,8 +1177,36 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     _loading_placeholder = tk.Label(master=window, text=i18n.t("loading_model_label"), fg=theme.color("muted_fg"))
     _loading_placeholder.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
 
-    # Add input field
-    ent_text_input = tk.Entry(master=window, width=main_panel_config["input_width"])
+    # Add input field ("chatbox" -- input-row phase, landscape-refactor plan): an eye-icon toggle
+    # masks the composed text (password-style, Entry's own native `show=` option) so a bystander
+    # can't read it while the AAC user is still composing -- Speak/Replay always use the real
+    # underlying text regardless of mask state, only the on-screen glyphs change. Wrapped in its
+    # own sub-frame occupying the same column-1 cell the bare Entry used to fill alone, so the
+    # outer window's column count/weights (main_panel_config-driven, see the responsive-layout
+    # comment above) don't need to change for one extra button.
+    _MASK_CHAR = "•"
+    _input_frame = tk.Frame(master=window)
+    _input_frame.grid_columnconfigure(0, weight=1)
+    ent_text_input = tk.Entry(master=_input_frame, width=main_panel_config["input_width"])
+    ent_text_input.grid(row=0, column=0, sticky=tk.EW)
+
+    chatbox_masked_var = tk.BooleanVar(value=bool(_persisted_gui_prefs.get("chatbox_masked", False)))
+    ent_text_input.config(show=_MASK_CHAR if chatbox_masked_var.get() else "")
+
+    def _toggle_chatbox_mask():
+        masked = chatbox_masked_var.get()
+        ent_text_input.config(show=_MASK_CHAR if masked else "")
+        try:
+            settings.write_gui_prefs(chatbox_masked=masked)
+        except OSError as exc:
+            # Best-effort, same convention as _set_theme()/_set_keyboard_layout(): the mask still
+            # applies live regardless -- a failed save just means it won't be remembered next launch.
+            print("[gui] could not persist chatbox mask preference: {}".format(exc), file=sys.stderr)
+
+    btn_toggle_chatbox_mask = tk.Checkbutton(
+        master=_input_frame, text="\U0001F441", variable=chatbox_masked_var, indicatoron=0,
+        selectcolor=theme.color("select_color"), command=_toggle_chatbox_mask)
+    btn_toggle_chatbox_mask.grid(row=0, column=1, sticky=tk.E, padx=(4, 0))
 
     btn_syn_audio = tk.Button(
         master=window,
@@ -1188,7 +1216,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=window, text=i18n.t("input_text_label")).grid(row=7, column=0, pady = 4)
 
-        ent_text_input.grid(row=7, column=1, sticky=tk.EW)
+        _input_frame.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
         btn_syn_audio.grid(row=7, column=2)

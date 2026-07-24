@@ -15,6 +15,35 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Chatbox masking (input-row phase, landscape-refactor plan)
+
+- What: an eye-icon toggle (👁, `tk.Checkbutton(indicatoron=0)` -- same "button-like toggle" idiom
+  already used for the AZERTY/QWERTY and orientation pickers) next to the text input masks the
+  composed sentence (password-style, `•` bullets) so a bystander can't read it while an AAC user is
+  still composing -- confirmed with the user (this feature's exact behavior wasn't in context after
+  a compaction): masking is purely visual, `ent_text_input.get()` always returns the real plain
+  text regardless of mask state, so Speak/Replay/the phoneme keyboard's mirrored display are
+  unaffected. Uses `tk.Entry`'s own native `show=` option -- no new widget type, the existing
+  single-line Entry already doubles as the "chatbox". Wrapped `ent_text_input` in a small sub-frame
+  (occupying the same column-1 cell the bare Entry used to fill alone) so the eye-icon button fits
+  without changing the outer window's column count/weights. Persists immediately via the already-
+  extended `write_gui_prefs(chatbox_masked=...)` (settings-persistence phase, previous docs
+  entries) -- that phase deliberately left this field unwired since the feature didn't exist yet;
+  this is that wiring landing.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase (first sub-step; A/Phon's new
+  "disable" fallback mode and the Play/Stop/Replay interruptible-playback work are still pending in
+  this same phase).
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test
+  (monkeypatches `USER_PREFS_PATH`) confirms: launches unmasked by default; typed text round-trips
+  through `.get()` as plain text both masked and unmasked; toggling the eye icon flips the Entry's
+  `show` option between `""` and `"•"` and persists `chatbox_masked` immediately; a second,
+  independent `create_gui()` call with a pre-seeded `chatbox_masked: true` launches already masked.
+- Notes/gotchas: same `USER_PREFS_PATH` monkeypatch discipline as every GUI smoke script this
+  session, confirmed via `git status` that the real `user_prefs.yaml` stayed untouched.
+
+---
+
 ## 2026-07-24 — Menu-bar restructure: Tools/TTS Model/Speaker cascades, Theme relocation, battery alignment (landscape-refactor plan)
 
 - What: rebuilt the app-bar to match `cc_prompt_gui_landscape_v2.md` Sec3.1's mockup order —
