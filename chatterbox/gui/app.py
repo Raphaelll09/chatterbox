@@ -903,16 +903,56 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     global _build_advanced_settings
 
     def _select_tts_model(tts_model, id_button, list_buttons=None):
-        registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
-        loading_script = getattr(registry.BACKEND, tts_model["load_script"])
+        """Backgrounded (landscape-refactor session) -- this used to call loading_script()
+        synchronously on the Tk thread, freezing the whole GUI for however long the model takes to
+        load (a few seconds for FastSpeech2's checkpoint, confirmed by the startup-latency work's
+        own timing notes -- docs/context/CHANGELOG.md). That was tolerable while this was buried in
+        Settings -> Advanced (a rare, deliberate action); promoting TTS Model switching to a
+        first-class top-level menu (this phase) means users hit it far more often, so the freeze
+        is no longer acceptable. Mirrors the exact background-load pattern already proven for
+        startup (_initial_model_load_work()/_finish_initial_model_load() below) rather than
+        inventing a new one, and reuses on_speak()/on_replay()'s busy-guard/_set_action_buttons_
+        state() machinery -- a model switch and a synthesis are mutually exclusive "the GUI is
+        doing real work" states, not two independent flags. Vocoder switches
+        (_select_vocoder_model() below) stay synchronous -- HiFi-GAN's checkpoint is a few MB
+        (confirmed in CHANGELOG.md), not the ~600 MB class of cost that motivated this, and the
+        vocoder picker isn't being promoted to a top-level menu."""
+        global busy
+        if busy:
+            return
+        busy = True
+        _set_ui_state("initialising")
+        _set_action_buttons_state("disabled")
+
+        def _work():
+            try:
+                registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
+                loading_script = getattr(registry.BACKEND, tts_model["load_script"])
+                loading_script(tts_model, device)
+            except Exception as exc:  # noqa: BLE001 -- never crash the process, same rule as _work().
+                post(lambda exc=exc: _fail(exc))
+                return
+            post(lambda: _finish_select_tts_model(tts_model, id_button, list_buttons))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _finish_select_tts_model(tts_model, id_button, list_buttons):
+        """Tk thread. Rebuilds the options panel for the just-loaded model -- same steps the old
+        synchronous _select_tts_model() used to do inline, now run after the worker thread above
+        finishes instead of before starting it."""
+        global busy
         gui_script = globals()[tts_model["gui_script"]]
-        loading_script(tts_model, device)
         state.update_selected_tts(id_button)
         gui_script(tts_model, main_panel_config)
         if _refresh_keyboard_capabilities is not None:
             _refresh_keyboard_capabilities()
         if list_buttons is not None:
             select_model_from_list(id_button, list_buttons)
+        busy = False
+        _set_ui_state("idle")
+        btn_syn_audio.config(state="normal")
+        if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
+            btn_replay_audio.config(state="normal")
 
     def _select_vocoder_model(vocoder_model, id_button, list_buttons=None):
         loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])

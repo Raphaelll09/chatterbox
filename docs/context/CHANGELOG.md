@@ -15,6 +15,38 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Background TTS model switching (landscape-refactor plan, menu-bar-restructure phase)
+
+- What: `_select_tts_model()` (`chatterbox/gui/app.py`) used to call its backend's `load_script`
+  synchronously on the Tk thread, freezing the whole GUI for however long the model takes to load.
+  Tolerable while buried in Settings → Advanced (a rare, deliberate action); the menu-bar-restructure
+  phase promotes TTS Model switching to a first-class top-level menu, so the freeze would become far
+  more frequent. Backgrounded it, mirroring the existing `_initial_model_load_work()`/
+  `_finish_initial_model_load()` startup pattern and reusing `on_speak()`/`on_replay()`'s
+  `busy`/`_set_action_buttons_state()`/`_fail()` machinery — a model switch and a synthesis are now
+  treated as the same "GUI is doing real work" state rather than two independent guards. Split into
+  `_select_tts_model()` (flips `busy`, disables Speak/Replay, spawns a worker thread that only calls
+  `registry.activate_tts_backend()` + the load script, `post()`s failures to `_fail()`) and
+  `_finish_select_tts_model()` (Tk thread: rebuilds the options panel, refreshes keyboard
+  capabilities, re-enables Speak always and Replay only if `playback.AUDIO_EXAMPLE is not None` —
+  same care `_done()` already takes, not the blunter "enable both"). `_select_vocoder_model()` stays
+  synchronous on purpose: HiFi-GAN's checkpoint is a few MB (not the ~600 MB class of cost that
+  motivated this), and the vocoder picker isn't being promoted to a top-level menu.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3 menu-bar restructure — first sub-step, since every other
+  new top-level menu item in that phase (TTS Model, Speaker) builds on this not blocking the GUI.
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test
+  (two fake TTS models, one with a simulated 1.5s slow load, monkeypatches
+  `USER_PREFS_PATH` to a tmp file) drives a real button click via `window.after()` and polls a
+  `window.after()`-driven tick counter throughout the switch: 29 ticks (~1.5s at 50ms/tick) recorded
+  while `busy` was `True`, proving the Tk mainloop never blocked on the simulated load; `state.
+  TTS_INDEX` and `busy` end in the correct post-switch state.
+- Notes/gotchas: none — `_select_tts_model` was already only ever invoked as a `tk.Button`
+  `command=` callback (`_build_advanced_settings()`'s `_grid_model_buttons()`), so no caller depended
+  on it returning synchronously.
+
+---
+
 ## 2026-07-24 — Extend settings persistence with a gui: section (landscape-refactor plan)
 
 - What: second implementation phase. Phase 0 discovery found persistence was much narrower than
