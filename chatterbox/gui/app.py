@@ -47,6 +47,7 @@ import chatterbox.gui.theme as theme
 import chatterbox.config.paths as paths
 import chatterbox.power.client as power_client
 import chatterbox.power.battery as battery
+import chatterbox.power.config as power_config
 
 # # Global variables to store the canvas and the circle figure
 canvas_circle = None
@@ -709,6 +710,17 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # stays None for a normal run (window closed, create_gui()'s restart loop then exits too).
     pending_restart_tts_index = None
 
+    # Persisted GUI preferences (landscape-refactor session, cc_prompt_gui_landscape_v2.md Sec4) --
+    # loaded fresh each time this function runs (including on a language-driven restart) rather
+    # than cached, since chatterbox.gui.settings.write_gui_prefs() already keeps the file in sync
+    # with every live change (theme/keyboard-layout switches, below), so re-reading is always safe
+    # and cheap, never stale. A missing/corrupt file falls back to defaults, never raises
+    # (chatterbox.power.config's own guarantee) -- same behaviour as every other user_prefs.yaml
+    # reader in this app.
+    _persisted_gui_prefs, _ = power_config.load_config(str(paths.USER_PREFS_PATH))
+    _persisted_gui_prefs = _persisted_gui_prefs["gui"]
+    theme.set_theme(_persisted_gui_prefs["theme"])
+
     # Matches whichever language default_tts's own model declares (config_tts.yaml's per-entry
     # "language", defaulting to "fr") -- so launching directly with e.g. `--default_tts
     # <english_index> --gui` already opens in English, not just a language-menu switch.
@@ -792,6 +804,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         if lbl_status is not None:
             lbl_status.configure(fg=theme.color("error_fg"))
         _set_ui_state(_last_ui_state_name, _last_ui_error)
+        try:
+            settings.write_gui_prefs(theme=name)
+        except OSError as exc:
+            # Best-effort: the theme still applied live above regardless -- a failed save just
+            # means it won't be remembered next launch, not something to interrupt the user over.
+            print("[gui] could not persist theme preference: {}".format(exc), file=sys.stderr)
 
     theme_menu = tk.Menu(menubar, tearoff=0)
     theme_var = tk.StringVar(value=theme.get_theme())
@@ -1173,7 +1191,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             phoneme_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
             global _letter_layout_current
             if _letter_layout_current is None:
-                _letter_layout_current = gui_config["keyboard_options"].get("letter_layout", "azerty")
+                # First time in this process: prefer a persisted choice (chatterbox/gui/settings.py's
+                # write_gui_prefs()) over config_tts.yaml's static default -- on a later restart in
+                # the same process (language switch), _letter_layout_current is deliberately left
+                # as-is instead of re-seeded, so it keeps whatever the user picked this session.
+                _letter_layout_current = _persisted_gui_prefs.get(
+                    "keyboard_layout", gui_config["keyboard_options"].get("letter_layout", "azerty"))
             letter_kb_frame, _letter_grid_buttons = _create_letter_keyboard(
                 keyboard_area, gui_config["keyboard_options"], _LETTER_LAYOUTS[_letter_layout_current])
             letter_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
@@ -1201,6 +1224,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                 _letter_grid_buttons = _populate_letter_grid(
                     letter_kb_frame, _LETTER_LAYOUTS[code], gui_config["keyboard_options"])
                 _letter_layout_current = code
+                try:
+                    settings.write_gui_prefs(keyboard_layout=code)
+                except OSError as exc:
+                    print("[gui] could not persist keyboard layout preference: {}".format(exc),
+                          file=sys.stderr)
 
             global _refresh_keyboard_layout
             _refresh_keyboard_layout = _set_keyboard_layout

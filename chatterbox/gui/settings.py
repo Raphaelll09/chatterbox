@@ -83,12 +83,23 @@ def validate_power_settings(t_dim_s, t_dark_s, t_deep_s, brightness_active, brig
     return errors
 
 
+def _atomic_write_yaml(path, cfg):
+    """Shared by write_settings()/write_gui_prefs() below -- .tmp + os.replace so powerd (or a
+    concurrent GUI read) never sees a half-written file. Raises OSError on failure; callers decide
+    whether that's user-facing (write_settings(), gated behind "Enregistrer") or a swallowable
+    background action (write_gui_prefs(), which saves immediately on each change)."""
+    tmp_path = "{}.tmp".format(path)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    os.replace(tmp_path, path)
+
+
 def write_settings(t_dim_s, t_dark_s, t_deep_s, deep_manual_only, brightness_active, brightness_dim,
                     path=None):
     """Read-modify-write the whole user_prefs.yaml (through chatterbox.power.config's validated
-    loader, so the amp/switches/evdev/socket sections this screen doesn't edit survive untouched),
-    then an atomic .tmp + os.replace write so powerd never reads a half-written file. Raises
-    OSError on any write failure -- callers must catch it and show an inline message, not crash."""
+    loader, so the amp/switches/evdev/socket/gui sections this screen doesn't edit survive
+    untouched), then an atomic write (see _atomic_write_yaml()). Raises OSError on any write
+    failure -- callers must catch it and show an inline message, not crash."""
     path = path or str(paths.USER_PREFS_PATH)
     cfg, _warnings = power_config.load_config(path)
     cfg["power"]["t_dim_s"] = t_dim_s
@@ -97,11 +108,21 @@ def write_settings(t_dim_s, t_dark_s, t_deep_s, deep_manual_only, brightness_act
     cfg["power"]["deep_manual_only"] = deep_manual_only
     cfg["display"]["brightness_active"] = brightness_active
     cfg["display"]["brightness_dim"] = brightness_dim
+    _atomic_write_yaml(path, cfg)
 
-    tmp_path = "{}.tmp".format(path)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    os.replace(tmp_path, path)
+
+def write_gui_prefs(path=None, **updates):
+    """Read-modify-write ONLY the given gui: keys (e.g. write_gui_prefs(theme="dark")) -- unlike
+    write_settings() above, GUI preferences (theme, language, keyboard layout, Tools visibility,
+    per-model TTS selections, ...) persist immediately on each change, not gated behind an
+    explicit "Enregistrer" click, matching how TTS/vocoder model switches already take effect
+    immediately elsewhere in this app. Same atomic write as write_settings(); raises OSError on
+    failure -- callers may reasonably choose to just log a failed GUI-prefs save rather than
+    interrupt the user, since it's a background convenience, not a safety-relevant setting."""
+    path = path or str(paths.USER_PREFS_PATH)
+    cfg, _warnings = power_config.load_config(path)
+    cfg["gui"].update(updates)
+    _atomic_write_yaml(path, cfg)
 
 
 def open_settings(parent, on_saved=None, build_advanced_section=None):

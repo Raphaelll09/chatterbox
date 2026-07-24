@@ -128,6 +128,68 @@ def test_socket_section_defaults_when_omitted():
     assert cfg["socket"] == DEFAULTS["socket"]
 
 
+def test_gui_section_defaults_when_omitted():
+    cfg, warnings = merge_config({})
+    assert cfg["gui"] == DEFAULTS["gui"]
+
+
+def test_gui_valid_overrides_are_applied():
+    raw = {"gui": {
+        "theme": "dark", "keyboard_layout": "qwerty", "postprocess_enabled": False,
+        "show_chatbox": False, "selected_tts_model": "Piper-tts (Français)",
+        "selected_speaker": {"Piper-tts (Français)": 1},
+    }}
+    cfg, warnings = merge_config(raw)
+    assert warnings == []
+    assert cfg["gui"]["theme"] == "dark"
+    assert cfg["gui"]["keyboard_layout"] == "qwerty"
+    assert cfg["gui"]["postprocess_enabled"] is False
+    assert cfg["gui"]["show_chatbox"] is False
+    assert cfg["gui"]["selected_tts_model"] == "Piper-tts (Français)"
+    assert cfg["gui"]["selected_speaker"] == {"Piper-tts (Français)": 1}
+    # untouched fields keep their defaults
+    assert cfg["gui"]["language"] == DEFAULTS["gui"]["language"]
+    assert cfg["gui"]["show_data"] == DEFAULTS["gui"]["show_data"]
+
+
+def test_gui_theme_invalid_value_falls_back_to_default_with_warning():
+    cfg, warnings = merge_config({"gui": {"theme": "solarized"}})
+    assert cfg["gui"]["theme"] == DEFAULTS["gui"]["theme"]
+    assert len(warnings) == 1
+    assert "gui.theme" in warnings[0]
+
+
+def test_gui_keyboard_layout_invalid_value_falls_back_to_default_with_warning():
+    cfg, warnings = merge_config({"gui": {"keyboard_layout": "dvorak"}})
+    assert cfg["gui"]["keyboard_layout"] == DEFAULTS["gui"]["keyboard_layout"]
+    assert len(warnings) == 1
+
+
+def test_gui_selected_tts_model_null_is_valid_and_means_no_override():
+    cfg, warnings = merge_config({"gui": {"selected_tts_model": None}})
+    assert warnings == []
+    assert cfg["gui"]["selected_tts_model"] is None
+
+
+def test_gui_selected_tts_model_non_string_falls_back_with_warning():
+    cfg, warnings = merge_config({"gui": {"selected_tts_model": 42}})
+    assert cfg["gui"]["selected_tts_model"] == DEFAULTS["gui"]["selected_tts_model"]
+    assert len(warnings) == 1
+
+
+def test_gui_per_model_dict_fields_not_a_mapping_falls_back_with_warning():
+    cfg, warnings = merge_config({"gui": {"slider_values": ["not", "a", "dict"]}})
+    assert cfg["gui"]["slider_values"] == {}
+    assert len(warnings) == 1
+    assert "gui.slider_values" in warnings[0]
+
+
+def test_gui_section_not_a_mapping_falls_back_to_defaults_with_warning():
+    cfg, warnings = merge_config({"gui": "not a dict"})
+    assert cfg["gui"] == DEFAULTS["gui"]
+    assert len(warnings) == 1
+
+
 def test_load_config_missing_file_falls_back_to_defaults(tmp_path):
     missing = tmp_path / "does_not_exist.yaml"
     cfg, warnings = load_config(str(missing))

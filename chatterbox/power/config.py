@@ -42,6 +42,27 @@ DEFAULTS = {
         "path": "/run/chatterbox/powerd.sock",
         "group": "chatterbox",
     },
+    # GUI preferences (landscape-refactor session, cc_prompt_gui_landscape_v2.md Sec4) -- unlike
+    # power/display above, which only take effect on an explicit "Enregistrer" click, these persist
+    # immediately on each change (chatterbox/gui/settings.py's write_gui_prefs()), matching how TTS/
+    # vocoder model switches already take effect immediately elsewhere in the GUI. selected_speaker/
+    # selected_style/slider_values are keyed by tts_models[i]["label"] so switching models doesn't
+    # clobber another model's own choices; their *contents* aren't schema-validated here (this
+    # module doesn't know config_tts.yaml's per-model shape) -- only that each is a mapping, same
+    # trust boundary this app already uses for config_tts.yaml's own per-model default_args.
+    "gui": {
+        "theme": "light",
+        "language": "fr",
+        "keyboard_layout": "azerty",
+        "postprocess_enabled": True,
+        "show_chatbox": True,
+        "show_data": True,
+        "chatbox_masked": False,
+        "selected_tts_model": None,  # None = no saved override, use config_tts.yaml's default_tts
+        "selected_speaker": {},
+        "selected_style": {},
+        "slider_values": {},
+    },
 }
 
 
@@ -142,6 +163,81 @@ def _merge_switches(raw_switches, warnings):
     return result
 
 
+def _validate_enum_string(value, field, allowed, warnings):
+    if value not in allowed:
+        warnings.append("{}: expected one of {}, got {!r} -- using default".format(
+            field, sorted(allowed), value))
+        return None
+    return value
+
+
+def _validate_mapping(value, field, warnings):
+    """Confirms value is a dict, but doesn't validate its contents -- used for the gui: section's
+    per-model fields (selected_speaker/selected_style/slider_values), whose keys/shapes come from
+    config_tts.yaml (a file this module deliberately knows nothing about, same as it doesn't
+    validate config_tts.yaml's own default_args)."""
+    if not isinstance(value, dict):
+        warnings.append("{}: expected a mapping, got {!r} -- using default".format(field, value))
+        return None
+    return value
+
+
+def _merge_gui(raw_gui, warnings):
+    defaults = DEFAULTS["gui"]
+    if raw_gui is None:
+        return dict_deepcopy(defaults)
+    if not isinstance(raw_gui, dict):
+        warnings.append("gui: expected a mapping, got {!r} -- using defaults".format(raw_gui))
+        return dict_deepcopy(defaults)
+
+    merged = dict_deepcopy(defaults)
+
+    if "theme" in raw_gui:
+        validated = _validate_enum_string(raw_gui["theme"], "gui.theme", {"light", "dark"}, warnings)
+        if validated is not None:
+            merged["theme"] = validated
+
+    if "language" in raw_gui:
+        value = raw_gui["language"]
+        # Not validated against config_tts.yaml's actual configured languages here (this module
+        # doesn't read that file) -- the GUI already falls back gracefully (same "first matching
+        # tts_models entry" logic a stale/removed language code would already trigger) if a saved
+        # code no longer matches anything configured.
+        if isinstance(value, str) and value:
+            merged["language"] = value
+        else:
+            warnings.append("gui.language: expected a non-empty string, got {!r} -- using default".format(value))
+
+    if "keyboard_layout" in raw_gui:
+        validated = _validate_enum_string(
+            raw_gui["keyboard_layout"], "gui.keyboard_layout", {"azerty", "qwerty"}, warnings)
+        if validated is not None:
+            merged["keyboard_layout"] = validated
+
+    for bool_key in ("postprocess_enabled", "show_chatbox", "show_data", "chatbox_masked"):
+        if bool_key in raw_gui:
+            validated = _validate_bool(raw_gui[bool_key], "gui.{}".format(bool_key), warnings)
+            if validated is not None:
+                merged[bool_key] = validated
+
+    if "selected_tts_model" in raw_gui:
+        value = raw_gui["selected_tts_model"]
+        if value is None or (isinstance(value, str) and value):
+            merged["selected_tts_model"] = value
+        else:
+            warnings.append(
+                "gui.selected_tts_model: expected a non-empty string or null, got {!r} -- "
+                "using default".format(value))
+
+    for dict_key in ("selected_speaker", "selected_style", "slider_values"):
+        if dict_key in raw_gui:
+            validated = _validate_mapping(raw_gui[dict_key], "gui.{}".format(dict_key), warnings)
+            if validated is not None:
+                merged[dict_key] = validated
+
+    return merged
+
+
 def _merge_evdev(raw_evdev, warnings):
     defaults = DEFAULTS["evdev"]
     if raw_evdev is None:
@@ -177,6 +273,7 @@ def merge_config(raw):
         "switches": _merge_switches(raw.get("switches"), warnings),
         "evdev": _merge_evdev(raw.get("evdev"), warnings),
         "socket": _merge_section(raw.get("socket"), DEFAULTS["socket"], "socket", warnings),
+        "gui": _merge_gui(raw.get("gui"), warnings),
     }
     return config, warnings
 

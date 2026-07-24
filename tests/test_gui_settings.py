@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 import chatterbox.power.config as power_config
-from chatterbox.gui.settings import validate_power_settings, write_settings
+from chatterbox.gui.settings import validate_power_settings, write_settings, write_gui_prefs
 
 
 def test_valid_settings_have_no_errors():
@@ -77,3 +77,49 @@ def test_write_settings_raises_oserror_on_bad_path(tmp_path):
     bad_path = str(tmp_path / "does_not_exist_dir" / "user_prefs.yaml")
     with pytest.raises(OSError):
         write_settings(15, 90, 600, False, 200, 40, path=bad_path)
+
+
+def test_write_gui_prefs_round_trips_and_preserves_untouched_gui_fields(tmp_path):
+    path = str(tmp_path / "user_prefs.yaml")
+
+    write_gui_prefs(path=path, theme="dark")
+    cfg, warnings = power_config.load_config(path)
+    assert warnings == []
+    assert cfg["gui"]["theme"] == "dark"
+    assert cfg["gui"]["keyboard_layout"] == "azerty"  # untouched field keeps its default
+
+    # A second, independent call only touches its own key -- doesn't clobber the first.
+    write_gui_prefs(path=path, keyboard_layout="qwerty")
+    cfg, warnings = power_config.load_config(path)
+    assert warnings == []
+    assert cfg["gui"]["theme"] == "dark"  # still there
+    assert cfg["gui"]["keyboard_layout"] == "qwerty"
+
+
+def test_write_gui_prefs_preserves_other_top_level_sections(tmp_path):
+    path = str(tmp_path / "user_prefs.yaml")
+    seed_cfg, _warnings = power_config.load_config(path)
+    seed_cfg["amp"]["sd_pin"] = 99
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(seed_cfg, f)
+
+    write_gui_prefs(path=path, theme="dark")
+
+    cfg, warnings = power_config.load_config(path)
+    assert warnings == []
+    assert cfg["amp"]["sd_pin"] == 99  # untouched section survived
+    assert not os.path.exists(path + ".tmp")  # atomic write leaves no .tmp behind
+
+
+def test_write_gui_prefs_supports_per_model_dict_fields(tmp_path):
+    path = str(tmp_path / "user_prefs.yaml")
+    write_gui_prefs(path=path, selected_speaker={"Piper-tts (Français)": 1})
+    cfg, warnings = power_config.load_config(path)
+    assert warnings == []
+    assert cfg["gui"]["selected_speaker"] == {"Piper-tts (Français)": 1}
+
+
+def test_write_gui_prefs_raises_oserror_on_bad_path(tmp_path):
+    bad_path = str(tmp_path / "does_not_exist_dir" / "user_prefs.yaml")
+    with pytest.raises(OSError):
+        write_gui_prefs(path=bad_path, theme="dark")
