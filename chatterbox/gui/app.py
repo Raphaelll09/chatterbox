@@ -92,6 +92,14 @@ _KEYBOARD_SCREEN_SHARE = 0.6
 _accepts_phoneme_input = True
 _refresh_keyboard_capabilities = None
 
+# Top-level "Speaker" menu (menu-bar-restructure phase, landscape-refactor plan): rebuilt from the
+# active backend's describe_controls()["speaker_list"] every time the options panel itself rebuilds
+# (gui_generic_controls() no longer builds its own in-panel speaker dropdown -- promoted here
+# instead, same declutter goal as moving TTS/vocoder pickers into Settings -> Advanced earlier).
+# _refresh_speaker_menu is set (to a callable), same rebindable-global pattern as
+# _refresh_keyboard_capabilities above, and called right alongside it after every model (re)load.
+_refresh_speaker_menu = None
+
 # Texte-mode letter keyboard's active layout ("azerty"/"qwerty", chatterbox/gui/app.py's
 # _LETTER_LAYOUTS) -- None until first initialised from config_tts.yaml's GUI_config.keyboard_
 # options.letter_layout, then persists across a language-driven window restart (create_gui()'s
@@ -772,18 +780,46 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # keyboard area and read as cluttered); "À propos" is last/far right, also per feedback.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
+    #
+    # Top-level order (menu-bar-restructure phase, landscape-refactor plan, matching
+    # cc_prompt_gui_landscape_v2.md Sec3.1's mockup): Paramètres, Tools, TTS Model, Language,
+    # Speaker, About (battery is a separate Label, not a menu item -- see its own grid() call).
     if main_panel_config.get("add_settings_button", True):
         menubar.add_command(label=i18n.t("menu_settings"), command=_toggle_settings)
+
+    # Tools: today just the synthesis-data-visibility toggle (relocated here from its own top-level
+    # checkbutton) -- Sec3.1's other Tools item, a chatbox-visibility toggle, doesn't exist yet
+    # (that lands with the input-row phase) and will be added into this same cascade then, not a
+    # second one.
+    tools_menu = tk.Menu(menubar, tearoff=0)
     if main_panel_config["add_audio_infos"]:
         # Show/hide the synthesis timing-breakdown labels (real-hardware request: "capacity to
-        # hide the synthesis data") -- a menu checkbutton rather than a main-window button so it
-        # doesn't add another row to a screen that's already tight on vertical space. Wired here
-        # (before the labels themselves exist, further down in this function) the same way
-        # _build_advanced_settings is: the command only actually runs on a later user click, by
-        # which point the labels are long since created.
+        # hide the synthesis data"). Wired here (before the labels themselves exist, further down
+        # in this function) the same way _build_advanced_settings is: the command only actually
+        # runs on a later user click, by which point the labels are long since created.
         audio_info_visible = tk.BooleanVar(value=True)
-        menubar.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
-                                 command=lambda: _toggle_audio_info_visibility(audio_info_visible))
+        tools_menu.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
+                                    command=lambda: _toggle_audio_info_visibility(audio_info_visible))
+    menubar.add_cascade(label=i18n.t("menu_tools"), menu=tools_menu)
+
+    # TTS Model: promoted from Settings -> Advanced-only to a first-class top-level menu (still ALSO
+    # reachable from Settings -> Advanced, same _select_tts_model()/_build_advanced_settings() code
+    # -- this radio group and that button group both drive the same state.update_selected_tts(),
+    # so picking one here updates the other's highlight next time Settings opens). Backgrounded
+    # (_select_tts_model() above) specifically because this promotion makes switching far more
+    # frequent than it was buried in a dialog.
+    tts_model_menu = tk.Menu(menubar, tearoff=0)
+    tts_model_var = tk.StringVar(value=tts_config["tts_models"][default_tts]["label"])
+
+    def _on_tts_model_menu_select(tts_model, id_button):
+        tts_model_var.set(tts_model["label"])
+        _select_tts_model(tts_model, id_button)
+
+    for index, tts_model in enumerate(tts_config["tts_models"], start=1):
+        tts_model_menu.add_radiobutton(
+            label=tts_model["label"], variable=tts_model_var, value=tts_model["label"],
+            command=lambda m=tts_model, i=index: _on_tts_model_menu_select(m, i))
+    menubar.add_cascade(label=i18n.t("menu_tts_model"), menu=tts_model_menu)
 
     global _set_theme
 
@@ -811,12 +847,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             # means it won't be remembered next launch, not something to interrupt the user over.
             print("[gui] could not persist theme preference: {}".format(exc), file=sys.stderr)
 
-    theme_menu = tk.Menu(menubar, tearoff=0)
-    theme_var = tk.StringVar(value=theme.get_theme())
-    for theme_name, label_key in (("light", "theme_light"), ("dark", "theme_dark")):
-        theme_menu.add_radiobutton(label=i18n.t(label_key), variable=theme_var, value=theme_name,
-                                    command=lambda n=theme_name: _set_theme(n))
-    menubar.add_cascade(label=i18n.t("menu_theme"), menu=theme_menu)
+    # Theme picker itself lives in Settings -> Advanced now (_build_advanced_settings() below),
+    # not a top-level menu cascade -- landscape spec mockup (cc_prompt_gui_landscape_v2.md Sec3.1)
+    # lists exactly six top-level items (Paramètres/Tools/TTS Model/Language/Speaker/About), with
+    # Theme filed under "Add to Paramètres", not its own entry. _set_theme() above is unchanged and
+    # still module-global (exposed for tests/smoke scripts); only where it's invoked from moved.
 
     def _set_language(code):
         """Switches chatterbox/gui/i18n.py's locale, then restarts the whole window onto the
@@ -845,6 +880,46 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                                    value=lang_option["code"],
                                    command=lambda c=lang_option["code"]: _set_language(c))
     menubar.add_cascade(label=i18n.t("menu_language"), menu=lang_menu)
+
+    # Speaker: promoted from gui_generic_controls()'s in-panel dropdown to a top-level menu, same
+    # declutter goal as the TTS Model/Vocodeur moves above -- see that function's own comment.
+    # Rebuilt (not just re-labeled) every time the options panel itself rebuilds, since the active
+    # backend's speaker_list is model-specific; _refresh_speaker_menu is the rebindable-global
+    # callback _finish_select_tts_model()/_finish_initial_model_load() call for exactly that,
+    # mirroring _refresh_keyboard_capabilities's existing pattern.
+    speaker_menu = tk.Menu(menubar, tearoff=0)
+    speaker_var = tk.StringVar(value="")
+
+    global _refresh_speaker_menu
+
+    def _refresh_speaker_menu():
+        speaker_menu.delete(0, "end")
+        backend_controls = registry.BACKEND.describe_controls()
+        model_speaker_list = backend_controls.get("speaker_list") or []
+        default_speaker = backend_controls.get("default_speaker", 0)
+        if not model_speaker_list:
+            speaker_menu.add_command(label=i18n.t("menu_no_speaker"), state="disabled")
+            speaker_var.set("")
+            return
+        # Same "default speaker first, stable sort" display order gui_generic_controls()'s own
+        # (now-removed) in-panel dropdown used to build.
+        display_order = sorted(enumerate(model_speaker_list), key=lambda pair: pair[0] != default_speaker)
+        label_by_index = {idx: name for idx, name in display_order}
+        speaker_var.set(label_by_index[default_speaker])
+
+        def _on_speaker_menu_select(idx, name):
+            speaker_var.set(name)
+            # speaker_selection is gui_generic_controls()'s module-level global (a fresh IntVar
+            # each time that function rebuilds the panel) -- read the CURRENT one at click time,
+            # not whatever it was when this closure was created.
+            if speaker_selection is not None:
+                speaker_selection.set(idx)
+
+        for idx, name in display_order:
+            speaker_menu.add_radiobutton(label=name, variable=speaker_var, value=name,
+                                          command=lambda i=idx, n=name: _on_speaker_menu_select(i, n))
+
+    menubar.add_cascade(label=i18n.t("menu_speaker"), menu=speaker_menu)
 
     menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
     window.config(menu=menubar)
@@ -877,7 +952,10 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     lbl_battery = None
     if main_panel_config.get("add_battery_info", True):
         lbl_battery = tk.Label(master=window, text="")
-        lbl_battery.grid(row=0, column=0, columnspan=max_buttons+2)
+        # sticky=tk.E (landscape spec Sec3: "far right") -- the label still spans the full row
+        # (columnspan unchanged) so its own hidden/shown grid() calls don't shift any other
+        # column's width, but it now hugs the row's right edge instead of centering across it.
+        lbl_battery.grid(row=0, column=0, columnspan=max_buttons+2, sticky=tk.E)
         lbl_battery.grid_remove()
 
         def _poll_battery():
@@ -944,8 +1022,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         gui_script = globals()[tts_model["gui_script"]]
         state.update_selected_tts(id_button)
         gui_script(tts_model, main_panel_config)
+        tts_model_var.set(tts_model["label"])  # keeps the top-level TTS Model menu's radio in
+        # sync regardless of which picker (this menu or Settings -> Advanced) triggered the switch.
         if _refresh_keyboard_capabilities is not None:
             _refresh_keyboard_capabilities()
+        if _refresh_speaker_menu is not None:
+            _refresh_speaker_menu()
         if list_buttons is not None:
             select_model_from_list(id_button, list_buttons)
         busy = False
@@ -1054,6 +1136,24 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                     value=code, indicatoron=0, selectcolor=theme.color("select_color"),
                     command=lambda c=code: _refresh_keyboard_layout(c),
                 ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
+            next_row += 1
+
+        # Theme (landscape-refactor session, menu-bar-restructure phase): relocated here from a
+        # top-level "Thème" menu cascade -- the landscape spec mockup's six top-level items
+        # (Paramètres/Tools/TTS Model/Language/Speaker/About) have no Theme entry of their own; its
+        # prose files Theme under "Add to Paramètres" instead. Rebuilt fresh on every open (same as
+        # the model pickers above) so it always reflects theme.get_theme() at open time, even though
+        # in practice this is now the only place theme can be changed from.
+        tk.Label(master=parent_frame, text=i18n.t("menu_theme")).grid(
+            row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+        theme_var = tk.StringVar(value=theme.get_theme())
+        for col, (theme_name, label_key) in enumerate(
+                [("light", "theme_light"), ("dark", "theme_dark")], start=1):
+            tk.Radiobutton(
+                master=parent_frame, text=i18n.t(label_key), variable=theme_var,
+                value=theme_name, indicatoron=0, selectcolor=theme.color("select_color"),
+                command=lambda n=theme_name: _set_theme(n),
+            ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
     # Startup default load (phase 2 of the startup-latency work -- see docs/context/CHANGELOG.md
     # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
@@ -1438,6 +1538,8 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         gui_script(tts_model, main_panel_config)
         if _refresh_keyboard_capabilities is not None:
             _refresh_keyboard_capabilities()
+        if _refresh_speaker_menu is not None:
+            _refresh_speaker_menu()
         busy = False
         _start_warmup()
 
@@ -1719,39 +1821,20 @@ def gui_generic_controls(tts_config, main_panel_config):
     frame_options = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame_options, anchor='nw')
 
-    # Speaker dropdown (PC-GUI feedback: a chip grid was overkill for something that "doesn't
-    # change very often" and some future backends may only have one voice at all -- a dropdown
-    # beside the label instead of a whole wrapped grid also gives the controls below more
-    # width/rows to themselves). Display order: default speaker first in the list (stable sort,
-    # same as the chip grids), value stays each speaker's ORIGINAL index into speaker_list (the
-    # real model speaker ID) regardless of its position in the dropdown. Skipped entirely for a
-    # backend with no speaker_list at all (a single-voice model) -- speaker_selection stays None
-    # and get_gui_controls() simply omits "speaker".
+    # Speaker selection lives in a top-level "Speaker" menu now (menu-bar-restructure phase,
+    # landscape-refactor plan), not an in-panel dropdown -- same declutter goal as moving the
+    # TTS/vocoder pickers into Settings -> Advanced earlier. speaker_selection (the IntVar
+    # get_gui_controls() reads) is still created/seeded here exactly as before; _refresh_speaker_
+    # menu() (called right after this function returns -- see _finish_select_tts_model()/
+    # _finish_initial_model_load()) builds the actual menu entries and writes into this same IntVar
+    # on selection. Skipped entirely for a backend with no speaker_list at all (a single-voice
+    # model) -- speaker_selection stays None and get_gui_controls() simply omits "speaker".
     index_speaker = 0
     if speaker_list:
         speaker_selection = tk.IntVar(frame)
         speaker_selection.set(default_speaker)
-
-        lbl_speaker_selection = tk.Label(master=frame_options, text=i18n.t("speaker_label"))
-        lbl_speaker_selection.grid(row=sub_row_index, column=0, sticky=tk.W)
-
-        _default_speaker_id = default_speaker
-        _speaker_display_order = sorted(enumerate(speaker_list),
-                                         key=lambda pair: pair[0] != _default_speaker_id)
-        _speaker_index_by_label = {name: idx for idx, name in _speaker_display_order}
-        _speaker_label_by_index = {idx: name for idx, name in _speaker_display_order}
-        speaker_display_var = tk.StringVar(value=_speaker_label_by_index[_default_speaker_id])
-
-        def _on_speaker_selected(selected_label):
-            speaker_selection.set(_speaker_index_by_label[selected_label])
-
-        tk.OptionMenu(frame_options, speaker_display_var,
-                      *[name for _, name in _speaker_display_order], command=_on_speaker_selected
-                      ).grid(row=sub_row_index, column=1, columnspan=_CHIPS_PER_ROW - 1, sticky=tk.W)
-        sub_row_index += 1
-
         # Downstream columnspan=1+index_speaker uses were always just a "how many speakers" width
-        # heuristic (predating the chip/dropdown UI), matching the original per-speaker-row loop's
+        # heuristic (predating the dropdown/menu UI), matching the original per-speaker-row loop's
         # final counter value.
         index_speaker = len(speaker_list)
 

@@ -15,6 +15,58 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Menu-bar restructure: Tools/TTS Model/Speaker cascades, Theme relocation, battery alignment (landscape-refactor plan)
+
+- What: rebuilt the app-bar to match `cc_prompt_gui_landscape_v2.md` Sec3.1's mockup order —
+  Paramètres, Tools, TTS Model, Language, Speaker, About (battery stays a separate right-aligned
+  Label, not a menu entry).
+  - **Tools** cascade: houses the synthesis-data-visibility checkbutton, relocated from its own
+    top-level checkbutton. The mockup's other Tools item (chatbox visibility) doesn't exist yet —
+    it lands, into this same cascade, with the input-row phase.
+  - **TTS Model** cascade: radiobuttons built from `tts_config["tts_models"]`, driving the same
+    (now-backgrounded, previous entry) `_select_tts_model()` Settings -> Advanced's own picker
+    buttons already used — picking a model from either updates both (`tts_model_var` is synced in
+    `_finish_select_tts_model()` regardless of which one triggered the switch).
+  - **Speaker** cascade: replaces `gui_generic_controls()`'s in-panel speaker `OptionMenu` entirely
+    (same declutter rationale as moving TTS/vocoder pickers into Settings earlier) — a new
+    rebindable-global `_refresh_speaker_menu()` (mirrors the existing `_refresh_keyboard_
+    capabilities` pattern) rebuilds its entries from `describe_controls()["speaker_list"]` every
+    time the options panel itself rebuilds (model switch or startup), since the speaker list is
+    model-specific (e.g. Piper-tts (Français)'s 3 vs. lessac's 0). A single-voice model shows one
+    disabled "Aucun"/"None" entry rather than an empty menu. Selecting a speaker writes directly
+    into `gui_generic_controls()`'s module-global `speaker_selection` IntVar (read live at click
+    time, not captured at menu-build time, since that IntVar is a fresh object every panel rebuild)
+    — `get_gui_controls()` needed no changes.
+  - **Theme** relocated from its own top-level cascade into Settings -> Advanced
+    (`_build_advanced_settings()`, alongside the existing model/orientation/keyboard-layout
+    pickers) — the mockup's six top-level items have no Theme entry; its own prose files Theme
+    under "Add to Paramètres" instead. `_set_theme()` itself is unchanged, only where its
+    radiobuttons are built moved. (Fixed a latent bug found while doing this: the AZERTY/QWERTY
+    keyboard-layout block never incremented `next_row` after itself, harmless while it was the last
+    section but would have overlapped Theme's new row.)
+  - **Battery** label: added `sticky=tk.E` to its `grid()` call (spec: "far right") — it already
+    spanned the whole row via `columnspan`, so this only changes where within that span it sits,
+    not any other column's width.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new keys: `menu_tools`,
+  `menu_tts_model`, `menu_speaker`, `menu_no_speaker`, both locales).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3.1, second sub-step of the menu-bar-restructure phase
+  (first was backgrounding `_select_tts_model()`, previous entry).
+- Verify: full test suite (303 passed/1 skipped, unchanged — no pytest coverage added here,
+  matching this project's own stated convention, `docs/gui/GUI.md` "Testing": real-`tk.Tk()`/
+  mainloop scenarios are ad hoc manual smoke scripts, not part of the automated suite). New ad hoc
+  Tk smoke test (two fake TTS models, one with 2 speakers and one with none, monkeypatches
+  `USER_PREFS_PATH`) confirms: top-level order is exactly Paramètres/Outils/Modèle TTS/Langue/
+  Locuteur/À propos with no top-level Thème; Tools contains the audio-info checkbutton; TTS Model
+  cascade lists both fake models and switching via it actually switches (`state.TTS_INDEX` updates,
+  `busy` returns to `False`); Speaker cascade lists `["Alice", "Bob"]` for the first model,
+  selecting "Bob" sets `speaker_selection.get() == 1`, and switching to the single-voice second
+  model repopulates it to `["Aucun"]`; the battery label's grid `sticky` contains `"e"`; opening
+  Settings shows a "Thème" label inside the Advanced section.
+- Notes/gotchas: none new — same `USER_PREFS_PATH` monkeypatch discipline as every GUI smoke script
+  this session, confirmed via `git status` that the real `user_prefs.yaml` stayed untouched.
+
+---
+
 ## 2026-07-24 — Background TTS model switching (landscape-refactor plan, menu-bar-restructure phase)
 
 - What: `_select_tts_model()` (`chatterbox/gui/app.py`) used to call its backend's `load_script`
