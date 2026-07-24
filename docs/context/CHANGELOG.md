@@ -15,6 +15,58 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Unify Piper siwis/upmc into one "Piper-tts (Français)" speaker list
+
+- What: first concrete step of a landscape-GUI redesign (`cc_prompt_gui_landscape_v2.md`, planned
+  in phases: discovery -> assessment -> plan -> implementation). While designing a Model ->
+  Language -> Speaker menu cascade, presenting siwis/upmc as two separate top-level "models"
+  didn't match the user's own mental model ("the two models are FastSpeech2 and Piper-tts... it
+  doesn't make much sense to have to select two models from the same bigger model"). Dropping
+  upmc to simplify was rejected: it's the only male voice (`pierre`), and losing it for no quality
+  gain (keeping only siwis) was judged not worth it.
+  - New `config_tts.yaml` field, `speakers:` — an ordered list of `{name, checkpoint_file,
+    speaker_id}` — lets one `tts_models[i]` entry span speakers backed by *different* onnx
+    checkpoints (siwis's own single-speaker checkpoint; jessica/pierre sharing upmc's). Siwis,
+    Jessica, and Pierre are now one entry, `"Piper-tts (Français)"`.
+  - `PiperBackend.describe_controls()` builds an ordinary `{name: index}` `speaker_list`/int
+    `default_speaker` from `speakers:` (Siwis=0, Jessica=1, Pierre=2) — the exact same shape
+    `gui/app.py` already renders generically for any multi-speaker voice. **Zero GUI changes**
+    were needed for a model whose speakers span multiple checkpoints.
+  - `PiperBackend._resolve_speaker()` (called from `tts()`) maps `gui_control["speaker"]` (now an
+    index into `speakers:`, not a raw per-voice speaker id) to the right checkpoint, swapping
+    `self._active_voice` via the existing `self._voices` cache (keyed by `checkpoint_file`,
+    unchanged mechanism) only if the resolved entry needs a different one. A `<SPEAKER=name>` text
+    tag overrides the GUI selection, same precedent as FS2's own tags overriding its GUI controls.
+    This reload only ever happens inside `tts()`, on the synthesis worker thread — a first-time
+    switch to a not-yet-loaded checkpoint costs a moment of synthesis time, never a GUI freeze;
+    switching back to an already-loaded one (or between Jessica/Pierre, same checkpoint) is
+    instant.
+  - `text_frontend.prepare()` no longer resolves `speaker_id` itself (needs `self` to swap voices,
+    which a pure text-transform function doesn't have) — now just returns the parsed
+    `<SPEAKER=name>` tag name, leaving resolution entirely to the backend.
+  - `en_US-lessac-medium` (already true single-voice) is untouched — `describe_controls()`/
+    `_resolve_speaker()` both fall back to the legacy per-voice `speaker_id_map` path when a model
+    config has no `speakers:` key at all, so this is purely additive to the contract.
+- Files: `chatterbox/config/config_tts.yaml`, `chatterbox/synthesis/backends/piper/backend.py`,
+  `chatterbox/synthesis/backends/piper/text_frontend.py`, `chatterbox/synthesis/backends/piper/
+  README.md`, `CLAUDE.md`, `docs/gui/INTERCHANGEABLE_BACKENDS.md` (new §3.6), `tests/
+  test_piper_backend.py` (5 new cases), `tests/test_piper_describe_controls.py` (1 new case).
+- Why: user request, made while confirming direction for the landscape GUI redesign's Model/
+  Language/Speaker menu cascade.
+- Verify: full test suite (285 passed/1 skipped, 6 new). Also verified with real (non-mocked) runs
+  on this dev checkout, which happens to have `piper-tts` and all three real `.onnx` voices
+  installed: `PiperBackend.tts()` called directly for Siwis/Jessica/Pierre produced three distinct,
+  valid 22050 Hz mono wavs (1.7s/1.6s/1.8s for the same sentence — genuinely different synthesis,
+  not a cached repeat); a real `create_gui()` session (nothing mocked) showed the speaker dropdown
+  listing exactly `["Siwis", "Jessica", "Pierre"]`, defaulting to Siwis, and selecting each through
+  the real dropdown + `get_gui_controls()` + `registry.BACKEND.tts()` produced three
+  distinctly-sized wavs through the full real GUI code path, not just the backend in isolation.
+- Notes/gotchas: this is the first implementation step of the landscape redesign plan, not the
+  whole thing — the Model/Language/Speaker menu cascade itself, the emotion icon bar, the sliders
+  window, theme, and the rest of that plan's phases are still ahead.
+
+---
+
 ## 2026-07-24 — English Piper voice, live "Langue" menu, AZERTY/QWERTY keyboard toggle
 
 - What:
