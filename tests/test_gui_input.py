@@ -86,7 +86,7 @@ def test_activate_focuses_non_button():
 
 
 def _make_recorder_dispatcher():
-    calls = {"activity": 0, "speak": 0, "put_away": 0, "keyboard": []}
+    calls = {"activity": 0, "speak": 0, "put_away": 0, "replay": 0, "stop": 0, "keyboard": []}
     nav = NavRing([FakeButton(), FakeButton()])
     dispatch = make_dispatcher(
         activity_fn=lambda: calls.__setitem__("activity", calls["activity"] + 1),
@@ -94,6 +94,8 @@ def _make_recorder_dispatcher():
         put_away_fn=lambda: calls.__setitem__("put_away", calls["put_away"] + 1),
         nav=nav,
         keyboard_emit_fn=lambda payload: calls["keyboard"].append(payload),
+        replay_fn=lambda: calls.__setitem__("replay", calls["replay"] + 1),
+        stop_fn=lambda: calls.__setitem__("stop", calls["stop"] + 1),
     )
     return dispatch, calls, nav
 
@@ -109,6 +111,34 @@ def test_put_away_action_routes_to_put_away_fn():
     dispatch, calls, _nav = _make_recorder_dispatcher()
     dispatch(Action.PUT_AWAY)
     assert calls["put_away"] == 1
+
+
+def test_replay_action_routes_to_replay_fn():
+    dispatch, calls, _nav = _make_recorder_dispatcher()
+    dispatch(Action.REPLAY)
+    assert calls["replay"] == 1
+
+
+def test_replay_action_default_is_noop():
+    dispatch = make_dispatcher(
+        activity_fn=lambda: None, speak_fn=lambda: None, put_away_fn=lambda: None,
+        nav=NavRing([]), keyboard_emit_fn=lambda p: None,
+    )
+    dispatch(Action.REPLAY)  # no replay_fn given -- must not raise
+
+
+def test_stop_action_routes_to_stop_fn():
+    dispatch, calls, _nav = _make_recorder_dispatcher()
+    dispatch(Action.STOP)
+    assert calls["stop"] == 1
+
+
+def test_stop_action_default_is_noop():
+    dispatch = make_dispatcher(
+        activity_fn=lambda: None, speak_fn=lambda: None, put_away_fn=lambda: None,
+        nav=NavRing([]), keyboard_emit_fn=lambda p: None,
+    )
+    dispatch(Action.STOP)  # no stop_fn given -- must not raise
 
 
 def test_next_prev_move_the_nav_ring():

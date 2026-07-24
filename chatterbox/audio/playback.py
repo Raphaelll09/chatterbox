@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Audio playback -- platform branch (Windows: simpleaudio, falling back to sounddevice/soundfile;
-other platforms: pydub.playback.play). Split out of audio_utils.py in Phase 3
+other platforms: a direct ffplay subprocess, see "Interruptible playback" below). Split out of
+audio_utils.py in Phase 3
 (docs/REORG_PROPOSAL.md). See docs/context/ARCHITECTURE.md "Platform-specific playback" -- keep
 both paths in sync when editing.
 
@@ -14,9 +15,20 @@ play_audio() also runs the amp handshake from chatterbox-powerd_spec_v0.1.md Sec
 contract") around the actual platform playback -- see _play_raw()/get_client() below. That
 handshake is a true no-op whenever chatterbox-powerd isn't reachable (any PC dev checkout, or a Pi
 before powerd is set up), so this file's behavior is unchanged there.
+
+Interruptible playback (input-row phase, landscape-refactor plan, Stop button): _play_raw() records
+a zero-arg "stop" callable in _current_stop_fn for whichever platform backend is actually playing,
+then blocks on that backend's own wait call. stop_audio() (called from the GUI's Tk thread while
+_play_raw() blocks on the worker thread) just invokes it. Read/write of a single reference is
+atomic under the GIL, matching how chatterbox/gui/app.py's own `busy` flag is shared across threads
+elsewhere in this codebase without a separate lock. On Linux/Pi, pydub.playback.play() wraps a
+BLOCKING subprocess.call() to ffplay with no handle to interrupt it -- replaced here with a direct
+subprocess.Popen() (export to a temp wav first, ffplay needs a file/pipe, not raw pydub data) so
+Stop can .terminate() it; no new dependency, ffmpeg/ffplay was already required for pydub itself.
 """
 import platform
 import sys
+import tempfile
 import time
 
 from chatterbox.config import paths as cb_paths
@@ -32,11 +44,25 @@ if current_os == "Windows":
         import sounddevice as sd
         _HAS_SIMPLEAUDIO = False
 else:
-    from pydub.playback import play
+    import os
+    import subprocess
 
 AUDIO_EXAMPLE = None
 
+# Set by _play_raw() right before its platform-specific blocking wait, cleared right after --
+# stop_audio() below is the only intended caller, from a different thread while _play_raw() blocks.
+_current_stop_fn = None
+
 _amp_timing_cache = None
+
+
+def stop_audio():
+    """Interrupts whatever _play_raw() is currently blocked on, if anything -- a no-op if nothing
+    is playing. Safe to call from the Tk thread while _play_raw() blocks on the worker thread (see
+    module docstring)."""
+    stop_fn = _current_stop_fn
+    if stop_fn is not None:
+        stop_fn()
 
 
 def _get_amp_timing():
@@ -74,8 +100,11 @@ def play_audio():
 
 
 def _play_raw():
-    """The actual platform playback of AUDIO_EXAMPLE -- unchanged from before the amp handshake
-    was added around it."""
+    """The actual platform playback of AUDIO_EXAMPLE. Each branch records a stop callable into
+    _current_stop_fn immediately before its own blocking wait, and clears it (via `finally`, so an
+    exception mid-playback doesn't leave a stale stop_fn pointing at an already-finished clip)
+    right after."""
+    global _current_stop_fn
     current_os = platform.system()
     if current_os == "Windows": # memory issue on Windows
         # Extract raw audio data from the AudioSegment
@@ -89,7 +118,11 @@ def _play_raw():
         if _HAS_SIMPLEAUDIO:
             wave_obj = sa.WaveObject(audio_data, num_channels, bytes_per_sample, sample_rate)
             play_obj = wave_obj.play()
-            play_obj.wait_done()
+            _current_stop_fn = play_obj.stop
+            try:
+                play_obj.wait_done()
+            finally:
+                _current_stop_fn = None
             play_obj.stop()
         else:
             import numpy as np
@@ -99,6 +132,29 @@ def _play_raw():
             if num_channels > 1:
                 audio_np = audio_np.reshape(-1, num_channels)
             sd.play(audio_np, samplerate=sample_rate)
-            sd.wait()
+            _current_stop_fn = sd.stop
+            try:
+                sd.wait()
+            finally:
+                _current_stop_fn = None
     else:
-        play(AUDIO_EXAMPLE)
+        # Direct ffplay invocation (not pydub.playback.play(), which shells out to ffplay via a
+        # BLOCKING subprocess.call() with no handle to interrupt it -- module docstring). ffplay
+        # needs a file, not raw pydub data, so export to a temp wav first; -nodisp/-autoexit keep
+        # it a pure audio player (no video window, process exits on its own once playback ends).
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            AUDIO_EXAMPLE.export(tmp_path, format="wav")
+            proc = subprocess.Popen(
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path])
+            _current_stop_fn = proc.terminate
+            try:
+                proc.wait()
+            finally:
+                _current_stop_fn = None
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

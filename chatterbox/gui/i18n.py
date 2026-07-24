@@ -26,6 +26,7 @@ STRINGS = {
         "replay_button": "Rejouer",  # was "Lire" -- real-hardware feedback: ambiguous/redundant
                                      # with the keyboards' own "▶" play button, which
                                      # re-synthesizes; this button only replays the last audio.
+        "stop_button": "Arrêter",
         "put_away_button": "Mettre en veille",
         "settings_button": "Réglages",
         "speaker_label": "Locuteur :",
@@ -95,6 +96,7 @@ STRINGS = {
         "synthesize_button": "Synthesize",
         "input_text_label": "Input",
         "replay_button": "Replay",
+        "stop_button": "Stop",
         "put_away_button": "Put away",
         "settings_button": "Settings",
         "speaker_label": "Speaker:",

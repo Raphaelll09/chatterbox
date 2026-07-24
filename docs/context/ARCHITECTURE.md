@@ -169,8 +169,11 @@ step (a change made 2026-07-10 for latency, not correctness — see CHANGELOG).
 
 Audio playback branches on `platform.system()` in `chatterbox/audio/playback.py` (was
 `audio_utils.py`) and `chatterbox/gui/app.py` (was `gui_utils.py`): Windows prefers `simpleaudio`,
-falling back to `sounddevice`/`soundfile` if unavailable; other platforms use
-`pydub.playback.play`. When editing playback code, keep both paths in sync.
+falling back to `sounddevice`/`soundfile` if unavailable; other platforms invoke `ffplay` directly
+via `subprocess.Popen` (landscape-refactor plan, input-row phase -- was `pydub.playback.play`,
+whose internal `subprocess.call()` blocks with no handle to interrupt it; the direct `Popen` gives
+the GUI's Stop button (`playback.stop_audio()`) something to `.terminate()`). When editing playback
+code, keep both paths in sync.
 `chatterbox.audio.playback.AUDIO_EXAMPLE` holds the most recently synthesized clip as a module
 attribute (not eliminated in the reorg) so `play_audio()` can still be called with no arguments —
 needed because the GUI's "Play" replay button is wired as a zero-argument Tkinter callback.

@@ -15,6 +15,53 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Stop button + interruptible playback (input-row phase, landscape-refactor plan)
+
+- What: final sub-step of the input-row phase. Adds a Stop button next to Replay (shared sub-frame,
+  same `add_play_button` config gate) that interrupts in-flight playback, and makes playback
+  actually interruptible on every platform this app runs on:
+  - `chatterbox/audio/playback.py`: `_play_raw()` now records a zero-arg stop callable into a new
+    module-level `_current_stop_fn` immediately before each platform branch's blocking wait, clears
+    it (via `finally`) right after. New `stop_audio()` just invokes whatever's currently recorded,
+    a no-op if nothing is playing -- safe to call from the Tk thread while `_play_raw()` blocks on
+    the worker thread (single-reference read/write, atomic under the GIL, same reasoning as this
+    codebase's own `busy` flag). Windows: `simpleaudio`'s `play_obj.stop()` / `sounddevice`'s
+    `sd.stop()` already existed and just needed capturing. Linux/Pi: **replaced**
+    `pydub.playback.play()` (wraps a BLOCKING `subprocess.call()` to `ffplay` with no handle to
+    interrupt) with a direct `subprocess.Popen(["ffplay", ...])` against a temp-exported wav --
+    `proc.terminate()` is the stop callable. No new dependency (ffmpeg/ffplay was already required
+    for pydub itself).
+  - `chatterbox/gui/input.py`: new `Action.STOP` + `make_dispatcher(stop_fn=...)` (defaults to a
+    no-op, same as `replay_fn`), so a future physical switch can trigger Stop identically to
+    Speak/Replay, not just a Tk button click.
+  - `chatterbox/gui/app.py`: new `btn_stop_audio`, wired to `playback.stop_audio` via
+    `dispatch(Action.STOP)`. Deliberately **not** gated by the busy-guard's
+    `_set_action_buttons_state()` (which disables Speak/Replay) -- `_set_ui_state()` enables it
+    exactly when `state_name == "playing"` and disables it every other state, since Stop must stay
+    clickable precisely while a worker thread is busy playing audio, the opposite of Speak/Replay's
+    guard.
+- Files: `chatterbox/audio/playback.py`, `chatterbox/gui/input.py`, `chatterbox/gui/app.py`,
+  `chatterbox/gui/i18n.py` (new `stop_button` key, both locales), `docs/context/ARCHITECTURE.md`
+  (playback section updated to match), `tests/test_gui_input.py` (4 new: STOP routing + default
+  no-op, plus 2 filling a pre-existing gap -- REPLAY was never actually tested before this).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase's last piece (chatbox masking and the
+  phoneme_fallback "disable" mode, previous two entries, were this phase's first two).
+- Verify: full test suite (307 passed/1 skipped, up from 303 -- the 4 new `test_gui_input.py`
+  cases). New ad hoc Tk smoke test (monkeypatches `playback.play_audio`/`playback.stop_audio` to a
+  controlled fake rather than exercising the real audio backends, which need real hardware/ffplay
+  -- this dev checkout's pydub import itself warns "Couldn't find ffmpeg", confirming the real
+  ffplay path is genuinely unverifiable here without a Pi) confirms: Stop starts disabled; becomes
+  `state="normal"` exactly while a triggered Replay is blocked in the (fake) `play_audio()`, and
+  Replay itself flips to `disabled` at the same moment; clicking Stop calls the real
+  `playback.stop_audio` reference; Stop returns to `disabled` once the (fake) playback ends.
+- Notes/gotchas: the real ffplay/Popen path (Linux/Pi) is **not verified on real hardware** in this
+  session -- the user stated they no longer have Pi5 access; this is a stated gap, not a hidden
+  one, consistent with `docs/gui/GUI.md`'s existing "Known gaps" convention. Re-verify
+  end-to-end (Stop actually silences ffplay mid-sentence, not just that `.terminate()` was called)
+  once a Pi is available again.
+
+---
+
 ## 2026-07-24 — phoneme_fallback: "disable" mode (input-row phase, landscape-refactor plan)
 
 - What: a third `GUI_config.phoneme_fallback` value alongside the existing `"translate_labels"`/
