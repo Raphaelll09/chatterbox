@@ -15,6 +15,114 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — English Piper voice, live "Langue" menu, AZERTY/QWERTY keyboard toggle
+
+- What:
+  - Added `en_US-lessac-medium` (single speaker, 22050 Hz, same `default_args` shape as
+    `fr_FR-siwis-medium`) as a 4th `config_tts.yaml` `tts_models` entry — no Piper backend code
+    changes needed (`PiperBackend`/`text_frontend.py` were already voice-agnostic:
+    `apply_custom_regex_rules` already defaults to `false`, so French regex data never touches
+    this voice). Each `tts_models[i]` entry now carries a `language` field (defaults to `"fr"`
+    when absent) — the new entry is the first with `language: "en"`.
+  - Made the GUI's "Langue" app-bar entry (previously a disabled stub) real: a config-driven
+    submenu (`config_tts.yaml`'s new `GUI_config.languages` list) that switches
+    `chatterbox/gui/i18n.py`'s locale (new `set_locale()`/`get_locale()`, plus a full `"en"`
+    string table mirroring every existing `"fr"` key) and restarts the GUI window onto the first
+    `tts_models[]` entry whose own `language` matches. Implemented as a full window rebuild, not
+    live re-labelling — nearly every widget's text is set once, as a literal `i18n.t(...)` call,
+    at creation time, with no existing refresh mechanism; `create_gui()` was split into a thin
+    restart loop wrapping the actual session logic (renamed `_run_gui_session()`), which now
+    returns the next `default_tts` index to reload with (or `None` to exit normally) instead of
+    just calling `window.mainloop()` and returning nothing.
+  - Added a QWERTY alternative for the Texte-mode soft keyboard's letter grid (previously
+    hardcoded simplified AZERTY only) — `app.py`'s `_LETTER_ROWS_AZERTY`/`_LETTER_ROWS_QWERTY`/
+    `_LETTER_LAYOUTS`, switchable live via a new Settings → Advanced radio pair next to the
+    existing Orientation control, independent of the language switch above (a QWERTY layout
+    doesn't imply English, nor AZERTY French). `_create_letter_keyboard()` was split so only the
+    letter grid (not the space/backspace/clear/play control row) gets destroyed and rebuilt on a
+    layout switch — both layouts are fixed at 3 rows so the control row's position never moves.
+- Files: `chatterbox/gui/i18n.py` (`set_locale`/`get_locale`, full `"en"` table,
+  `keyboard_layout_label` key), `chatterbox/gui/app.py` (`create_gui`/`_run_gui_session` split,
+  language cascade menu, `_LETTER_LAYOUTS`, `_populate_letter_grid`, keyboard-layout radios),
+  `chatterbox/config/config_tts.yaml` (English Piper entry, `GUI_config.languages`,
+  `GUI_config.keyboard_options.letter_layout`), `scripts/fetch_piper_voices.sh` (generalized from
+  one shared fr_FR `BASE_URL` to a per-voice `locale_path`, since the English voice lives under a
+  different HuggingFace path segment), `chatterbox/synthesis/backends/piper/README.md` (lessac
+  voice row), `tests/test_i18n.py` (new), `tests/test_gui_letter_layout.py` (new), `CLAUDE.md`,
+  `INSTALL.md`.
+- Why: asked directly — "add english model for Piper-tts and be able to change with the Menu
+  Language. There should also be the option to choose between qwerty and azerty on the touchscreen
+  keyboard."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 279 passed, 1 pre-existing skip (Windows).
+  Real end-to-end checks on the PC dev checkout: ran the actual `fetch_piper_voices.sh` (siwis/
+  upmc skipped as already-present-and-verified, lessac downloaded fresh and sha256-verified against
+  a real HuggingFace download); loaded+synthesized through the real `PiperBackend` with the new
+  English config entry (produced a valid 22050 Hz/16-bit/mono wav, `describe_controls()` correctly
+  omits `speaker_list` for this single-speaker voice); confirmed the language→model-index
+  resolution logic picks `tts_models[0]` for `"fr"` and the new lessac entry for `"en"` against the
+  real `config_tts.yaml`.
+- Notes/gotchas: switching language does **not** remember "last voice used for this language" —
+  it always restarts onto that language's *first* matching `tts_models` entry (e.g. switching
+  fr→en→fr lands back on FS2, not whichever fr_FR Piper voice was active before), a deliberate
+  simplicity trade-off over adding per-language state tracking. Keyboard-layout and orientation
+  overrides are both plain runtime state (module-level globals, matching `_orientation_override`'s
+  existing precedent) — neither persists across a process restart; only the language-driven
+  window restart preserves the *keyboard layout* choice (`_letter_layout_current` is deliberately
+  not reset each time `_run_gui_session()` reruns, unlike the letter grid's initial layout, which
+  is only read from `config_tts.yaml` the first time).
+
+---
+
+## 2026-07-24 — compare_runs.py: repeat-aware aggregation, CPU governor warning, n_repeats fix
+
+- What: the single-run version of `compare_runs.py` (previous entry) produced two contradictory
+  conclusions in a row — one single FS2 run measured ~2x slower than siwis, a different single
+  FS2 run measured roughly tied with it. Root cause, confirmed via `meta.json`'s `governor` field
+  (`tools/monitoring/profiling/__init__.py`'s `_read_governor()`, already recorded on every run,
+  just never surfaced): the Pi's CPU frequency governor is `"ondemand"`, not `"performance"` —
+  known source of run-to-run noise on this hardware. A user-run `--repeats 3` benchmark (33
+  sentences per backend, not 11) resolved it: FS2's RTF held steady at 0.30-0.40 and siwis's at
+  0.14-0.17 across all 3 repeats, no drift — confirming a consistent ~2x gap, with the single-run
+  "tied" result being the actual anomaly. Rewrote the tool around this finding rather than trusting
+  single-run numbers again:
+  - `compare()` now aggregates by `sentence_id` (mean +/- std across however many times a sentence
+    was repeated) instead of matching rows by raw position — position-matching quietly broke once
+    two runs used a different `--repeats` count, and gave no visibility into how noisy any single
+    number actually was.
+  - `print_report()` now prints each run's CPU governor first, with a loud warning when it isn't
+    `"performance"`.
+  - Module docstring now states explicitly that `total_synth_ms`/`rtf` already cover the *whole*
+    pipeline (front_end/acoustic/vocoder/write for FS2, synth/write for Piper) — real user
+    confusion (docs/context/CHANGELOG.md, previous entries) about whether HiFi-GAN/FlauBERT time
+    was being excluded, when it wasn't.
+  - Bug found only by running the new code against real 10-sentence data (not the small fake CSVs
+    in the unit tests): the summary's `n_repeats` read `present[0]["n"]` — whichever sentence_id
+    happened to be first in file order, almost always `"REF"`. `runner.py` deliberately places
+    `"REF"` at *both* the start and end of every `--repeats` pass (its own anchor/drift-check
+    design), so it has double the occurrence count of every other sentence (6 vs 3 for
+    `--repeats 3`) — the summary printed "n_repeat: 6" for an actual `--repeats 3` run. Fixed to
+    use the mode across all sentences instead. The original unit test for this used only 2
+    sentences (a 1-vs-1 tie that doesn't reproduce the bug); fixed to use 4, matching the real
+    benchmark's lopsided REF-is-the-only-outlier shape.
+- Files: `tools/measurement/benchmark/compare_runs.py`, `tests/test_compare_runs.py` (rewritten
+  for the new aggregation shape, +3 tests: governor reporting, repeat-averaging, the n_repeats fix).
+- Why: asked directly, after being shown a `--repeats 3` comparison result and a live GUI
+  observation (FS2 at ~39% of audio length, siwis at ~14%) that contradicted this tool's own
+  earlier single-run conclusion — "suggest improvements to the benchmark comparison and fix the
+  program."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 271 passed, 1 pre-existing skip (Windows).
+  Re-run live on the Pi against the user's real `profile/FS2_0`/`profile/siwis_0` (`--repeats 3`)
+  data: governor warning correctly fires (`"ondemand"` on both), per-sentence std values are small
+  relative to their means (confirms the repeats=3 data itself is internally consistent, not
+  further contaminated), and `n_repeat` now correctly reads `3` instead of `6`.
+- Notes/gotchas: the empirically confirmed, consistent result (10 sentences x 3 repeats, both
+  backends) is FS2 at mean RTF 0.325 vs. siwis at 0.154 — siwis takes roughly **half** FS2's total
+  synth time and total energy for the same 10-sentence benchmark set. Treat any *single*-repeat
+  benchmark comparison on this hardware as indicative only; `--repeats 3+` is what actually
+  produced a trustworthy, self-consistent result during this investigation.
+
+---
+
 ## 2026-07-23 — Add compare_runs.py for side-by-side FS2 vs. Piper benchmark comparison
 
 - What: new `tools/measurement/benchmark/compare_runs.py` — takes 2+ already-joined

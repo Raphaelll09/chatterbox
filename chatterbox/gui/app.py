@@ -78,6 +78,14 @@ _KEYBOARD_SCREEN_SHARE = 0.6
 _accepts_phoneme_input = True
 _refresh_keyboard_capabilities = None
 
+# Texte-mode letter keyboard's active layout ("azerty"/"qwerty", chatterbox/gui/app.py's
+# _LETTER_LAYOUTS) -- None until first initialised from config_tts.yaml's GUI_config.keyboard_
+# options.letter_layout, then persists across a language-driven window restart (create_gui()'s
+# loop) the same way _orientation_override does, instead of resetting to the config default each
+# time. _refresh_keyboard_layout is set (to a callable), same pattern as _refresh_orientation.
+_letter_layout_current = None
+_refresh_keyboard_layout = None
+
 # Power-daemon client wiring (chatterbox-powerd_spec_v0.1.md Sec9.4 / chatterbox_gui_spec_v0.1.md
 # Sec4) -- a true no-op whenever powerd isn't reachable (any PC dev checkout, or a Pi before powerd
 # is set up). No FSM/backlight/amp logic lives here, only client calls, per the spec's explicit
@@ -471,12 +479,23 @@ def create_keyboard(key_board_options, entry, main_window=None):
 # no digit row) -- large, unambiguous touch targets matter more here than completeness; text
 # normalization downstream (chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py)
 # already lowercases/cleans input.
-_LETTER_ROWS = [
+_LETTER_ROWS_AZERTY = [
     ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
     ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
     ["W", "X", "C", "V", "B", "N", ",", ".", "'"],  # apostrophe was missing -- real-hardware
     # feedback: essential for French (l'..., qu'..., aujourd'hui, ...)
 ]
+
+# QWERTY alternative (English Piper voice + live language switch, docs/context/CHANGELOG.md) --
+# same 3-row shape as AZERTY above (so the control row below stays at a fixed grid position
+# regardless of which layout is active), same trailing comma/period/apostrophe.
+_LETTER_ROWS_QWERTY = [
+    ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+    ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+    ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "'"],
+]
+
+_LETTER_LAYOUTS = {"azerty": _LETTER_ROWS_AZERTY, "qwerty": _LETTER_ROWS_QWERTY}
 
 
 def _wrap_label_to_width(event):
@@ -489,17 +508,15 @@ def _wrap_label_to_width(event):
     event.widget.config(wraplength=max(1, event.width - 4))
 
 
-def _create_letter_keyboard(master, key_board_options):
-    """Text-mode soft keyboard: independent of create_keyboard()/keyboards.keys on purpose -- that
-    machinery (mirror readonly entry, prerecorded-phone playback, the entry_text_keyboard/
-    lbl_text_keyboard globals it sets) is phoneme-specific and shared as module globals; building
-    a second keyboard through it would clobber the phoneme keyboard's state. This one only ever
-    inserts literal characters into ent_text_input directly (via _keyboard_emit()'s "__letter__"
-    branch), with no mirror entry and no per-key audio."""
+def _populate_letter_grid(frame, rows, key_board_options):
+    """Builds just the per-letter buttons (rows 0..len(rows)-1) of the Texte-mode keyboard --
+    split out from _create_letter_keyboard() so a live AZERTY/QWERTY switch (Settings -> Advanced)
+    can destroy and rebuild only this part, leaving the control row (space/backspace/clear/play)
+    below untouched. Returns the list of created buttons, so the caller can destroy them again on
+    the next switch."""
     my_font = "Helvetica {} bold".format(key_board_options["font_size"])
-    frame = tk.Frame(master=master)
-
-    for row_index, row in enumerate(_LETTER_ROWS):
+    buttons = []
+    for row_index, row in enumerate(rows):
         tk.Grid.rowconfigure(frame, row_index, weight=1)
         for col_index, letter in enumerate(row):
             tk.Grid.columnconfigure(frame, col_index, weight=1)
@@ -511,8 +528,30 @@ def _create_letter_keyboard(master, key_board_options):
             )
             btn.grid(row=row_index, column=col_index, sticky=tk.NSEW,
                       padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+            buttons.append(btn)
+    return buttons
 
-    control_row = len(_LETTER_ROWS)
+
+def _create_letter_keyboard(master, key_board_options, layout_rows):
+    """Text-mode soft keyboard: independent of create_keyboard()/keyboards.keys on purpose -- that
+    machinery (mirror readonly entry, prerecorded-phone playback, the entry_text_keyboard/
+    lbl_text_keyboard globals it sets) is phoneme-specific and shared as module globals; building
+    a second keyboard through it would clobber the phoneme keyboard's state. This one only ever
+    inserts literal characters into ent_text_input directly (via _keyboard_emit()'s "__letter__"
+    branch), with no mirror entry and no per-key audio.
+
+    Returns (frame, grid_buttons) -- grid_buttons is the list _populate_letter_grid() created,
+    handed back so the caller can destroy() them and call _populate_letter_grid() again with a
+    different layout's rows (AZERTY/QWERTY toggle) without rebuilding the control row below it.
+    """
+    my_font = "Helvetica {} bold".format(key_board_options["font_size"])
+    frame = tk.Frame(master=master)
+
+    grid_buttons = _populate_letter_grid(frame, layout_rows, key_board_options)
+
+    # Fixed at 3 regardless of which layout is active -- both _LETTER_LAYOUTS entries are 3 rows,
+    # so the control row's position never has to move when the layout is switched live.
+    control_row = 3
     tk.Grid.rowconfigure(frame, control_row, weight=1)
     btn_space = tk.Button(
         master=frame, text=i18n.t("keyboard_space"), font=my_font,
@@ -544,10 +583,21 @@ def _create_letter_keyboard(master, key_board_options):
     for _btn in (btn_space, btn_backspace, btn_clear_all, btn_play):
         _btn.bind("<Configure>", _wrap_label_to_width)
 
-    return frame
+    return frame, grid_buttons
 
 
 def create_gui(tts_config, device, default_tts, default_vocoder):
+    """Thin restart loop around _run_gui_session() (below) -- switching the app's language
+    (chatterbox/gui/i18n.py's set_locale(), via the "Langue" menu) rebuilds the whole window onto
+    a new default TTS model rather than re-labelling every widget live, since nearly all of them
+    set their text once, as a literal i18n.t(...) call, at creation time (see _run_gui_session()'s
+    own comment at its _set_language() closure for why). _run_gui_session() returns the next
+    default_tts index to restart with, or None to actually exit (window closed normally)."""
+    while default_tts is not None:
+        default_tts = _run_gui_session(tts_config, device, default_tts, default_vocoder)
+
+
+def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     global ent_text_input
     global lbl_audio_infos_audio_duration
     global lbl_audio_infos_stage_pool
@@ -570,6 +620,15 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     TTS_CONFIG = tts_config
     gui_config = tts_config['GUI_config']
     main_panel_config = gui_config['main_panel']
+
+    # Set by _set_language() (below) to the TTS model index a language switch should restart onto;
+    # stays None for a normal run (window closed, create_gui()'s restart loop then exits too).
+    pending_restart_tts_index = None
+
+    # Matches whichever language default_tts's own model declares (config_tts.yaml's per-entry
+    # "language", defaulting to "fr") -- so launching directly with e.g. `--default_tts
+    # <english_index> --gui` already opens in English, not just a language-menu switch.
+    i18n.set_locale(tts_config["tts_models"][default_tts].get("language", "fr"))
 
     # Create the main window
     window = tk.Tk()
@@ -607,9 +666,10 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres" opens the settings dialog
     # (the physical "Réglages" button was removed -- PC-GUI feedback: it sat right above the
     # keyboard area and read as cluttered); "À propos" is last/far right, also per feedback;
-    # "Thème"/"Langue" stay visible-but-disabled stubs -- there's no second theme or locale table
-    # to switch to yet (see chatterbox/gui/i18n.py), so a clickable-but-fake entry would be worse
-    # than an honestly-disabled one.
+    # "Thème" stays a visible-but-disabled stub -- there's still no second theme table to switch
+    # to (see chatterbox/gui/i18n.py) -- but "Langue" is now real (English Piper voice + live
+    # language switch, docs/context/CHANGELOG.md): a clickable-but-fake entry would be worse than
+    # an honestly-disabled one, but a genuinely wired-up one is better than either.
     menubar = tk.Menu(window, tearoff=0)  # no tear-off dashed-line entry -- meaningless on a
     # touchscreen kiosk and would otherwise shift every menu index by one.
     if main_panel_config.get("add_settings_button", True):
@@ -625,7 +685,35 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
         menubar.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
                                  command=lambda: _toggle_audio_info_visibility(audio_info_visible))
     menubar.add_command(label=i18n.t("menu_theme"), state="disabled")
-    menubar.add_command(label=i18n.t("menu_language"), state="disabled")
+
+    def _set_language(code):
+        """Switches chatterbox/gui/i18n.py's locale, then restarts the whole window onto the
+        first tts_models[] entry whose own "language" field matches -- not a live re-label.
+        Nearly every widget below sets its text once, as a literal i18n.t(...) call, at creation
+        time (unlike the TTS options panel, which already rebuilds on every model switch, or
+        Settings, which rebuilds fresh every open) -- there's no existing refresh mechanism for
+        static text, and threading one through this whole function for a rarely-used action isn't
+        worth it. Reusing "destroy the window and rebuild from scratch with a new default_tts" is
+        exactly what a fresh `--gui --default_tts N` launch already does correctly."""
+        nonlocal pending_restart_tts_index
+        i18n.set_locale(code)
+        target = next((i for i, m in enumerate(tts_config["tts_models"])
+                        if m.get("language", "fr") == code), None)
+        if target is not None:
+            pending_restart_tts_index = target
+            window.destroy()
+
+    lang_menu = tk.Menu(menubar, tearoff=0)
+    language_var = tk.StringVar(value=i18n.get_locale())
+    for lang_option in gui_config.get("languages", []):
+        # lang_option["label"] is each language's own name, shown untranslated regardless of the
+        # currently active locale (e.g. "English" doesn't become "Anglais" when French is active)
+        # -- same convention as the AZERTY/QWERTY layout names in Settings -> Advanced.
+        lang_menu.add_radiobutton(label=lang_option["label"], variable=language_var,
+                                   value=lang_option["code"],
+                                   command=lambda c=lang_option["code"]: _set_language(c))
+    menubar.add_cascade(label=i18n.t("menu_language"), menu=lang_menu)
+
     menubar.add_command(label=i18n.t("menu_about"), command=_show_about)
     window.config(menu=menubar)
 
@@ -775,6 +863,25 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
             # 1/2 through 3/4 across several rounds; "the right share seems to be between 1/2 and
             # 2/3" -- 0.6, a fixed constant (_KEYBOARD_SCREEN_SHARE), replaces the picker instead
             # of adding yet another option to it).
+
+            next_row += 1
+
+        # AZERTY/QWERTY toggle for the Texte-mode letter keyboard -- independent of the
+        # orientation block above (only meaningful/shown when the embedded letter keyboard
+        # actually exists, i.e. _refresh_keyboard_layout is set); unrelated to language/locale --
+        # a QWERTY layout doesn't imply English, nor AZERTY French.
+        if _refresh_keyboard_layout is not None:
+            tk.Label(master=parent_frame, text=i18n.t("keyboard_layout_label")).grid(
+                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+            layout_var = tk.StringVar(value=_letter_layout_current)
+            # Option labels stay literal ("AZERTY"/"QWERTY" are layout standard names, not
+            # translated) -- same convention as the Langue menu's own untranslated language names.
+            for col, code in enumerate(("azerty", "qwerty"), start=1):
+                tk.Radiobutton(
+                    master=parent_frame, text=code.upper(), variable=layout_var,
+                    value=code, indicatoron=0, selectcolor="#ffd54f",
+                    command=lambda c=code: _refresh_keyboard_layout(c),
+                ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
     # Startup default load (phase 2 of the startup-latency work -- see docs/context/CHANGELOG.md
     # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
@@ -950,7 +1057,11 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
 
             phoneme_kb_frame = create_keyboard(gui_config["keyboard_options"], ent_text_input, keyboard_area)
             phoneme_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
-            letter_kb_frame = _create_letter_keyboard(keyboard_area, gui_config["keyboard_options"])
+            global _letter_layout_current
+            if _letter_layout_current is None:
+                _letter_layout_current = gui_config["keyboard_options"].get("letter_layout", "azerty")
+            letter_kb_frame, _letter_grid_buttons = _create_letter_keyboard(
+                keyboard_area, gui_config["keyboard_options"], _LETTER_LAYOUTS[_letter_layout_current])
             letter_kb_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
             letter_kb_frame.grid_remove()  # Phonèmes stays the default-visible mode (pre-toggle behavior)
 
@@ -962,6 +1073,23 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
                         frame.grid()
                     else:
                         frame.grid_remove()
+
+            def _set_keyboard_layout(code):
+                """Live AZERTY/QWERTY switch (Settings -> Advanced) -- destroys only the letter
+                grid's own buttons and rebuilds them with the other layout's rows, in place, on
+                the same letter_kb_frame; the control row (space/backspace/clear/play) and the
+                Texte/Phonemes toggle are untouched, unlike a language switch (which restarts the
+                whole window -- see _run_gui_session()'s _set_language())."""
+                global _letter_layout_current
+                nonlocal _letter_grid_buttons
+                for btn in _letter_grid_buttons:
+                    btn.destroy()
+                _letter_grid_buttons = _populate_letter_grid(
+                    letter_kb_frame, _LETTER_LAYOUTS[code], gui_config["keyboard_options"])
+                _letter_layout_current = code
+
+            global _refresh_keyboard_layout
+            _refresh_keyboard_layout = _set_keyboard_layout
 
             def _apply_keyboard_capabilities():
                 """Re-read the currently-selected TTS model's static accepts_phoneme_input flag
@@ -1143,6 +1271,10 @@ def create_gui(tts_config, device, default_tts, default_vocoder):
     window.after(50, _start_initial_model_load)
 
     window.mainloop()
+    # Reached once the window is destroyed -- either a normal close (pending_restart_tts_index
+    # stays None, create_gui()'s loop then exits too) or _set_language() above, which set it before
+    # calling window.destroy().
+    return pending_restart_tts_index
 
 def update_audio_infos(audio_duration, stage_durations):
     """stage_durations (chatterbox.synth.AudioResult, interchangeable-backend GUI refactor) is a

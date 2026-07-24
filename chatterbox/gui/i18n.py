@@ -5,10 +5,10 @@ hardcoded mix of French and English literals scattered across chatterbox/gui/app
 "Synthèse"/"Durée audio" next to "Speaker :"/"Pitch (semitones):") -- this module gives them one
 consistent home instead.
 
-Only "fr" is populated today, matching the end users (French AAC users) -- the app-bar's "Langue"
-entry is a visible-but-disabled stub (see create_gui()'s menubar) until a real second locale table
-exists to switch to. Add an "en" dict with the same keys under STRINGS to make that switch
-meaningful; t() itself doesn't need to change.
+"fr" and "en" are both populated (English Piper voice + live language menu, docs/context/
+CHANGELOG.md) -- the app-bar's "Langue" entry is a real submenu built from config_tts.yaml's
+GUI_config.languages, switching locale via set_locale() below and reloading the GUI window with
+that language's default TTS model (chatterbox/gui/app.py's create_gui()/_run_gui_session()).
 """
 
 _LOCALE = "fr"
@@ -66,13 +66,14 @@ STRINGS = {
         "menu_settings": "Paramètres",
         "menu_about": "À propos",
         "menu_theme": "Thème (bientôt)",
-        "menu_language": "Langue (bientôt)",
+        "menu_language": "Langue",
         "about_title": "À propos de Chatterbox",
         "keyboard_mode_text": "Texte",
         "keyboard_mode_phonemes": "Phonèmes",
         "keyboard_space": "Espace",
         "keyboard_backspace": "Effacer",
         "keyboard_clear_all": "Tout effacer",
+        "keyboard_layout_label": "Disposition clavier :",
         "menu_toggle_audio_info": "Afficher les données de synthèse",
         "orientation_label": "Orientation :",
         "orientation_auto": "Auto",
@@ -82,7 +83,70 @@ STRINGS = {
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
         "loading_model_label": "Chargement du modèle…",
     },
+    "en": {
+        "tts_label": "TTS:",
+        "vocoder_label": "Vocoder:",
+        "synthesize_button": "Synthesize",
+        "input_text_label": "Input",
+        "replay_button": "Replay",
+        "put_away_button": "Put away",
+        "settings_button": "Settings",
+        "speaker_label": "Speaker:",
+        "styletag_label": "StyleTag:",
+        "style_label": "Style:",
+        "advanced_styles_toggle": "Advanced styles",
+        "advanced_controls_toggle": "Advanced controls",
+        "style_intensity_label": "Style intensity:",
+        "pitch_label": "Pitch (semitones):",
+        "energy_label": "Energy (dB):",
+        "speed_label": "Speed (+ = slower):",
+        "pitch_bias_label": "Pitch bias (semitones):",
+        "energy_bias_label": "Energy bias (dB):",
+        "speed_bias_label": "Speed bias (coef):",
+        "pause_bias_label": "Pause bias:",
+        "liaison_bias_label": "Liaison bias:",
+        "variability_label": "Variability:",
+        "phoneme_duration_variability_label": "Phoneme duration variability:",
+        "audio_duration_label": "Audio duration: {duration:.3f}s",
+        "stage_duration_label": "{name} duration: {duration:.3f}s | {percent:.0f}% of audio duration",
+        "synthesis_duration_label": "Total synthesis duration: {duration:.3f}s | {percent:.0f}% of audio duration",
+        "error_label": "Error: {error}",
+        "gst_weights_title": "\nGST weights\n",
+        "menu_settings": "Settings",
+        "menu_about": "About",
+        "menu_theme": "Theme (soon)",
+        "menu_language": "Language",
+        "about_title": "About Chatterbox",
+        "keyboard_mode_text": "Text",
+        "keyboard_mode_phonemes": "Phonemes",
+        "keyboard_space": "Space",
+        "keyboard_backspace": "Backspace",
+        "keyboard_clear_all": "Clear all",
+        "keyboard_layout_label": "Keyboard layout:",
+        "menu_toggle_audio_info": "Show synthesis data",
+        "orientation_label": "Orientation:",
+        "orientation_auto": "Auto",
+        "orientation_portrait": "Portrait",
+        "orientation_landscape": "Landscape",
+        "about_body": "Chatterbox\nEmbedded neural TTS (FastSpeech 2 + HiFi-GAN)\n"
+                      "Raspberry Pi 5 -- augmentative and alternative communication (AAC) demonstrator",
+        "loading_model_label": "Loading model…",
+    },
 }
+
+
+def set_locale(code):
+    """Switches the active locale used by t() below. `code` must already be a key of STRINGS
+    (config_tts.yaml's GUI_config.languages is expected to only ever offer configured codes) --
+    an unconfigured code is a configuration error, not something to silently fall back from."""
+    global _LOCALE
+    if code not in STRINGS:
+        raise ValueError("Unknown locale {!r} -- STRINGS has {}".format(code, sorted(STRINGS)))
+    _LOCALE = code
+
+
+def get_locale():
+    return _LOCALE
 
 
 def t(key, **kwargs):
