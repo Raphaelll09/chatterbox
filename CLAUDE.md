@@ -129,8 +129,9 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     carries three static capability flags read *before* that model is loaded (see "Interchangeable
     backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false),
     `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
-    `"translate_labels"` or `"hide"`, for when a model doesn't understand the Phonèmes keyboard's
-    phone-code syntax), and `supports_subtitles` (added for the Piper backend — `false` skips
+    `"translate_labels"`, `"hide"`, or `"disable"` (landscape-refactor plan, input-row phase — greys
+    out rather than removing the Phonèmes toggle), for when a model doesn't understand the
+    Phonèmes keyboard's phone-code syntax), and `supports_subtitles` (added for the Piper backend — `false` skips
     `chatterbox/synth.py`'s subtitle-writing path, which otherwise assumes FastSpeech2's own
     per-symbol `audio_file_duration.npy` output exists; see
     `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.4). `config/paths.py` — repo-root-anchored path resolution for the vendored
@@ -220,9 +221,10 @@ documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither requir
   FastSpeech2's own custom phone-symbol alphabet (there's no G2P step anywhere in this repo) — a
   different backend declares `accepts_phoneme_input: false` (`config_tts.yaml`, per `tts_models`
   entry) if it can't understand that syntax, and `GUI_config.phoneme_fallback`
-  (`"translate_labels"`, the default, or `"hide"`) decides what the GUI does about it: substitute
-  each key's already-computed plain-French display label, or remove the Phonèmes keyboard/toggle
-  entirely. `keyboards.py`'s own mood-shortcut keys and phone-symbol table remain FS2/GST-specific
+  (`"translate_labels"`, the default; `"hide"`; or `"disable"`, landscape-refactor plan) decides
+  what the GUI does about it: substitute each key's already-computed plain-French display label,
+  remove the Phonèmes keyboard/toggle entirely, or leave the toggle visible but greyed out
+  (`state="disabled"`) and unclickable. `keyboards.py`'s own mood-shortcut keys and phone-symbol table remain FS2/GST-specific
   by design — a backend wanting phoneme input support of its own would need its own keyboard
   layout, not a reuse of this one.
 

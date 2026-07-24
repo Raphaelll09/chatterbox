@@ -15,6 +15,31 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — phoneme_fallback: "disable" mode (input-row phase, landscape-refactor plan)
+
+- What: a third `GUI_config.phoneme_fallback` value alongside the existing `"translate_labels"`/
+  `"hide"`: `"disable"` keeps the Texte/Phonèmes toggle visible but greys out the Phonèmes side
+  (`state="disabled"`, unclickable) instead of removing it entirely -- same Texte-only end state as
+  `"hide"` (forced back to Texte mode if Phonèmes was active when a model without phoneme support
+  loads), but without the layout itself changing, which "hide" does. `_apply_keyboard_capabilities()`
+  (`chatterbox/gui/app.py`) restructured with an early return for the `"hide"` branch, then falls
+  through to a shared "grid both buttons" path that additionally toggles `btn_mode_phonemes`'s
+  `state` for `"disable"`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml` (comment only -- the default
+  stays `"translate_labels"`), `CLAUDE.md` (two `phoneme_fallback` mentions updated).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase (the A/Phon control's own sub-item;
+  chatbox masking, previous entry, was this phase's first).
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test (two fake
+  models, one `accepts_phoneme_input: false` with `phoneme_fallback: "disable"` config-wide,
+  monkeypatches `USER_PREFS_PATH`) confirms: starting on the phoneme-capable model, the toggle is
+  visible and `state="normal"`, and clicking it actually switches keyboard mode to `"phonemes"`;
+  switching (via the top-level TTS Model menu) to the non-capable model keeps the toggle visible
+  (`winfo_ismapped()` still `True`, unlike `"hide"`) but flips it to `state="disabled"` and forces
+  the keyboard back to `"text"` mode.
+- Notes/gotchas: none new.
+
+---
+
 ## 2026-07-24 — Chatbox masking (input-row phase, landscape-refactor plan)
 
 - What: an eye-icon toggle (👁, `tk.Checkbutton(indicatoron=0)` -- same "button-like toggle" idiom

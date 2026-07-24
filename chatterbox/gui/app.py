@@ -1405,26 +1405,36 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                 """Re-read the currently-selected TTS model's static accepts_phoneme_input flag
                 (config_tts.yaml) -- called once below for the model already loaded at startup,
                 and again from _select_tts_model() (interchangeable-backend GUI refactor) whenever
-                the user switches TTS model from Settings -> Advanced, since a different model may
-                have a different phoneme capability. When the active model can't understand
-                phoneme input and GUI_config.phoneme_fallback is "hide", the Texte/Phonemes toggle
-                and the phoneme keyboard itself are removed entirely -- Texte becomes the only
-                mode. "translate_labels" (the default) leaves the toggle/keyboard as-is;
-                _keyboard_emit() is what actually falls back to label text in that case."""
+                the user switches TTS model from Settings -> Advanced or the top-level TTS Model
+                menu, since a different model may have a different phoneme capability. Three
+                GUI_config.phoneme_fallback modes when the active model can't understand phoneme
+                input: "translate_labels" (the default) leaves the toggle/keyboard as-is --
+                _keyboard_emit() is what actually falls back to label text in that case; "hide"
+                removes the Texte/Phonemes toggle and the phoneme keyboard itself entirely, Texte
+                becomes the only mode; "disable" (input-row phase, landscape-refactor plan) keeps
+                the toggle visible but greys out the Phonemes side instead of removing it -- same
+                Texte-only end state, without the layout itself changing."""
                 global _accepts_phoneme_input
                 tts_model = tts_config["tts_models"][state.TTS_INDEX]
                 _accepts_phoneme_input = tts_model.get("accepts_phoneme_input", True)
                 phoneme_fallback = gui_config.get("phoneme_fallback", "translate_labels")
                 hide_phonemes_tab = not _accepts_phoneme_input and phoneme_fallback == "hide"
+                disable_phonemes_tab = not _accepts_phoneme_input and phoneme_fallback == "disable"
+
                 if hide_phonemes_tab:
                     btn_mode_text.grid_remove()
                     btn_mode_phonemes.grid_remove()
                     if keyboard_mode.get() == "phonemes":
                         keyboard_mode.set("text")
                         _set_keyboard_mode("text")
-                else:
-                    btn_mode_text.grid()
-                    btn_mode_phonemes.grid()
+                    return
+
+                btn_mode_text.grid()
+                btn_mode_phonemes.grid()
+                btn_mode_phonemes.config(state="disabled" if disable_phonemes_tab else "normal")
+                if disable_phonemes_tab and keyboard_mode.get() == "phonemes":
+                    keyboard_mode.set("text")
+                    _set_keyboard_mode("text")
 
             _apply_keyboard_capabilities()
 

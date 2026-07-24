@@ -4,7 +4,11 @@ GUI_config:
   # False: "translate_labels" keeps the Phonemes keyboard usable, writing each key's already-
   # computed display label (e.g. "CH", "ON" -- ordinary French spelling) into the text field
   # instead of its raw phone code; "hide" removes the Texte/Phonemes toggle and keyboard entirely,
-  # leaving only the Texte keyboard. See chatterbox/gui/app.py's _keyboard_emit().
+  # leaving only the Texte keyboard; "disable" (landscape-refactor plan, input-row phase) keeps the
+  # toggle visible but greys out the Phonemes side (state="disabled", unclickable) instead of
+  # removing it -- same end state as "hide" (Texte-only), but communicates "not available for this
+  # model" without the layout itself changing. See chatterbox/gui/app.py's
+  # _keyboard_emit()/_apply_keyboard_capabilities().
   phoneme_fallback: "translate_labels"
   # App-bar "Langue" submenu (chatterbox/gui/app.py's create_gui()/_run_gui_session()): each
   # entry's own display name is shown untranslated (a language names itself, regardless of the
