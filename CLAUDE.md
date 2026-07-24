@@ -61,11 +61,14 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     not routed through `fastspeech2_hifigan/text_pipeline.py`'s FS2-specific machinery beyond the
     genuinely orthographic `trim_punctuation_mistakes()`). Monolithic (`needs_vocoder: false`), no
     style dimension, `piper-tts` (optional, GPL-3.0-or-later — install manually, not in
-    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 2 voices
-    (`fr_FR-siwis-medium`/`upmc-medium`, fetched by `scripts/fetch_piper_voices.sh` into
-    `assets/models/Piper/`, not committed — a third voice, `tom-medium`, was evaluated and removed
-    after real-hardware listening found it noticeably lower quality and slower than either of
-    these). See its own `README.md` for provenance/licence and
+    `requirements-pi.txt`) does its own espeak-ng-based phonemization internally. 3 voices
+    (`fr_FR-siwis-medium`/`upmc-medium`, `en_US-lessac-medium`, fetched by
+    `scripts/fetch_piper_voices.sh` into `assets/models/Piper/`, not committed — a 4th voice,
+    `fr_FR-tom-medium`, was evaluated and removed after real-hardware listening found it noticeably
+    lower quality and slower than the other fr_FR voices). Each `tts_models[i]` entry also carries
+    a `language` field (defaults to `"fr"` when absent) — `en_US-lessac-medium` is the first entry
+    with `language: "en"`, letting the GUI's "Langue" menu (below) find it. See its own `README.md`
+    for provenance/licence and
     `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what this integration found and fixed in the
     contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
     `gui_generic_controls()` — see that section, not repeated here).
@@ -76,21 +79,31 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `audio_utils.py`).
   - `gui/app.py`, `gui/keyboards.py` — Tkinter GUI, on-screen phonetic (Emmanuelle) keyboard, and
     (added in the responsive/accessible refactor, `cc_prompt_gui_refactor.md`) a second soft
-    letter keyboard (`app.py:_create_letter_keyboard()`, simplified AZERTY) toggled via a
-    Texte/Phonèmes segmented control — both live in one `keyboard_area` container that portrait/
-    landscape reflow (`app.py`'s `<Configure>` binding) repositions as a unit. Main-window layout
-    is responsive (grid weights, not fixed pixel sizes); the model-options panel
+    letter keyboard (`app.py:_create_letter_keyboard()`) toggled via a Texte/Phonèmes segmented
+    control — both live in one `keyboard_area` container that portrait/landscape reflow (`app.py`'s
+    `<Configure>` binding) repositions as a unit. The letter keyboard's own layout is switchable
+    between simplified AZERTY (default) and QWERTY (`app.py`'s `_LETTER_LAYOUTS`, live-swapped via
+    a Settings → Advanced radio pair next to the Orientation control, independent of the active
+    TTS language — QWERTY doesn't imply English, nor AZERTY French). Main-window layout is
+    responsive (grid weights, not fixed pixel sizes); the model-options panel
     (`gui_generic_controls()`, see "Interchangeable backends" below) is built entirely from the
     active backend's `describe_controls()` — a wrapped style/GST-token chip grid with unnamed
     placeholder tokens hidden behind an "Styles avancés" toggle is what today's FastSpeech2 backend
     happens to declare, not something `app.py` hardcodes; TTS/vocoder model selection lives in
     Settings → Advanced (see `gui/settings.py` below), not the main window. Synthesis+playback (and,
     since the same refactor, Replay) run on a worker thread, never the Tk thread
-    (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`.
+    (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`. The app-bar's "Langue" menu is a real,
+    config-driven submenu (`config_tts.yaml`'s `GUI_config.languages`) switching `gui/i18n.py`'s
+    locale and restarting the window (`create_gui()`/`_run_gui_session()` split — a thin restart
+    loop wraps the actual session function, which returns the next `default_tts` index to load or
+    `None` to exit) onto the first `tts_models[]` entry whose own `language` field matches — a full
+    rebuild rather than live re-labelling, since nearly every widget's text is set once at creation
+    time via a literal `i18n.t(...)` call, with no existing refresh mechanism for static text.
+    "Thème" stays a disabled stub — no second theme table exists yet.
   - `gui/i18n.py` — the GUI's string table (added in the same refactor to replace a hardcoded
-    French/English label mix); French-only today, `t(key, **kwargs)` is the lookup. The app-bar's
-    Thème/Langue menu entries are intentionally disabled stubs until a second locale/theme table
-    exists.
+    French/English label mix). Both `"fr"` and `"en"` are populated today; `set_locale(code)`
+    switches which one `t(key, **kwargs)` reads from, called by the "Langue" menu above (and once
+    at GUI startup, matching whichever language `default_tts`'s own model declares).
   - `gui/input.py` — the `Action` enum + `dispatch()` + a minimal nav ring driving/driven-by
     physical switches (via powerd) and the Speak/Replay/keyboard/Put-away/Settings controls.
   - `gui/settings.py` — the settings screen (`chatterbox/config/user_prefs.yaml`'s power-timer/
@@ -134,7 +147,8 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   `flaubert/`; weights not in git — see Install below).
 - `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`,
   `test_p4_sweep.py`, `test_export_xlsx.py`, `test_power_{fsm,config,backlight,amp,ipc}.py`,
-  `test_synth.py`, `test_gui_{input,worker,settings}.py`, `test_backend_describe_controls.py`.
+  `test_synth.py`, `test_gui_{input,worker,settings,keyboards,letter_layout}.py`,
+  `test_backend_describe_controls.py`, `test_i18n.py`.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
 - `scripts/kiosk_finalize.sh` — **opt-in**, run once a Pi has passed

@@ -6,6 +6,16 @@ GUI_config:
   # instead of its raw phone code; "hide" removes the Texte/Phonemes toggle and keyboard entirely,
   # leaving only the Texte keyboard. See chatterbox/gui/app.py's _keyboard_emit().
   phoneme_fallback: "translate_labels"
+  # App-bar "Langue" submenu (chatterbox/gui/app.py's create_gui()/_run_gui_session()): each
+  # entry's own display name is shown untranslated (a language names itself, regardless of the
+  # currently active locale -- "English" doesn't become "Anglais" when French is active).
+  # Selecting one switches chatterbox/gui/i18n.py's locale AND reloads the window onto the first
+  # tts_models[] entry whose own "language" field (below, per-model) matches that code.
+  languages:
+    - code: "fr"
+      label: "Français"
+    - code: "en"
+      label: "English"
   main_panel:
     name_window: "TTS"
     add_audio_infos: True
@@ -35,6 +45,11 @@ GUI_config:
     key_margin_x: 5  # Horizontal padding between keys
     key_margin_y: 5  # Vertical padding between keys
     max_button_width: 3 # Maximum button width (affects how wide the keyboard can get)
+    # Startup layout for the Texte-mode soft keyboard's letter grid (chatterbox/gui/app.py's
+    # _LETTER_LAYOUTS) -- live-switchable afterward via Settings -> Advanced, independent of
+    # language ("qwerty" doesn't imply English, "azerty" doesn't imply French; a user can pick
+    # either regardless of the active TTS language).
+    letter_layout: "azerty"
 
 # Post-processing: peak normalisation + feedforward soft limiter.
 # Override at runtime with --postprocess / --no-postprocess --target-crest-db N --target-peak-dbfs N
@@ -209,6 +224,29 @@ tts_models:
   # CHANGELOG.md): noticeably lower voice quality and slower inference than siwis/upmc, with no
   # offsetting benefit. assets/models/Piper/fr_FR-tom-medium.onnx(.json) removed too --
   # scripts/fetch_piper_voices.sh no longer fetches it.
+
+  # First non-French voice: en_US, single speaker (Lessac dataset), medium quality -- same shape
+  # as siwis (no speaker_id_map, same default_args values). "language" is a new per-entry field
+  # (defaults to "fr" wherever read -- the FS2/siwis/upmc entries above don't need it) used by the
+  # GUI's "Langue" menu (GUI_config.languages above) to pick which model a language switch loads.
+  - label: "Piper en_US (lessac, medium)"
+    backend: "piper"
+    language: "en"
+    load_script: "load_piper"
+    syn_script: "syn_piper"
+    gui_script: "gui_generic_controls"
+    folder: "assets/models/Piper"
+    checkpoint_file: "en_US-lessac-medium.onnx"
+    output_location: "output/audio"
+    gst_token_list: {}
+    needs_vocoder: false
+    accepts_phoneme_input: false
+    supports_subtitles: false
+    default_args:
+      length_scale: 1.0
+      noise_scale: 0.667
+      noise_w_scale: 0.8
+      apply_custom_regex_rules: false
 
 vocoder_models:
   - label: "Hifi-GAN V2 FR 570000"
