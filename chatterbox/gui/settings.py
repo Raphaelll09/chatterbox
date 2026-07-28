@@ -197,6 +197,36 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     content = tk.Frame(scroll_canvas)
     scroll_canvas.create_window((0, 0), window=content, anchor="nw")
 
+    # Mouse-wheel scrolling (scrolling pass, landscape-refactor plan) -- this dialog previously had
+    # only the draggable scrollbars above, no wheel support at all (unlike gui_generic_controls()'s
+    # own options-panel canvas, which already had <Button-4>/<Button-5> for Linux/X11 -- the Pi's
+    # actual target). <Button-4>/<Button-5> and <MouseWheel> (Windows/Mac) bound together: only one
+    # ever actually fires on a given platform, so this needs no platform.system() branch. Bound/
+    # unbound on <Enter>/<Leave> (not globally for the dialog's whole lifetime) so scrolling this
+    # canvas doesn't fight the main window's own scrollable canvas if both happen to be visible.
+    def _mouse_wheel(event):
+        scroll_canvas.yview_scroll(
+            int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1), 'units')
+
+    def _mouse_wheel_up(event):
+        scroll_canvas.yview_scroll(-1, 'units')
+
+    def _mouse_wheel_down(event):
+        scroll_canvas.yview_scroll(1, 'units')
+
+    def _bind_mouse_wheel(event):
+        scroll_canvas.bind_all('<Button-4>', _mouse_wheel_up)
+        scroll_canvas.bind_all('<Button-5>', _mouse_wheel_down)
+        scroll_canvas.bind_all('<MouseWheel>', _mouse_wheel)
+
+    def _unbind_mouse_wheel(event):
+        scroll_canvas.unbind_all('<Button-4>')
+        scroll_canvas.unbind_all('<Button-5>')
+        scroll_canvas.unbind_all('<MouseWheel>')
+
+    scroll_canvas.bind('<Enter>', _bind_mouse_wheel)
+    scroll_canvas.bind('<Leave>', _unbind_mouse_wheel)
+
     t_dim_var = tk.IntVar(win, value=power_cfg["t_dim_s"])
     t_dark_var = tk.IntVar(win, value=power_cfg["t_dark_s"])
     t_deep_var = tk.IntVar(win, value=power_cfg["t_deep_s"] or 0)

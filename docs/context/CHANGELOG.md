@@ -15,6 +15,60 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Scrolling pass: MouseWheel everywhere (landscape-refactor plan, final phase)
+
+- What: final phase of `cc_prompt_gui_landscape_v2.md`'s implementation. Audited every scrollable
+  canvas in the GUI (exactly two): the sliders window's options-panel canvas
+  (`chatterbox/gui/app.py`, `gui_generic_controls()`) had `<Button-4>`/`<Button-5>` (Linux/X11 --
+  the Pi's actual target) but no `<MouseWheel>` (Windows/Mac -- this dev checkout) at all; Settings'
+  own `scroll_canvas` (`chatterbox/gui/settings.py`) had **neither** -- only its draggable
+  scrollbars. Both now respond to all three; only one of the three ever actually fires on a given
+  platform, so no `platform.system()` branch was needed.
+  - `chatterbox/gui/app.py`: new module-level `mouse_wheel(event)` alongside the existing
+    `mouse_wheel_up`/`mouse_wheel_down`, bound/unbound in `bound_to_mouse_wheel`/
+    `unbound_to_mouse_wheel` (already the `<Enter>`/`<Leave>`-scoped pattern for the other two).
+    `int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)`: Windows delivers ±120 per
+    notch (a multiple of 120 for higher-resolution wheels), Mac a smaller ±1-ish delta with the
+    same sign convention -- the `or` fallback keeps a sub-120 delta from rounding to a silent 0.
+  - `chatterbox/gui/settings.py`: added the same three-event binding as a local closure inside
+    `open_settings()` (its `scroll_canvas` is a local variable, not a module global like app.py's
+    `canvas`) -- `<Enter>`/`<Leave>`-scoped the same way, so scrolling this dialog's canvas doesn't
+    fight the main window's own scrollable canvas if both happened to be visible.
+  - The Sliders window (previous entry) needed **no separate fix** -- it reuses the exact same
+    `canvas`/`bound_to_mouse_wheel` machinery this phase already updated, just now living inside a
+    Toplevel instead of `main_content_frame`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3 ("Scrolling: MouseWheel + Button-4/5 everywhere") --
+  the last remaining phase of this session's landscape GUI redesign.
+- Verify: full test suite (307 passed/1 skipped, unchanged -- no pytest coverage added, matching
+  this project's own "real Tk mainloop scenarios are ad hoc manual smoke scripts" convention,
+  `docs/gui/GUI.md` "Testing"). New ad hoc Tk smoke test (20 fake slider controls to guarantee
+  overflow, monkeypatches `USER_PREFS_PATH`) confirms both canvases actually scroll (`canvas.
+  yview()[0]` measurably changes) in response to a synthetic `<MouseWheel>` event with a
+  Windows-style `delta=-120`, not just that a handler is *bound*.
+- Notes/gotchas: the smoke test itself hit a real Tk sizing gotcha worth remembering for any future
+  scroll-related script: setting only the canvas widget's own `width`/`height` via `.config()` did
+  **not** produce an overflow to scroll, because the canvas is grid-managed with `sticky='news'`
+  inside a `weight=1` cell -- Tk stretches it to fill however big its actual container (the
+  Toplevel) ends up, which auto-sizes to fit all content with no scrolling needed by default. Had
+  to constrain the **Toplevel's own** `.geometry("WxH")` to force a real, measurable overflow.
+  **Not verified on real Pi/Linux hardware** (no Pi5 access this session) -- `<Button-4>`/
+  `<Button-5>` is what actually matters there and was already present for the options-panel canvas
+  before this phase; Settings' dialog gained it for the first time and is unverified on that
+  platform specifically.
+- **Landscape GUI redesign (`cc_prompt_gui_landscape_v2.md`) -- session summary**: all phases now
+  land -- backgrounded TTS model switching; menu-bar restructure (Tools/TTS Model/Speaker cascades,
+  Theme relocation, battery alignment); chatbox masking; `phoneme_fallback: "disable"`; the Stop
+  button and interruptible playback; Piper voice unification (separate, earlier session); light/
+  dark theme; settings-persistence extension; emotion icon bar (emoji + full-height left column);
+  Sliders window and chatbox-visibility; this scrolling pass. Two things explicitly **not** verified
+  on real
+  hardware this whole session (no Pi5 access): the Linux ffplay/Stop path, and the emotion bar's
+  actual on-screen proportions/keyboard-width-share interaction at real kiosk resolution -- both
+  worth a real-hardware pass once available again, per their own CHANGELOG entries above.
+
+---
+
 ## 2026-07-24 — Sliders window + chatbox-visibility Tools item (sliders-window phase, landscape-refactor plan)
 
 - What: all remaining per-model controls (sliders, StyleTag text entry -- "style" chip_grid already

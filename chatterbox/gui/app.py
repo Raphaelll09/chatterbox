@@ -2231,15 +2231,28 @@ def gui_generic_controls(tts_config, main_panel_config):
     _sliders_window.withdraw()
 
 def bound_to_mouse_wheel(event):
+    # <Button-4>/<Button-5> (Linux/X11 -- the Pi's actual target) alongside <MouseWheel> (Windows/
+    # Mac -- this dev checkout) (scrolling pass, landscape-refactor plan): only one of these ever
+    # actually fires on a given platform, so binding all three unconditionally is harmless rather
+    # than needing a platform.system() branch.
     canvas.bind_all('<Button-4>', mouse_wheel_up)
     canvas.bind_all('<Button-5>', mouse_wheel_down)
+    canvas.bind_all('<MouseWheel>', mouse_wheel)
 
 def unbound_to_mouse_wheel(event):
     canvas.unbind_all('<Button-4>')
     canvas.unbind_all('<Button-5>')
+    canvas.unbind_all('<MouseWheel>')
 
 def mouse_wheel_up(event):
     canvas.yview_scroll(-1, 'units')
 
 def mouse_wheel_down(event):
     canvas.yview_scroll(1, 'units')
+
+def mouse_wheel(event):
+    # Windows delivers +-120 per notch (higher-resolution wheels are still a multiple of 120);
+    # Mac delivers a small +-1-ish delta with the same sign convention -- either way, one "unit"
+    # per 120 (floored at 1) reads as one notch of scroll, matching mouse_wheel_up/down's own
+    # single-unit-per-event granularity.
+    canvas.yview_scroll(int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1), 'units')
