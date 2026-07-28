@@ -22,7 +22,6 @@ from enum import Enum, auto
 
 class Action(Enum):
     SPEAK = auto()
-    REPLAY = auto()
     STOP = auto()
     PUT_AWAY = auto()
     NEXT = auto()
@@ -74,16 +73,17 @@ class NavRing:
 
 
 def make_dispatcher(activity_fn, speak_fn, put_away_fn, nav, keyboard_emit_fn, back_fn=None,
-                     replay_fn=None, stop_fn=None):
+                     stop_fn=None):
     """Returns dispatch(action, payload=None), always invoked on the Tk thread. activity_fn is
     called on every dispatch (chatterbox_gui_spec_v0.1.md Sec4.1: "on every dispatch, and on
     synthesis start + playback start" -- the latter two are pinged separately, from the worker
-    wiring in gui/app.py). replay_fn/stop_fn default to a no-op for callers (and tests) that don't
-    wire up the optional replay/stop buttons -- stop_fn (input-row phase, landscape-refactor plan)
-    is dependency-injected the same way, so a future physical switch can trigger it identically to
-    Replay/Speak, not just a Tk button click."""
+    wiring in gui/app.py). stop_fn defaults to a no-op for callers (and tests) that don't wire up
+    the optional stop button -- dependency-injected the same way as every other side-effecting
+    callable here, so a future physical switch can trigger it identically to Speak, not just a Tk
+    button click. (REPLAY existed here once -- removed along with the standalone Rejouer/Arrêter
+    buttons, real-hardware feedback: redundant once the Texte-mode keyboard's own Play/Stop toggle
+    exists, see chatterbox/gui/app.py's btn_letter_kb_play.)"""
     back_fn = back_fn or (lambda: None)
-    replay_fn = replay_fn or (lambda: None)
     stop_fn = stop_fn or (lambda: None)
 
     def dispatch(action, payload=None):
@@ -91,8 +91,6 @@ def make_dispatcher(activity_fn, speak_fn, put_away_fn, nav, keyboard_emit_fn, b
             activity_fn()
             if action == Action.SPEAK:
                 speak_fn()
-            elif action == Action.REPLAY:
-                replay_fn()
             elif action == Action.STOP:
                 stop_fn()
             elif action == Action.PUT_AWAY:

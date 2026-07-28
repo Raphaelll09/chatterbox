@@ -15,6 +15,52 @@ state before starting new work.
 
 ---
 
+## 2026-07-28 — Merge Play/Stop into the keyboard's ▶ button, drop standalone Rejouer/Arrêter
+
+- What: first real-hardware feedback round on the landscape redesign (user regained Pi5 access via
+  VNC and sent a screenshot). Confirmed: the standalone "Rejouer"/"Arrêter" buttons (added by the
+  Stop-button/interruptible-playback phase, four entries back) read as redundant next to the
+  Texte-mode keyboard's own "▶" control-row button -- an i18n comment on `replay_button` had
+  actually predicted this exact overlap ("ambiguous/redundant with the keyboards' own ▶ play
+  button") back when Rejouer was first added, well before this session. Confirmed with the user:
+  merge Play+Stop into that one ▶ button (removing the standalone buttons entirely) rather than
+  dropping Stop capability or dropping Replay-without-resynthesis.
+  - `chatterbox/gui/app.py`: `_create_letter_keyboard()`'s control-row button is now the module
+    global `btn_letter_kb_play` (was a purely local `btn_play`). `_set_ui_state()` toggles it on
+    every state transition: `"playing"` -> text `"⏹"`, `command=lambda: dispatch(Action.STOP)`,
+    enabled; every other state -> text `"▶"`, `command=lambda: dispatch(Action.KEY, ("__letter__",
+    "play", None))` (i.e. Speak), disabled only while `"synthesising"`/`"initialising"` (mirrors
+    Synthèse's own busy-guard disable). Removed the standalone Rejouer/Arrêter `_play_controls_frame`
+    block, `on_replay()`/`_replay_work()` (genuinely dead once nothing dispatches `Action.REPLAY`
+    anymore), and simplified `_set_action_buttons_state()`/`_done()`/`_fail()` back to touching only
+    `btn_syn_audio` -- the play/stop button's enable state is now entirely owned by `_set_ui_state()`.
+  - `chatterbox/gui/input.py`: removed `Action.REPLAY` and `make_dispatcher()`'s `replay_fn`
+    parameter/branch (unused once no button dispatches it).
+  - `chatterbox/config/config_tts.yaml` / `chatterbox/gui/i18n.py`: removed `add_play_button` (the
+    config flag that gated the now-deleted standalone buttons) and the `replay_button`/`stop_button`
+    i18n keys (both locales) -- all genuinely dead, per this project's "delete completely if certain
+    it's unused" convention rather than leaving unreferenced cruft.
+  - `tests/test_gui_input.py`: removed the two REPLAY-specific tests, `replay_fn` from the shared
+    recorder-dispatcher helper.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/input.py`, `chatterbox/config/config_tts.yaml`,
+  `chatterbox/gui/i18n.py`, `tests/test_gui_input.py`.
+- Why: real-hardware feedback (screenshot via WayVNC/TigerVNC on the Pi5) -- first genuine
+  real-device confirmation of anything from this whole landscape-refactor session.
+- Verify: full test suite (305 passed/1 skipped -- down from 307, the 2 removed REPLAY tests). New
+  ad hoc Tk smoke test (monkeypatches `chatterbox.synth.synthesize` and `playback.play_audio`/
+  `stop_audio`, same pattern as `test_gui_worker.py`'s own mocking) confirms: the button starts as
+  `"▶"`/enabled; dispatching Speak through it (after waiting out the backgrounded initial-model-
+  load + warm-up sequence, which shares the same busy flag and would otherwise silently swallow a
+  premature dispatch) flips it to `"⏹"`/enabled while `_work()` blocks in the fake `play_audio()`;
+  clicking it then calls the real `stop_audio` reference; it returns to `"▶"`/enabled once playback
+  ends.
+- Notes/gotchas: this entry covers ONLY the button merge -- the screenshot's other two asks (input
+  row + synthesis-duration info moved to a compact top header, keyboard maximized to fill the rest)
+  are a separate, larger change (touches the same portrait/landscape row math already flagged as
+  fragile in this session's emotion-icon-bar entries) and land in the next entry.
+
+---
+
 ## 2026-07-24 — Scrolling pass: MouseWheel everywhere (landscape-refactor plan, final phase)
 
 - What: final phase of `cc_prompt_gui_landscape_v2.md`'s implementation. Audited every scrollable

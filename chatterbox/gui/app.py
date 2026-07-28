@@ -159,14 +159,12 @@ busy = False
 dispatch = None
 nav = None
 
-# Only set (to a real tk.Button) when main_panel_config["add_play_button"] is True.
-btn_replay_audio = None
-
-# Interrupts in-flight playback (input-row phase, landscape-refactor plan) -- enabled only while
-# _set_ui_state()'s state_name is "playing", independent of the busy-guard disable Speak/Replay use
-# (Stop must stay clickable precisely while a worker thread is busy playing audio). Only set (to a
-# real tk.Button) alongside btn_replay_audio, same main_panel_config["add_play_button"] gate.
-btn_stop_audio = None
+# Texte-mode letter keyboard's own control-row button (real-hardware feedback: standalone
+# Rejouer/Arrêter buttons were redundant once this exists) -- doubles as Play (idle: dispatches
+# Action.SPEAK, same as Synthèse) and Stop (while state_name == "playing": dispatches Action.STOP),
+# toggled entirely by _set_ui_state() below. Only set once _create_letter_keyboard() actually
+# builds it (gui_config["add_keyboard"] and not detach_keyboard).
+btn_letter_kb_play = None
 
 # Set once near the top of _run_gui_session() (emotion-icon-bar phase, landscape-refactor plan):
 # window's own two grid children. Everything this module used to grid directly onto `window` now
@@ -312,10 +310,20 @@ def _set_ui_state(state_name, error=None):
     }.get(state_name, theme.color("status_idle"))
     if canvas_circle is not None:
         update_circle_color(color, canvas_circle, canvas_circle_figure)
-    if btn_stop_audio is not None:
-        # Independent of _set_action_buttons_state()'s busy-guard disable (Speak/Replay) -- Stop
-        # must be enabled exactly while something is playing, disabled every other state.
-        btn_stop_audio.config(state="normal" if state_name == "playing" else "disabled")
+    if btn_letter_kb_play is not None:
+        # Play/Stop toggle (real-hardware feedback: standalone Rejouer/Arrêter buttons were
+        # redundant once this button exists) -- "playing": relabel to Stop and enable it
+        # regardless of the busy-guard's blanket disable (it must stay clickable precisely while a
+        # worker thread is busy playing audio); every other state: relabel back to Play, enabled
+        # unless still synthesising/initialising (mirrors Synthèse's own busy-guard disable).
+        if state_name == "playing":
+            btn_letter_kb_play.config(text="⏹", state="normal",
+                                       command=lambda: dispatch(ginput.Action.STOP))
+        else:
+            btn_letter_kb_play.config(
+                text="▶", command=lambda: dispatch(
+                    ginput.Action.KEY, payload=("__letter__", "play", None)),
+                state="disabled" if state_name in ("synthesising", "initialising") else "normal")
     if lbl_status is not None:
         # grid_remove()'d rather than just left with empty text (real-hardware feedback: "Rejouer
         # and Mettre en veille buttons can be placed slightly upper") -- an always-gridded blank
@@ -355,38 +363,8 @@ def on_speak():
     threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control), daemon=True).start()
 
 
-def on_replay():
-    """REPLAY action handler -- Tk thread. Replays the last synthesized clip via the existing
-    playback path with no re-synthesis. Runs on the same worker/busy-guard machinery as on_speak()
-    -- playback blocks for its real-time duration plus the powerd amp handshake, so it must not run
-    on the Tk thread either (chatterbox_gui_spec_v0.1.md Sec2's "Tk is only ever touched from the
-    Tk thread" applies just as much here as to synthesis). No-op if nothing has been synthesized
-    yet; the button itself stays disabled until then, this is defense in depth for a direct
-    Action.REPLAY dispatch (e.g. a future physical switch)."""
-    global busy
-    if busy or playback.AUDIO_EXAMPLE is None:
-        return
-    busy = True
-    _set_ui_state("playing")
-    _set_action_buttons_state("disabled")
-    _power_client.send_activity()
-    threading.Thread(target=_replay_work, daemon=True).start()
-
-
-def _replay_work():
-    """Worker thread -- NO Tk calls."""
-    try:
-        playback.play_audio()
-    except Exception as exc:  # noqa: BLE001 -- same "never crash the process" rule as _work().
-        post(lambda exc=exc: _fail(exc))
-        return
-    post(_done)
-
-
 def _set_action_buttons_state(tk_state):
     btn_syn_audio.config(state=tk_state)
-    if btn_replay_audio is not None:
-        btn_replay_audio.config(state=tk_state)
 
 
 def _work(text, tts_idx, voc_idx, gui_control):
@@ -419,8 +397,6 @@ def _done():
     busy = False
     _set_ui_state("idle")
     btn_syn_audio.config(state="normal")
-    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
-        btn_replay_audio.config(state="normal")
 
 
 def _fail(exc):
@@ -429,8 +405,6 @@ def _fail(exc):
     print("[gui] synthesis/playback failed: {}".format(exc), file=sys.stderr)
     _set_ui_state("error", exc)
     btn_syn_audio.config(state="normal")
-    if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
-        btn_replay_audio.config(state="normal")
 
 
 def _start_warmup():
@@ -715,14 +689,19 @@ def _create_letter_keyboard(master, key_board_options, layout_rows):
     )
     btn_clear_all.grid(row=control_row, column=6, columnspan=2, sticky=tk.NSEW,
                         padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
-    btn_play = tk.Button(
+    # Doubles as Play/Stop (real-hardware feedback: standalone Rejouer/Arrêter buttons were
+    # redundant once this exists) -- initial text/command match the idle state; _set_ui_state()
+    # retoggles both whenever playback starts/ends, see its own comment for the full state
+    # machine.
+    global btn_letter_kb_play
+    btn_letter_kb_play = tk.Button(
         master=frame, text="▶", font=my_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "play", None)),
     )
-    btn_play.grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
-                   padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
+    btn_letter_kb_play.grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
+                             padx=key_board_options["key_margin_x"], pady=key_board_options["key_margin_y"])
 
-    for _btn in (btn_space, btn_backspace, btn_clear_all, btn_play):
+    for _btn in (btn_space, btn_backspace, btn_clear_all, btn_letter_kb_play):
         _btn.bind("<Configure>", _wrap_label_to_width)
 
     return frame, grid_buttons
@@ -757,8 +736,6 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     global canvas_circle_figure
     global _power_client
     global btn_syn_audio
-    global btn_replay_audio
-    global btn_stop_audio
     global dispatch
     global nav
 
@@ -1073,7 +1050,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         first-class top-level menu (this phase) means users hit it far more often, so the freeze
         is no longer acceptable. Mirrors the exact background-load pattern already proven for
         startup (_initial_model_load_work()/_finish_initial_model_load() below) rather than
-        inventing a new one, and reuses on_speak()/on_replay()'s busy-guard/_set_action_buttons_
+        inventing a new one, and reuses on_speak()'s busy-guard/_set_action_buttons_
         state() machinery -- a model switch and a synthesis are mutually exclusive "the GUI is
         doing real work" states, not two independent flags. Vocoder switches
         (_select_vocoder_model() below) stay synchronous -- HiFi-GAN's checkpoint is a few MB
@@ -1117,8 +1094,6 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         busy = False
         _set_ui_state("idle")
         btn_syn_audio.config(state="normal")
-        if btn_replay_audio is not None and playback.AUDIO_EXAMPLE is not None:
-            btn_replay_audio.config(state="normal")
 
     def _select_vocoder_model(vocoder_model, id_button, list_buttons=None):
         loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
@@ -1249,8 +1224,8 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # answer; the actual loading_script() calls move to a background thread kicked off only once
     # the window is fully built (_start_initial_model_load(), scheduled near mainloop() below),
     # the same pattern already used for warm-up. busy=True goes up right here, before a single
-    # further widget is built, so there's no gap where a click could reach on_speak()/on_replay()
-    # before a model is loaded (both already busy-guard, see on_speak()/on_replay() above). A
+    # further widget is built, so there's no gap where a click could reach on_speak()
+    # before a model is loaded (already busy-guarded, see on_speak() above). A
     # placeholder label stands in for the options panel (gui_generic_controls()'s frame, which
     # can't be built before the model is loaded -- it reads the loaded model's own config) until
     # the load's completion callback replaces it.
@@ -1396,28 +1371,13 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     else:
         index_gst_token = 0
 
-    # Add replay + stop buttons -- Replay routed through dispatch() (worker thread + busy-guard,
-    # same as Speak) rather than calling playback.play_audio() directly: that used to run on the Tk
-    # thread with no guard, so a click before any synthesis crashed on AUDIO_EXAMPLE being None
-    # (uncaught inside a bare Tk button command), and a click during synthesis could overlap
-    # ALSA/amp-handshake calls. Disabled until on_speak()'s worker actually produces audio
-    # (_done()/_fail() re-enable it). Stop (input-row phase, landscape-refactor plan) is the
-    # opposite: it must stay enabled precisely while something IS playing (_set_ui_state() toggles
-    # it directly, not the busy-guard's _set_action_buttons_state()) and calls
-    # playback.stop_audio() straight through -- there's no worker thread to start, only an
-    # already-running one to interrupt. Both wrapped in one sub-frame spanning the same row/
-    # columnspan the bare Replay button used to occupy alone.
-    if main_panel_config["add_play_button"]:
-        _play_controls_frame = tk.Frame(master=main_content_frame)
-        _play_controls_frame.grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
-        btn_replay_audio = tk.Button(master=_play_controls_frame, text=i18n.t("replay_button"), state="disabled")
-        btn_replay_audio.grid(row=0, column=0, padx=2)
-        btn_stop_audio = tk.Button(master=_play_controls_frame, text=i18n.t("stop_button"), state="disabled")
-        btn_stop_audio.grid(row=0, column=1, padx=2)
+    # No standalone Rejouer/Arrêter buttons anymore (real-hardware feedback: redundant once the
+    # Texte-mode keyboard's own Play/Stop toggle exists, btn_letter_kb_play in
+    # _create_letter_keyboard() -- see _set_ui_state()'s own comment for the full state machine).
 
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
     # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
-    # the keyboard regardless of add_play_button/add_GST_infos.
+    # the keyboard regardless of add_GST_infos.
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
         btn_put_away = tk.Button(master=main_content_frame, text=i18n.t("put_away_button"))
@@ -1443,16 +1403,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         nav=nav,
         keyboard_emit_fn=_keyboard_emit,
         back_fn=_back_action,
-        replay_fn=on_replay,
         stop_fn=playback.stop_audio,
     )
     btn_syn_audio.config(command=lambda: dispatch(ginput.Action.SPEAK))
     if btn_put_away is not None:
         btn_put_away.config(command=lambda: dispatch(ginput.Action.PUT_AWAY))
-    if btn_replay_audio is not None:
-        btn_replay_audio.config(command=lambda: dispatch(ginput.Action.REPLAY))
-    if btn_stop_audio is not None:
-        btn_stop_audio.config(command=lambda: dispatch(ginput.Action.STOP))
 
     if gui_config["add_keyboard"]:
         if gui_config["detach_keyboard"]:
