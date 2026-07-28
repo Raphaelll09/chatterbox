@@ -66,6 +66,13 @@ _last_ui_error = None
 # can call it without create_gui() needing to return/thread it through separately.
 _set_theme = None
 
+# Same rebindable-global pattern as _set_theme above -- exposed at module level (for tests/smoke
+# scripts, and so Settings -> Advanced's "Interface language" radiobuttons don't need it threaded
+# through separately) -- set inside _run_gui_session() to the closure that switches gui.language
+# independently of which TTS model is loaded (real-hardware feedback: "add a parameter that
+# changes the GUI language and not only the model language").
+_set_gui_language = None
+
 # Manual portrait/landscape override and the keyboard-screen-share fraction (both real-hardware-
 # feedback-driven) existed here once -- removed (real-hardware feedback, layout-simplification
 # phase): the keyboard now always fills 100% of the remaining space below the header in either
@@ -767,10 +774,18 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     _persisted_gui_prefs = _persisted_gui_prefs["gui"]
     theme.set_theme(_persisted_gui_prefs["theme"])
 
-    # Matches whichever language default_tts's own model declares (config_tts.yaml's per-entry
-    # "language", defaulting to "fr") -- so launching directly with e.g. `--default_tts
-    # <english_index> --gui` already opens in English, not just a language-menu switch.
-    i18n.set_locale(tts_config["tts_models"][default_tts].get("language", "fr"))
+    # Persisted gui.language (real-hardware feedback: "add a parameter that changes the GUI
+    # language and not only the model language") is the interface's own language, independent of
+    # which TTS model/voice is loaded -- same "persisted preference always wins" convention this
+    # line already uses for theme/keyboard_layout above/below. _set_gui_language() (Settings ->
+    # Advanced) is the ONLY thing that changes it without also touching the loaded model;
+    # _set_language() (the top-level "Langue" menu, still couples model+interface together for the
+    # common case) keeps it in sync too, so the two controls cooperate rather than fight on the
+    # next restart. Falls back to default_tts's own model language only because chatterbox.power.
+    # config's schema always fills in a concrete default ("fr") for a from-scratch install with no
+    # user_prefs.yaml yet -- the one place that default and default_tts's language could disagree.
+    i18n.set_locale(_persisted_gui_prefs.get(
+        "language", tts_config["tts_models"][default_tts].get("language", "fr")))
 
     # Create the main window
     window = tk.Tk()
@@ -960,9 +975,20 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         feedback: Piper's fr/en variants collapse into one "Piper-tts" TTS Model menu entry --
         config_tts.yaml's own comment) before falling back to the first language-matching model
         overall -- otherwise switching Piper's language would jump to whichever model happens to
-        be first in tts_models[] for that language (e.g. back to FastSpeech2), not stay on Piper."""
+        be first in tts_models[] for that language (e.g. back to FastSpeech2), not stay on Piper.
+
+        Also persists gui.language (real-hardware feedback: "add a parameter that changes the GUI
+        language and not only the model language") so this menu and the independent Settings ->
+        Advanced "Interface language" picker (_set_gui_language() below) stay in sync -- picking a
+        language here is still the common case ("I want the GUI AND the voice in English"), it
+        just no longer OWNS gui.language exclusively."""
         nonlocal pending_restart_tts_index
         i18n.set_locale(code)
+        try:
+            settings.write_gui_prefs(language=code)
+        except OSError as exc:
+            print("[gui] could not persist interface language preference: {}".format(exc),
+                  file=sys.stderr)
         active_group = tts_config["tts_models"][state.TTS_INDEX].get("menu_group")
         target = None
         if active_group is not None:
@@ -975,6 +1001,28 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         if target is not None:
             pending_restart_tts_index = target
             window.destroy()
+
+    global _set_gui_language
+
+    def _set_gui_language(code):
+        """Interface-language-only switch (Settings -> Advanced's "Interface" picker, built in
+        _build_advanced_settings() below) -- unlike _set_language() above (the top-level "Langue"
+        menu), this does NOT change which TTS model/voice is loaded, only which language
+        chatterbox/gui/i18n.py's strings render in (real-hardware feedback: "add a parameter that
+        changes the GUI language and not only the model language" -- e.g. running the English
+        Piper voice with French interface text, or vice versa). Restarts onto the SAME model
+        (state.TTS_INDEX, not a language-matched lookup) since only the interface text needs to
+        re-render, same restart mechanism as _set_language() for the reason given in its own
+        docstring."""
+        nonlocal pending_restart_tts_index
+        i18n.set_locale(code)
+        try:
+            settings.write_gui_prefs(language=code)
+        except OSError as exc:
+            print("[gui] could not persist interface language preference: {}".format(exc),
+                  file=sys.stderr)
+        pending_restart_tts_index = state.TTS_INDEX
+        window.destroy()
 
     lang_menu = tk.Menu(menubar, tearoff=0)
     language_var = tk.StringVar(value=i18n.get_locale())
@@ -1273,6 +1321,23 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                 value=theme_name, indicatoron=0, selectcolor=theme.color("select_color"),
                 command=lambda n=theme_name: _set_theme(n),
             ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
+        next_row += 1
+
+        # Interface language (real-hardware feedback: "add a parameter that changes the GUI
+        # language and not only the model language") -- independent of the top-level "Langue"
+        # menu, which also switches the loaded TTS model/voice; this only re-renders chatterbox/
+        # gui/i18n.py's strings, via _set_gui_language() above. Same untranslated-language-name
+        # convention as the "Langue" menu and the AZERTY/QWERTY picker.
+        if gui_config.get("languages"):
+            tk.Label(master=parent_frame, text=i18n.t("interface_language_label")).grid(
+                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+            interface_language_var = tk.StringVar(value=i18n.get_locale())
+            for col, lang_option in enumerate(gui_config["languages"], start=1):
+                tk.Radiobutton(
+                    master=parent_frame, text=lang_option["label"], variable=interface_language_var,
+                    value=lang_option["code"], indicatoron=0, selectcolor=theme.color("select_color"),
+                    command=lambda c=lang_option["code"]: _set_gui_language(c),
+                ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
     # Startup default load (phase 2 of the startup-latency work -- see docs/context/CHANGELOG.md
     # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
@@ -1453,10 +1518,14 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
 
     # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt). Part
     # of the compact header row now (real-hardware feedback, 2026-07-28 round 2: "aligned with the
-    # battery indicator and the green Synthesis light"), not its own row above the keyboard.
+    # battery indicator and the green Synthesis light"), not its own row above the keyboard. "☾"
+    # (U+263E, Miscellaneous Symbols -- confirmed present in DejaVu Sans, same cmap check as the
+    # Play/Stop button above) instead of the "Mettre en veille"/"Put away" text label -- same
+    # meaning, less header width (real-hardware feedback: "it would have the same meaning and
+    # take less space"). Font pinned to DejaVu Sans for the same reason as btn_letter_kb_play.
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(master=header_frame, text=i18n.t("put_away_button"))
+        btn_put_away = tk.Button(master=header_frame, text="☾", font=("DejaVu Sans", 14))
         btn_put_away.grid(row=0, column=4, padx=(4, 4))
 
     # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
@@ -1613,18 +1682,40 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
 
     def _initial_model_load_work():
         """Worker thread -- NO Tk calls. Runs the two loading_script() calls the startup call-site
-        above used to make synchronously; posts the (fast, Tk-only) finish step back once done."""
-        tts_model = tts_config["tts_models"][default_tts]
-        vocoder_model = tts_config["vocoder_models"][default_vocoder]
-        registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
-        tts_loading_script = getattr(registry.BACKEND, tts_model["load_script"])
-        tts_loading_script(tts_model, device)
-        # Skipped for a monolithic TTS model (needs_vocoder: false, e.g. Piper) -- see the
-        # matching guard/comment in chatterbox/cli.py:load_models().
-        if tts_model.get("needs_vocoder", True):
-            vocoder_loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
-            vocoder_loading_script(vocoder_model, device)
+        above used to make synchronously; posts the (fast, Tk-only) finish step back once done.
+
+        try/except added after real-hardware feedback ("the english model from Piper loads
+        indefinitely"): this model's checkpoint file (en_US-lessac-medium.onnx) turned out to be
+        genuinely missing on that device (only the two French Piper voices had been fetched), and
+        this function -- unlike _select_tts_model()'s own worker, which already wraps its load
+        calls -- had NO exception handling at all. A missing/corrupt checkpoint threw inside
+        tts_loading_script(), killing this daemon thread silently; post(_finish_initial_model_
+        load) never ran, so `busy` stayed True and the "Chargement du modele..." placeholder never
+        went away -- no error, no timeout, just a permanent hang. Routing failures through
+        _fail_initial_model_load() below (mirroring _select_tts_model()'s _work()) turns that into
+        a normal, visible error state instead."""
+        try:
+            tts_model = tts_config["tts_models"][default_tts]
+            vocoder_model = tts_config["vocoder_models"][default_vocoder]
+            registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
+            tts_loading_script = getattr(registry.BACKEND, tts_model["load_script"])
+            tts_loading_script(tts_model, device)
+            # Skipped for a monolithic TTS model (needs_vocoder: false, e.g. Piper) -- see the
+            # matching guard/comment in chatterbox/cli.py:load_models().
+            if tts_model.get("needs_vocoder", True):
+                vocoder_loading_script = getattr(registry.BACKEND, vocoder_model["load_script"])
+                vocoder_loading_script(vocoder_model, device)
+        except Exception as exc:  # noqa: BLE001 -- never leave the startup load silently hung.
+            post(lambda exc=exc: _fail_initial_model_load(exc))
+            return
         post(lambda: _finish_initial_model_load(tts_model))
+
+    def _fail_initial_model_load(exc):
+        """Tk thread. Same end state as _fail() (busy=False, error shown, Synthese re-enabled),
+        plus tearing down the loading placeholder -- _finish_initial_model_load() is what normally
+        does that, but it never runs on this path."""
+        _loading_placeholder.destroy()
+        _fail(exc)
 
     def _finish_initial_model_load(tts_model):
         """Tk thread. Replaces the loading placeholder with the real options panel (needs the

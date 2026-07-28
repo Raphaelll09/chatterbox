@@ -23,7 +23,6 @@ STRINGS = {
         # Synthèse button, which rendered clipped ("nthè"). A shorter label leaves the weighted
         # entry/button columns more room.
         "input_text_label": "Saisie",
-        "put_away_button": "Mettre en veille",
         "settings_button": "Réglages",
         "speaker_label": "Locuteur :",
         "styletag_label": "StyleTag :",
@@ -66,6 +65,10 @@ STRINGS = {
         "theme_light": "Clair",
         "theme_dark": "Sombre",
         "menu_language": "Langue",
+        # Settings -> Advanced only (real-hardware feedback: "add a parameter that changes the GUI
+        # language and not only the model language") -- distinct from "menu_language" above (the
+        # top-level "Langue" menu, which still also switches the loaded TTS model/voice).
+        "interface_language_label": "Langue de l'interface :",
         "menu_tools": "Outils",
         "menu_tts_model": "Modèle TTS",
         "menu_speaker": "Locuteur",
@@ -90,7 +93,6 @@ STRINGS = {
         "vocoder_label": "Vocoder:",
         "synthesize_button": "Synthesize",
         "input_text_label": "Input",
-        "put_away_button": "Put away",
         "settings_button": "Settings",
         "speaker_label": "Speaker:",
         "styletag_label": "StyleTag:",
@@ -119,6 +121,7 @@ STRINGS = {
         "theme_light": "Light",
         "theme_dark": "Dark",
         "menu_language": "Language",
+        "interface_language_label": "Interface language:",
         "menu_tools": "Tools",
         "menu_tts_model": "TTS Model",
         "menu_speaker": "Speaker",

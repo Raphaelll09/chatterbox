@@ -15,6 +15,69 @@ state before starting new work.
 
 ---
 
+## 2026-07-28 — Real-hardware feedback round 3: startup-load error handling, moon icon, independent interface language
+
+- What: live testing against round 2's build (previous entry) on the Pi5 surfaced four more items:
+  1. "The Play/stop button doesn't go back to play once it has been pushed" and "the english model
+     from Piper loads indefinitely" turned out to be the SAME root cause. `ssh pi5` (read-only)
+     found `assets/models/Piper/` on that device only has the two French voices
+     (`fr_FR-siwis-medium`/`upmc-medium`) -- `en_US-lessac-medium.onnx`/`.json` were never actually
+     fetched. Combined with a real code bug -- `_initial_model_load_work()` (the STARTUP load path,
+     `chatterbox/gui/app.py`) had NO exception handling at all, unlike `_select_tts_model()`'s own
+     worker (which already wraps its load calls and routes failures through `_fail()`) -- a missing
+     checkpoint threw inside `tts_loading_script()`, silently killing the daemon thread; `post(_finish_
+     initial_model_load)` never ran, so `busy` stayed `True` forever and the "Chargement du
+     modele..." placeholder never went away -- no error, no timeout, just a permanent hang with
+     everything else in the GUI (including the Play/Stop toggle, stuck mid-state) wedged behind
+     the same stuck `busy` flag. Added a new `_fail_initial_model_load(exc)` (mirrors `_fail()`,
+     plus tearing down the loading placeholder, which `_finish_initial_model_load()` normally does
+     but never runs on this path) and wrapped `_initial_model_load_work()`'s body in try/except.
+     A failed startup load now surfaces as a normal, visible error state (busy clears, Play/Stop
+     resets to "▶") instead of hanging. The missing voice file itself is a deployment/asset gap,
+     not something a code change fixes -- flagged back to the user rather than fetched
+     unilaterally (fetching model files onto their device is a real-world side effect, not a plain
+     code edit).
+  2. "Instead of 'mettre en veille', it would be better to have a moon icon" -- `btn_put_away`'s
+     text changed from the `i18n.t("put_away_button")` label to "☾" (U+263E LAST QUARTER MOON,
+     Miscellaneous Symbols block -- confirmed present in the Pi5's actual `DejaVuSans.ttf` via the
+     same offline `fontTools` cmap check as the previous entry's Play/Stop fix, and font-pinned to
+     `("DejaVu Sans", 14)` for the same reason). The now-unused `put_away_button` key removed from
+     both `chatterbox/gui/i18n.py` locales (project convention: delete completely once certain
+     something is unused, not left as dead code).
+  3. "Add a parameter that changes the GUI language and not only the model language" -- found that
+     `chatterbox/power/config.py`'s persisted-prefs schema already had an unused `gui.language`
+     field (default `"fr"`, validated, and even name-checked in `settings.write_gui_prefs()`'s own
+     docstring) that nothing in `app.py` actually read or wrote -- a half-wired feature, not new
+     schema. Startup `i18n.set_locale()` now prefers `gui.language` over `default_tts`'s own model
+     `language` field; a new `_set_gui_language(code)` (module-exposed the same way `_set_theme`
+     is, for tests/smoke scripts) switches ONLY the interface locale and restarts onto the SAME
+     model (`state.TTS_INDEX`, not a language-matched lookup) -- unlike `_set_language()` (the
+     top-level "Langue" menu), which still also switches model. A new "Interface language" radio
+     picker in Settings → Advanced (mirrors the Theme/AZERTY-QWERTY pickers) is the only way to
+     reach it; `_set_language()` now also writes `gui.language` so the two controls cooperate
+     (whichever was used most recently wins on the next launch) instead of fighting.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: third round of the same real-hardware feedback loop (live Pi5 testing, not just a
+  screenshot this time) as the previous two entries.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). Two new
+  ad hoc Tk smoke tests (mocked model loading, no pretrained weights, not part of the pytest
+  suite): `round3_fixes_smoke.py` (a model configured to fail loading surfaces as a proper error
+  state with `busy=False`, not a hang; the put-away button's glyph/font; `write_gui_prefs`/`load_
+  config` round-trip `gui.language`) and `gui_language_independence_smoke.py` (an actual two-
+  session restart cycle via `create_gui()`'s own loop: `_set_gui_language("en")` switches locale
+  to `"en"` while `state.TTS_INDEX` and the model's own `"language"` field both stay unchanged
+  across the restart). `ssh pi5` (read-only: `ls assets/models/Piper/`, `ps aux`, `journalctl`,
+  the reused fontTools-cmap-check pattern) is what grounded both the Piper-hang root cause and the
+  moon-icon codepoint choice in this entry, instead of guessing.
+- Notes/gotchas: the English Piper voice will still fail to load on that Pi5 until `en_US-lessac-
+  medium.onnx`/`.json` are actually fetched (`scripts/fetch_piper_voices.sh`) -- this session
+  asked the user rather than running it unilaterally over SSH. Not yet re-verified live on the
+  device that the Play/Stop button genuinely resets after a normal (non-hung) synthesis+playback
+  cycle -- code review found no bug in that path once the startup-load hang is accounted for, but
+  it was reasoned about, not clicked through live.
+
+---
+
 ## 2026-07-28 — Real-hardware feedback round 2: one-row header, drawn icons, unified Piper menu entry
 
 - What: a second live WayVNC/TigerVNC screenshot from the Pi5 (after the previous entry's layout

@@ -117,8 +117,16 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     loop wraps the actual session function, which returns the next `default_tts` index to load or
     `None` to exit) onto the first `tts_models[]` entry whose own `language` field matches — a full
     rebuild rather than live re-labelling, since nearly every widget's text is set once at creation
-    time via a literal `i18n.t(...)` call, with no existing refresh mechanism for static text.
-    "Thème" stays a disabled stub — no second theme table exists yet.
+    time via a literal `i18n.t(...)` call, with no existing refresh mechanism for static text. Also
+    switches which TTS model/voice loads, since a language and a voice are the same choice for most
+    users; `user_prefs.yaml`'s `gui.language` (Settings → Advanced's separate "Interface language"
+    radio picker, `_set_gui_language()`) is the interface text's language on its own, independent of
+    the loaded model — real-hardware feedback ("add a parameter that changes the GUI language and
+    not only the model language") for running e.g. the English Piper voice with French interface
+    text. Both controls persist to the same `gui.language` key and restart the window the same way
+    (`_set_language()` picks a new model + locale; `_set_gui_language()` re-renders the SAME model
+    in a new locale), so whichever was used last wins on the next launch. "Thème" stays a disabled
+    stub — no second theme table exists yet.
   - `gui/i18n.py` — the GUI's string table (added in the same refactor to replace a hardcoded
     French/English label mix). Both `"fr"` and `"en"` are populated today; `set_locale(code)`
     switches which one `t(key, **kwargs)` reads from, called by the "Langue" menu above (and once
