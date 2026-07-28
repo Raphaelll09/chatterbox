@@ -60,34 +60,22 @@ lbl_battery = None
 _last_ui_state_name = "idle"
 _last_ui_error = None
 
-# Manual portrait/landscape override (Settings -> Advanced): None means "auto" (today's
-# <Configure>-based detection); "portrait"/"landscape" forces that layout regardless of actual
-# window size -- real-hardware feedback: a kiosk's window may never receive a genuine resize event
-# at runtime, making pure auto-detection unreliable in practice. _refresh_orientation is set (to a
-# callable) only when the embedded keyboard/reflow machinery exists in create_gui() below.
-_orientation_override = None
-_refresh_orientation = None
-
 # Set inside create_gui() (landscape-refactor session) to the closure that actually applies a
-# live theme switch -- exposed at module level (same pattern as _refresh_orientation above) so the
-# Theme menu's radiobuttons, and anything else needing to trigger a switch later (e.g. Settings
-# persistence restoring a saved theme on startup), can call it without create_gui() needing to
-# return/thread it through separately.
+# live theme switch -- exposed at module level so the Theme menu's radiobuttons, and anything else
+# needing to trigger a switch later (e.g. Settings persistence restoring a saved theme on startup),
+# can call it without create_gui() needing to return/thread it through separately.
 _set_theme = None
 
-# Keyboard's share of the screen -- a fixed fraction, no longer user-configurable (real-hardware
-# feedback: tried 1/2 through 3/4 across several rounds; "the right share of keyboard seems to be
-# between 1/2 and 2/3" -- 0.6 lands inside that range). Used as a fraction of window WIDTH in
-# landscape (the keyboard sits beside the options panel, competing for width) and of window HEIGHT
-# in portrait (it sits below the options panel, competing for height) -- see
-# _apply_current_orientation()'s two branches below, which both force their respective dimension
-# to at least this share via the same grid_propagate(False) + explicit size + sticky=NSEW pattern.
-_KEYBOARD_SCREEN_SHARE = 0.6
+# Manual portrait/landscape override and the keyboard-screen-share fraction (both real-hardware-
+# feedback-driven) existed here once -- removed (real-hardware feedback, layout-simplification
+# phase): the keyboard now always fills 100% of the remaining space below the header in either
+# window shape, replacing the column-switching machinery both existed to drive. See
+# _create_letter_keyboard()'s call site (keyboard_row) for the current, unconditional layout.
 
 # Whether the currently-loaded TTS model understands the Phonemes keyboard's raw phone-code syntax
 # at all (interchangeable-backend GUI refactor -- config_tts.yaml's static per-model
 # accepts_phoneme_input flag). _refresh_keyboard_capabilities is set (to a callable), same pattern
-# as _refresh_orientation above, only once the embedded keyboard exists in create_gui() below, and
+# (a rebindable-global pattern, set only once the embedded keyboard exists in create_gui() below),
 # re-run whenever the TTS model is switched from Settings -> Advanced.
 _accepts_phoneme_input = True
 _refresh_keyboard_capabilities = None
@@ -103,8 +91,8 @@ _refresh_speaker_menu = None
 # Texte-mode letter keyboard's active layout ("azerty"/"qwerty", chatterbox/gui/app.py's
 # _LETTER_LAYOUTS) -- None until first initialised from config_tts.yaml's GUI_config.keyboard_
 # options.letter_layout, then persists across a language-driven window restart (create_gui()'s
-# loop) the same way _orientation_override does, instead of resetting to the config default each
-# time. _refresh_keyboard_layout is set (to a callable), same pattern as _refresh_orientation.
+# loop), instead of resetting to the config default each time. _refresh_keyboard_layout is set (to
+# a callable), same rebindable-global pattern as _refresh_keyboard_capabilities above.
 _letter_layout_current = None
 _refresh_keyboard_layout = None
 
@@ -174,8 +162,8 @@ main_content_frame = None
 emotion_bar_frame = None
 
 # Set once, inside _run_gui_session()'s input-row block (input-row phase follow-up, landscape-
-# refactor plan) -- rebindable-global pattern matching _refresh_orientation etc. above. Only set
-# when the chatbox/entry actually exists (gui_config["keyboard_options"]["show_entry"]).
+# refactor plan) -- rebindable-global pattern matching _refresh_keyboard_capabilities etc. above.
+# Only set when the chatbox/entry actually exists (gui_config["keyboard_options"]["show_entry"]).
 _refresh_chatbox_visibility = None
 
 # Single-instance Sliders Toplevel (sliders-window phase, landscape-refactor plan) -- mirrors
@@ -495,18 +483,6 @@ def _toggle_sliders_window():
     else:
         _sliders_window.deiconify()
         _sliders_window.lift()
-
-
-def _set_orientation_override(value):
-    """Settings -> Advanced's orientation radio buttons. value is "auto"/"portrait"/"landscape";
-    "auto" clears the override (back to <Configure>-based detection). Immediately re-applies the
-    layout via _refresh_orientation() -- set only when the embedded-keyboard reflow machinery
-    exists (gui_config["add_keyboard"] and not detach_keyboard)."""
-    global _orientation_override
-    _orientation_override = None if value == "auto" else value
-    if _refresh_orientation is not None:
-        _refresh_orientation()
-
 
 
 def _back_action():
@@ -990,21 +966,19 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     max_buttons = max(len(tts_config["tts_models"]), len(tts_config["vocoder_models"]))
 
     # Responsive layout (cc_prompt_gui_refactor.md Phase 1 item 1): column 0 stays a narrow label
-    # column; the button/entry/options-panel columns and the options-panel row (2, the tallest
-    # element) grow with the window instead of staying pinned to the 440x800 default geometry.
-    # Bound is max_buttons+2 (not +3): the widest main-window content spans columns 0..max_buttons+1
-    # (columnspan=max_buttons+2 starting at column 0) -- one column past that was weighted for
-    # nothing, stealing width from the options panel in landscape (real-hardware bug report).
-    # Retargeted onto main_content_frame, not window itself (emotion-icon-bar phase, landscape-
-    # refactor plan): window's own grid now holds exactly two side-by-side children -- the emotion
-    # bar (column 0) and main_content_frame (column 1, everything below) -- see its construction
-    # right after window's own creation, above. main_content_frame is a fresh grid namespace
-    # starting again at row/column 0, identical to what window's grid used to be, so none of this
-    # function's own row/column numbers change, only which widget owns the grid they're numbered
-    # against.
+    # column; the button/entry columns grow with the window instead of staying pinned to the
+    # 440x800 default geometry. Bound is max_buttons+2 (not +3): the widest main-window content
+    # spans columns 0..max_buttons+1 (columnspan=max_buttons+2 starting at column 0) -- one column
+    # past that was weighted for nothing (real-hardware bug report). Retargeted onto
+    # main_content_frame, not window itself (emotion-icon-bar phase, landscape-refactor plan):
+    # window's own grid now holds exactly two side-by-side children -- the emotion bar (column 0)
+    # and main_content_frame (column 1, everything below) -- see its construction right after
+    # window's own creation, above. The ROW weighting that used to live here (row 2, back when it
+    # held the options panel) is gone -- the keyboard's own row is main_content_frame's only
+    # weighted row now (layout-simplification phase, see keyboard_row below), everything above it
+    # is a compact, naturally-sized header.
     for _col in range(1, max_buttons + 2):
         main_content_frame.grid_columnconfigure(_col, weight=1)
-    main_content_frame.grid_rowconfigure(2, weight=1)
 
     # Battery percentage (DFRobot FIT0992 UPS HAT, chatterbox/power/battery.py) -- row 0, the space
     # freed up when the TTS/vocoder model buttons moved into Settings -> Advanced. Silently hidden
@@ -1155,32 +1129,13 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                 tts_config["vocoder_models"], next_row, _select_vocoder_model)
             select_model_from_list(state.VOCODER_INDEX + 1, list_vocoder_buttons)
 
-        # Manual portrait/landscape override -- only meaningful (and only shown) when the
-        # embedded-keyboard reflow machinery below actually exists (_refresh_orientation is set).
-        # A kiosk's window may never receive a genuine resize event at runtime, making the
-        # <Configure>-based auto-detection unreliable in practice (real-hardware feedback).
-        if _refresh_orientation is not None:
-            tk.Label(master=parent_frame, text=i18n.t("orientation_label")).grid(
-                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
-            orientation_var = tk.StringVar(value=_orientation_override or "auto")
-            for col, (value, label_key) in enumerate(
-                    [("auto", "orientation_auto"), ("portrait", "orientation_portrait"),
-                     ("landscape", "orientation_landscape")], start=1):
-                tk.Radiobutton(
-                    master=parent_frame, text=i18n.t(label_key), variable=orientation_var,
-                    value=value, indicatoron=0, selectcolor=theme.color("select_color"),
-                    command=lambda v=value: _set_orientation_override(v),
-                ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
+        # Manual portrait/landscape override existed here once (a Settings -> Advanced radio
+        # picker) -- removed along with the column-switching machinery it drove (layout-
+        # simplification phase, real-hardware feedback): the keyboard always fills 100% of the
+        # remaining space now, in either window shape, so there's no orientation-dependent
+        # placement left to override.
 
-            # No user-configurable keyboard-width picker anymore (real-hardware feedback: tried
-            # 1/2 through 3/4 across several rounds; "the right share seems to be between 1/2 and
-            # 2/3" -- 0.6, a fixed constant (_KEYBOARD_SCREEN_SHARE), replaces the picker instead
-            # of adding yet another option to it).
-
-            next_row += 1
-
-        # AZERTY/QWERTY toggle for the Texte-mode letter keyboard -- independent of the
-        # orientation block above (only meaningful/shown when the embedded letter keyboard
+        # AZERTY/QWERTY toggle for the Texte-mode letter keyboard -- only meaningful/shown when the embedded letter keyboard
         # actually exists, i.e. _refresh_keyboard_layout is set); unrelated to language/locale --
         # a QWERTY layout doesn't imply English, nor AZERTY French.
         if _refresh_keyboard_layout is not None:
@@ -1274,12 +1229,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
         lbl_text_input = tk.Label(master=main_content_frame, text=i18n.t("input_text_label"))
-        lbl_text_input.grid(row=7, column=0, pady=4)
+        lbl_text_input.grid(row=1, column=0, pady=4)
 
-        _input_frame.grid(row=7, column=1, sticky=tk.EW)
+        _input_frame.grid(row=1, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
-        btn_syn_audio.grid(row=7, column=2)
+        btn_syn_audio.grid(row=1, column=2)
 
         # Chatbox visibility (Tools menu, input-row-phase follow-up): hides the label + input row
         # together, not just the label or just the entry alone -- persisted the same way theme/
@@ -1312,11 +1267,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     if main_panel_config["add_audio_infos"]:
 
         lbl_audio_infos_audio_duration = tk.Label(master=main_content_frame, text=i18n.t("audio_duration_label", duration=0.0))
-        lbl_audio_infos_audio_duration.grid(row=8, column=0, columnspan=max_buttons+2)
+        lbl_audio_infos_audio_duration.grid(row=2, column=0, columnspan=max_buttons+2)
 
         # Add a Canvas next to the lbl_audio_infos_audio_duration to draw a circle
         canvas_circle = tk.Canvas(master=main_content_frame, width=20, height=20)
-        canvas_circle.grid(row=8, column=2)  # Positioned next to the label
+        canvas_circle.grid(row=2, column=2)  # Positioned next to the label
         # Create a circle on the canvas
         canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill=theme.color("status_idle"))
 
@@ -1335,12 +1290,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         lbl_audio_infos_stage_pool = []
         for _pool_i in range(_STAGE_POOL_SIZE):
             _lbl = tk.Label(master=main_content_frame, text="")
-            _lbl.grid(row=9 + _pool_i, column=0, columnspan=max_buttons+2)
+            _lbl.grid(row=3 + _pool_i, column=0, columnspan=max_buttons+2)
             _lbl.grid_remove()
             lbl_audio_infos_stage_pool.append(_lbl)
 
         lbl_audio_infos_synthesis_duration = tk.Label(master=main_content_frame, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
-        lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
+        lbl_audio_infos_synthesis_duration.grid(row=6, column=0, columnspan=max_buttons+2)
 
         def _toggle_audio_info_visibility(visible_var):
             active_pool_labels = lbl_audio_infos_stage_pool[:_audio_info_active_stage_count]
@@ -1357,17 +1312,17 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
     # blank row for the common no-error case.
     lbl_status = tk.Label(master=main_content_frame, text="", fg=theme.color("error_fg"))
-    lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
+    lbl_status.grid(row=7, column=0, columnspan=max_buttons+2)
     lbl_status.grid_remove()
 
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
         lbl_gst_infos = {}
         label_gst_title = tk.Label(master=main_content_frame, text=i18n.t("gst_weights_title"))
-        label_gst_title.grid(row=14, column=0, columnspan=max_buttons+2)
+        label_gst_title.grid(row=8, column=0, columnspan=max_buttons+2)
         for index_gst_token, gst_token in enumerate([*tts_config['tts_models'][0]['gst_token_list']]):
             lbl_gst_infos[gst_token] = tk.Label(master=main_content_frame, text="{}: 0.00".format(gst_token))
-            lbl_gst_infos[gst_token].grid(row=15+index_gst_token, column=0, columnspan=max_buttons+2)
+            lbl_gst_infos[gst_token].grid(row=9+index_gst_token, column=0, columnspan=max_buttons+2)
     else:
         index_gst_token = 0
 
@@ -1375,13 +1330,15 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Texte-mode keyboard's own Play/Stop toggle exists, btn_letter_kb_play in
     # _create_letter_keyboard() -- see _set_ui_state()'s own comment for the full state machine).
 
-    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt).
-    # Row 18 (not 17, which the non-detached keyboard frame below occupies) keeps this clear of
-    # the keyboard regardless of add_GST_infos.
+    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt), right
+    # after whatever header content precedes it (GST info if enabled, otherwise directly after the
+    # status/error label) and before the keyboard (keyboard_row below), which now always follows
+    # immediately -- layout-simplification phase removed the old fixed gap this used to leave for
+    # rows that no longer exist (the standalone Rejouer/Arrêter buttons).
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
         btn_put_away = tk.Button(master=main_content_frame, text=i18n.t("put_away_button"))
-        btn_put_away.grid(row=17+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_put_away.grid(row=9+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
     # area (row 18, keyboard at 19) and read as cluttered. Moved into the "Paramètres" menu entry
@@ -1521,109 +1478,19 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             global _refresh_keyboard_capabilities
             _refresh_keyboard_capabilities = _apply_keyboard_capabilities
 
-            # Portrait-first + landscape reflow (Phase 1 item 2): the panel's native orientation is
-            # portrait (single column, keyboard_area below the main controls) -- maintenance
-            # happens in landscape, where it moves beside the main controls in a second column
-            # instead. Only re-grids on an actual portrait<->landscape flip (not on every resize
-            # pixel). Row is last (19+index_gst_token, after Replay/Ranger/Réglages) -- real-
-            # hardware bug report: those three used to sit BELOW the keyboard area (rows 18/19 vs
-            # its 17), so on a screen too short to show every row, they fell off-screen first. The
-            # keyboard, not the always-needed controls, should be what runs out of room.
-            keyboard_portrait_grid = {"row": 19 + index_gst_token, "column": 0, "columnspan": 3,
-                                       "rowspan": 1, "sticky": tk.NSEW}
-            landscape_keyboard_column = max_buttons + 3
-            # Rows 0..17+index_gst_token are the entire main-stack vertical range (battery through
-            # Ranger/Mettre en veille). The landscape keyboard must span all of them, not just row
-            # 0 -- real-hardware bug report: gridding it at a single row (0) forced THAT row alone
-            # to grow to the keyboard's full height across every column (grid row height is shared
-            # across all columns), stealing the budget meant for row 2 (the options panel, the only
-            # weighted row) and collapsing it to ~0px, while pushing the fixed rows below it
-            # (Texte a saisir, duree labels, Rejouer, Mettre en veille) off the bottom of a
-            # screen-sized window. Spanning the same rows the main stack already occupies lets Tk
-            # absorb the keyboard's height mostly into row 2 (still the only weighted row in the
-            # span) instead of inflating row 0 alone.
-            landscape_keyboard_rowspan = 18 + index_gst_token
-            layout_state = {"is_landscape": None}
-
-            def _apply_current_orientation(force=False, _state=layout_state, _kb=keyboard_area,
-                                            _portrait=keyboard_portrait_grid,
-                                            _col=landscape_keyboard_column,
-                                            _rowspan=landscape_keyboard_rowspan):
-                if _orientation_override == "landscape":
-                    landscape = True
-                elif _orientation_override == "portrait":
-                    landscape = False
-                else:
-                    landscape = window.winfo_width() > window.winfo_height()
-                if landscape == _state["is_landscape"] and not force:
-                    return
-                _state["is_landscape"] = landscape
-                if landscape:
-                    # Column deliberately NOT weighted (real-hardware feedback: the keyboard
-                    # competed with the options panel for extra window width, "taking a lot of
-                    # space") -- width is instead an explicit cap, _KEYBOARD_SCREEN_SHARE of the
-                    # actual window width, enforced via grid_propagate(False) so the keyboard's own
-                    # internal weighted columns/buttons scale DOWN to fit that cap instead of
-                    # growing into whatever space weight would hand them (previously an unbounded
-                    # rowspan=20 pulled in row 2's -- the options panel's -- own large weighted
-                    # height this way, inflating the keyboard's buttons vertically too ["letters
-                    # are huge"]); the height is explicit now (below), not derived from the span, so
-                    # rowspan only controls which rows share the cost of that fixed height, not the
-                    # keyboard's own size.
-                    #
-                    # grid_propagate(False) makes Tk stop deriving BOTH width and height from the
-                    # frame's children -- it always uses whatever was last passed to .config(), and
-                    # height was never set here, so it silently collapsed to 0 ("both keyboards
-                    # disappeared" real-hardware report, reproduced at every fraction: the fraction
-                    # only ever changed width). Measure the natural height with propagate still on
-                    # (so it reflects the actual keyboard content) before locking width.
-                    main_content_frame.grid_columnconfigure(_col, weight=0)
-                    _kb.grid_propagate(True)
-                    _kb.update_idletasks()
-                    natural_height = max(1, _kb.winfo_reqheight())
-                    target_width = max(150, int(window.winfo_width() * _KEYBOARD_SCREEN_SHARE))
-                    _kb.grid_propagate(False)
-                    _kb.config(width=target_width, height=natural_height)
-                    # sticky=NSEW (not just N): natural_height above is a MINIMUM, not a cap --
-                    # real-hardware feedback: the keyboard sat anchored at the top of its row span
-                    # with dead space below whenever the span's actual allocated height (governed
-                    # by row 2's weight, same computation either way) exceeded that minimum. NSEW
-                    # tells grid to stretch the frame to fill however much height it actually got;
-                    # keyboard_area's own internal row 1 (weight=1, holding the two keyboard
-                    # frames) and each key's own weighted row/column then grow to fill that,
-                    # matching the user's ask ("the keyboard should use all the space available").
-                    _kb.grid(row=0, column=_col, rowspan=_rowspan, sticky=tk.NSEW)
-                else:
-                    # Portrait's keyboard row (unlike row 2, the options panel) has no weight of
-                    # its own by default, so it would otherwise only ever get its own natural
-                    # minimum height -- real-hardware feedback: "the keyboard is very small
-                    # compared to the window... the share is far below the landscape orientation."
-                    # Mirrors the landscape branch's mechanism exactly, just on the other axis:
-                    # measure the natural size with propagate on, then lock BOTH width and height
-                    # explicitly (grid_propagate(False) needs both, or the unset dimension collapses
-                    # to ~0 -- the same "both keyboards disappeared" gotcha as above) with height
-                    # floored at _KEYBOARD_SCREEN_SHARE of the window's actual height. sticky=NSEW
-                    # (already in _portrait) then stretches it to fill whatever more the row ends up
-                    # getting, and to fill the full width regardless of the natural-width floor.
-                    _kb.grid_propagate(True)
-                    _kb.update_idletasks()
-                    natural_width = max(1, _kb.winfo_reqwidth())
-                    natural_height = max(1, _kb.winfo_reqheight())
-                    target_height = max(natural_height, int(window.winfo_height() * _KEYBOARD_SCREEN_SHARE))
-                    _kb.grid_propagate(False)
-                    _kb.config(width=natural_width, height=target_height)
-                    _kb.grid(**_portrait)
-                    main_content_frame.grid_columnconfigure(_col, weight=0)
-
-            def _on_window_configure(event):
-                _apply_current_orientation()
-
-            window.bind("<Configure>", _on_window_configure)
-            window.update_idletasks()
-            _apply_current_orientation(force=True)
-
-            global _refresh_orientation
-            _refresh_orientation = lambda: _apply_current_orientation(force=True)
+            # Keyboard always fills 100% of the remaining space below the compact header
+            # (real-hardware feedback, screenshot via WayVNC/TigerVNC on the Pi5: "the keyboard
+            # [should take] all the largeness of the screen") -- replaces the portrait/landscape
+            # column-switching machinery this used to need (confirmed with the user before
+            # removing it: that machinery only ever existed so the keyboard could share width with
+            # the options panel; the options panel moved into the Sliders window in an earlier
+            # phase, so there's nothing left to share space with). One grid() call, one weighted
+            # row, no grid_propagate(False)/explicit width-height capping -- Tk stretches
+            # keyboard_area to fill whatever the row's weight actually allocates, in either window
+            # shape.
+            keyboard_row = 10 + index_gst_token
+            keyboard_area.grid(row=keyboard_row, column=0, columnspan=max_buttons+2, sticky=tk.NSEW)
+            main_content_frame.grid_rowconfigure(keyboard_row, weight=1)
 
     def _initial_model_load_work():
         """Worker thread -- NO Tk calls. Runs the two loading_script() calls the startup call-site

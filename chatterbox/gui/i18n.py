@@ -81,10 +81,6 @@ STRINGS = {
         "keyboard_clear_all": "Tout effacer",
         "keyboard_layout_label": "Disposition clavier :",
         "menu_toggle_audio_info": "Afficher les données de synthèse",
-        "orientation_label": "Orientation :",
-        "orientation_auto": "Auto",
-        "orientation_portrait": "Portrait",
-        "orientation_landscape": "Paysage",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
         "loading_model_label": "Chargement du modèle…",
@@ -138,10 +134,6 @@ STRINGS = {
         "keyboard_clear_all": "Clear all",
         "keyboard_layout_label": "Keyboard layout:",
         "menu_toggle_audio_info": "Show synthesis data",
-        "orientation_label": "Orientation:",
-        "orientation_auto": "Auto",
-        "orientation_portrait": "Portrait",
-        "orientation_landscape": "Landscape",
         "about_body": "Chatterbox\nEmbedded neural TTS (FastSpeech 2 + HiFi-GAN)\n"
                       "Raspberry Pi 5 -- augmentative and alternative communication (AAC) demonstrator",
         "loading_model_label": "Loading model…",

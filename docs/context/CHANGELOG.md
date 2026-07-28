@@ -15,6 +15,59 @@ state before starting new work.
 
 ---
 
+## 2026-07-28 — Layout simplification: compact header on top, keyboard fills the rest (real-hardware feedback)
+
+- What: second and final part of the same real-hardware feedback round (screenshot via WayVNC/
+  TigerVNC on the Pi5, previous entry). The screenshot showed the input row and synthesis-duration
+  info squeezed near the bottom, with the keyboard not actually filling the available space.
+  Confirmed with the user: the header (Saisie/chatbox/Synthèse + duration info) moves to a compact
+  block right at the top, and the keyboard fills 100% of the remaining space below it -- in EITHER
+  window orientation, not just one. This let the portrait/landscape keyboard-column-switching
+  machinery (`_apply_current_orientation()`, `keyboard_portrait_grid`/`landscape_keyboard_column`/
+  `landscape_keyboard_rowspan`, `_orientation_override`, `_KEYBOARD_SCREEN_SHARE`, the Settings ->
+  Advanced orientation radio picker) be deleted entirely rather than patched -- confirmed with the
+  user first, since it's a bigger, harder-to-reverse change: that machinery only ever existed so the
+  keyboard could share width with the options panel, and the options panel moved into the Sliders
+  window in an earlier phase, so there was nothing left to share space with.
+  - `chatterbox/gui/app.py`: `main_content_frame`'s header rows renumbered to a compact,
+    contiguous block right after the battery row -- input row (was row 7) -> row 1, audio
+    duration + status circle (was 8) -> row 2, the 3-slot stage-duration pool (was 9-11) -> rows
+    3-5, total synthesis duration (was 12) -> row 6, status/error label (was 13) -> row 7, GST
+    title/tokens (was 14/15+i, only if `add_GST_infos`) -> rows 8/9+i, put-away button (was
+    17+index_gst_token, leaving a since-Rejouer/Arrêter-removal-obsolete gap) -> row
+    9+index_gst_token (immediately after the header, no gap). `keyboard_area` now grids at ONE row
+    (`keyboard_row = 10 + index_gst_token`), `columnspan=max_buttons+2`, `sticky=NSEW`, and that row
+    is `main_content_frame`'s only `weight=1` row (previously row 2, back when it held the options
+    panel) -- no more `grid_propagate(False)`/explicit width-height capping, Tk just stretches
+    `keyboard_area` to fill whatever the row's weight allocates, in either window shape.
+  - Deleted: `_apply_current_orientation()`, `_on_window_configure()` +
+    `window.bind("<Configure>", ...)`, `_set_orientation_override()`, the `_orientation_override`/
+    `_refresh_orientation` globals, `_KEYBOARD_SCREEN_SHARE`, the Settings -> Advanced orientation
+    radio picker, and the `orientation_label`/`orientation_auto`/`orientation_portrait`/
+    `orientation_landscape` i18n keys (both locales) -- all genuinely dead once nothing reads them.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: real-hardware feedback (same WayVNC/TigerVNC screenshot as the previous entry).
+- Verify: full test suite (305 passed/1 skipped, unchanged). New ad hoc Tk smoke test (explicit
+  wide/landscape-shaped `1000x500` geometry) confirms: `_set_orientation_override`/
+  `_refresh_orientation`/`_KEYBOARD_SCREEN_SHARE` are all gone from the module; the Saisie label
+  sits at row 1, well above the keyboard's row; every header row is unweighted while the
+  keyboard's own row is the sole `weight=1` row; the keyboard's real on-screen height ends up
+  80% of the window's (400px of 500px) -- genuinely maximized, not just structurally weighted. A
+  real (non-mocked) 800x480 screenshot (this session's kiosk target resolution) visually confirms
+  the header sits compactly at the top (Saisie/entry/Synthèse on one line, duration info + Mettre
+  en veille right below) with the Texte/Phonèmes keyboard filling essentially all remaining height.
+- Notes/gotchas: **not verified on real Pi/Linux hardware** in this exact form (no Pi5 access this
+  session; the feedback that MOTIVATED this change came from a screenshot, not a live interactive
+  session) -- worth a real-hardware confirmation pass once available again, same stated-gap
+  convention as this session's other hardware-dependent items (Linux ffplay/Stop path, emoji
+  rendering). If a future real-hardware round finds the keyboard's letter/phoneme buttons render
+  too large or too small at the actual 800x480 kiosk resolution now that there's no explicit
+  width/height cap, that's the first place to look -- sizing is now purely a function of the
+  grid's own weighted-row allocation, not an explicit fraction like the deleted
+  `_KEYBOARD_SCREEN_SHARE` used to enforce.
+
+---
+
 ## 2026-07-28 — Merge Play/Stop into the keyboard's ▶ button, drop standalone Rejouer/Arrêter
 
 - What: first real-hardware feedback round on the landscape redesign (user regained Pi5 access via
