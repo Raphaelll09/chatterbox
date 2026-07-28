@@ -32,6 +32,17 @@ unzip
 # only needed if running with --gui (Tkinter); see embedded_tts/README.md "Avec interface graphique".
 python3-tk
 
+# GUI mood-icon chip grid (chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py's
+# GST_TOKEN_ICONS) uses plain Unicode emoji glyphs -- real-hardware check (fc-list on a Pi5
+# kiosk image) found no emoji-capable font installed at all (only dejavu/noto-mono, neither of
+# which cover the Emoji block), so every one of those 12 icons rendered as a blank box. This is a
+# cosmetic-only dependency (nothing crashes without it, the chips just show a blank glyph instead
+# of a face), not a hard requirement -- everything else in this repo (the Texte keyboard's
+# play/stop button, the battery indicator) was deliberately moved OFF font-glyph icons entirely
+# instead of depending on a package like this one (see docs/context/CHANGELOG.md, "real-hardware
+# feedback round 2").
+fonts-noto-color-emoji
+
 # i2cdetect, used to verify the optional INA226 amp-branch power sensor is wired correctly at
 # i2c-1 @ 0x40 (and doesn't collide with the IQaudio DAC at 0x4c) before a --benchmark --play run;
 # see embedded_tts/README.md "Profilage" / "Capteur INA226".

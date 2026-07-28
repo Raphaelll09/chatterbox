@@ -190,6 +190,16 @@ tts_models:
   # thread, never blocking the Tk thread.
   - label: "Piper-tts (Français)"
     backend: "piper"
+    # menu_group (real-hardware feedback: "it would make more sense that you choose [Piper] once
+    # ... and then when you choose between the Language it decides if it goes to french or
+    # english") -- entries sharing the same menu_group collapse into ONE top-level "TTS Model"
+    # menu radiobutton (chatterbox/gui/app.py's tts_model_menu construction), instead of one
+    # radiobutton per language variant. Picking that radiobutton loads whichever grouped entry
+    # matches the CURRENT locale (i18n.get_locale()) at click time; switching the "Langue" menu
+    # afterward re-resolves within the same group first (_set_language()'s own comment) instead of
+    # falling through to the first language-matching model overall, so switching Piper's language
+    # doesn't accidentally jump back to an unrelated backend (e.g. FastSpeech2).
+    menu_group: "Piper-tts"
     load_script: "load_piper"
     syn_script: "syn_piper"
     gui_script: "gui_generic_controls"
@@ -227,6 +237,7 @@ tts_models:
   - label: "Piper en_US (lessac, medium)"
     backend: "piper"
     language: "en"
+    menu_group: "Piper-tts"  # see the French Piper entry's own comment above
     load_script: "load_piper"
     syn_script: "syn_piper"
     gui_script: "gui_generic_controls"

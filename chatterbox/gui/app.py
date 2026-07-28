@@ -161,6 +161,12 @@ btn_letter_kb_play = None
 main_content_frame = None
 emotion_bar_frame = None
 
+# Compact top header row (real-hardware feedback, 2026-07-28 round 2): Saisie/chatbox/Synthèse,
+# the status light, "Mettre en veille" and the battery indicator used to sit on 3+ separate rows;
+# they're now one row inside this frame, gridded at main_content_frame's row 0. Only main_
+# content_frame's other, still-generic rows (synthesis info, status, GST, keyboard) come after it.
+header_frame = None
+
 # Set once, inside _run_gui_session()'s input-row block (input-row phase follow-up, landscape-
 # refactor plan) -- rebindable-global pattern matching _refresh_keyboard_capabilities etc. above.
 # Only set when the chatbox/entry actually exists (gui_config["keyboard_options"]["show_entry"]).
@@ -305,7 +311,13 @@ def _set_ui_state(state_name, error=None):
         # worker thread is busy playing audio); every other state: relabel back to Play, enabled
         # unless still synthesising/initialising (mirrors Synthèse's own busy-guard disable).
         if state_name == "playing":
-            btn_letter_kb_play.config(text="⏹", state="normal",
+            # "■" (black square, Geometric Shapes block), not "⏹" (Miscellaneous Technical) --
+            # real-hardware check (fontTools cmap dump against the Pi5's actual installed DejaVu
+            # Sans file) found the latter simply isn't in that font at all, unlike the Play
+            # triangle below (which IS in DejaVu Sans -- its own blank rendering was a font-
+            # selection bug, not a missing-glyph one, fixed at btn_letter_kb_play's construction
+            # in _create_letter_keyboard()).
+            btn_letter_kb_play.config(text="■", state="normal",
                                        command=lambda: dispatch(ginput.Action.STOP))
         else:
             btn_letter_kb_play.config(
@@ -670,8 +682,20 @@ def _create_letter_keyboard(master, key_board_options, layout_rows):
     # retoggles both whenever playback starts/ends, see its own comment for the full state
     # machine.
     global btn_letter_kb_play
+    # Explicitly "DejaVu Sans", not my_font's "Helvetica" (real-hardware feedback: this button
+    # rendered as a blank glyph on the Pi5 -- "Helvetica" is a generic alias Tk/fontconfig
+    # substitutes to *something* installed, and whatever it resolved to on that image doesn't
+    # have "▶"; DejaVu Sans, confirmed present and confirmed (via an offline fontTools cmap
+    # check against the actual file) to contain it, doesn't have that problem). Only this one
+    # button's font changes -- Space/Effacer/Tout effacer are plain Latin text, unaffected by
+    # whatever "Helvetica" resolves to, so there's no reason to touch their font too.
+    # A tuple, not a "family size style" string -- "DejaVu Sans" is two words, and Tk's string
+    # font spec splits on whitespace with no automatic quoting, so a bare formatted string here
+    # parses "Sans" as if it were the size (TclError: expected integer but got "Sans"). The tuple
+    # form doesn't have that ambiguity.
+    icon_font = ("DejaVu Sans", key_board_options["font_size"], "bold")
     btn_letter_kb_play = tk.Button(
-        master=frame, text="▶", font=my_font,
+        master=frame, text="▶", font=icon_font,
         command=lambda: dispatch(ginput.Action.KEY, payload=("__letter__", "play", None)),
     )
     btn_letter_kb_play.grid(row=control_row, column=8, columnspan=2, sticky=tk.NSEW,
@@ -681,6 +705,14 @@ def _create_letter_keyboard(master, key_board_options, layout_rows):
         _btn.bind("<Configure>", _wrap_label_to_width)
 
     return frame, grid_buttons
+
+
+def _tts_menu_display_name(tts_model):
+    """Display name for the top-level "TTS Model" menu's radiobuttons (real-hardware feedback:
+    Piper's fr/en variants collapse into one "Piper-tts" entry instead of two separate ones --
+    config_tts.yaml's own comment on menu_group). An entry with no menu_group just shows its own
+    label, unchanged from before menu_group existed."""
+    return tts_model.get("menu_group") or tts_model["label"]
 
 
 def create_gui(tts_config, device, default_tts, default_vocoder):
@@ -707,6 +739,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     global window
     global main_content_frame
     global emotion_bar_frame
+    global header_frame
     global lbl_gst_infos
     global canvas_circle
     global canvas_circle_figure
@@ -839,16 +872,46 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # (_select_tts_model() above) specifically because this promotion makes switching far more
     # frequent than it was buried in a dialog.
     tts_model_menu = tk.Menu(menubar, tearoff=0)
-    tts_model_var = tk.StringVar(value=tts_config["tts_models"][default_tts]["label"])
+    tts_model_var = tk.StringVar(value=_tts_menu_display_name(tts_config["tts_models"][default_tts]))
 
     def _on_tts_model_menu_select(tts_model, id_button):
-        tts_model_var.set(tts_model["label"])
+        tts_model_var.set(_tts_menu_display_name(tts_model))
         _select_tts_model(tts_model, id_button)
 
+    def _resolve_grouped_model(group_members):
+        """group_members: [(1-based index, tts_model), ...] sharing one menu_group. Picks
+        whichever member's own "language" (defaulting to "fr") matches the CURRENTLY active
+        locale, falling back to the group's first member if none match (shouldn't happen --
+        config_tts.yaml gives exactly one member per configured GUI_config.languages entry)."""
+        current_locale = i18n.get_locale()
+        return next((pair for pair in group_members
+                     if pair[1].get("language", "fr") == current_locale), group_members[0])
+
+    # Entries sharing a menu_group (Piper's fr/en variants -- config_tts.yaml's own comment)
+    # collapse into ONE radiobutton, at the position of the group's first member, instead of one
+    # per language variant (real-hardware feedback: "you can choose either French Piper or US
+    # Piper, it would make more sense that you choose [it] once"). Clicking it resolves which
+    # member to actually load from the CURRENT locale via _resolve_grouped_model() above.
+    _seen_menu_groups = set()
     for index, tts_model in enumerate(tts_config["tts_models"], start=1):
-        tts_model_menu.add_radiobutton(
-            label=tts_model["label"], variable=tts_model_var, value=tts_model["label"],
-            command=lambda m=tts_model, i=index: _on_tts_model_menu_select(m, i))
+        group = tts_model.get("menu_group")
+        if group is not None:
+            if group in _seen_menu_groups:
+                continue
+            _seen_menu_groups.add(group)
+            group_members = [(i, m) for i, m in enumerate(tts_config["tts_models"], start=1)
+                              if m.get("menu_group") == group]
+
+            def _on_group_select(members=group_members):
+                resolved_index, resolved_model = _resolve_grouped_model(members)
+                _on_tts_model_menu_select(resolved_model, resolved_index)
+
+            tts_model_menu.add_radiobutton(
+                label=group, variable=tts_model_var, value=group, command=_on_group_select)
+        else:
+            tts_model_menu.add_radiobutton(
+                label=tts_model["label"], variable=tts_model_var, value=tts_model["label"],
+                command=lambda m=tts_model, i=index: _on_tts_model_menu_select(m, i))
     menubar.add_cascade(label=i18n.t("menu_tts_model"), menu=tts_model_menu)
 
     global _set_theme
@@ -884,18 +947,31 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # still module-global (exposed for tests/smoke scripts); only where it's invoked from moved.
 
     def _set_language(code):
-        """Switches chatterbox/gui/i18n.py's locale, then restarts the whole window onto the
-        first tts_models[] entry whose own "language" field matches -- not a live re-label.
-        Nearly every widget below sets its text once, as a literal i18n.t(...) call, at creation
-        time (unlike the TTS options panel, which already rebuilds on every model switch, or
-        Settings, which rebuilds fresh every open) -- there's no existing refresh mechanism for
-        static text, and threading one through this whole function for a rarely-used action isn't
-        worth it. Reusing "destroy the window and rebuild from scratch with a new default_tts" is
-        exactly what a fresh `--gui --default_tts N` launch already does correctly."""
+        """Switches chatterbox/gui/i18n.py's locale, then restarts the whole window onto a
+        tts_models[] entry whose own "language" field matches -- not a live re-label. Nearly every
+        widget below sets its text once, as a literal i18n.t(...) call, at creation time (unlike
+        the TTS options panel, which already rebuilds on every model switch, or Settings, which
+        rebuilds fresh every open) -- there's no existing refresh mechanism for static text, and
+        threading one through this whole function for a rarely-used action isn't worth it. Reusing
+        "destroy the window and rebuild from scratch with a new default_tts" is exactly what a
+        fresh `--gui --default_tts N` launch already does correctly.
+
+        Prefers a match sharing the CURRENTLY active model's own menu_group (real-hardware
+        feedback: Piper's fr/en variants collapse into one "Piper-tts" TTS Model menu entry --
+        config_tts.yaml's own comment) before falling back to the first language-matching model
+        overall -- otherwise switching Piper's language would jump to whichever model happens to
+        be first in tts_models[] for that language (e.g. back to FastSpeech2), not stay on Piper."""
         nonlocal pending_restart_tts_index
         i18n.set_locale(code)
-        target = next((i for i, m in enumerate(tts_config["tts_models"])
-                        if m.get("language", "fr") == code), None)
+        active_group = tts_config["tts_models"][state.TTS_INDEX].get("menu_group")
+        target = None
+        if active_group is not None:
+            target = next((i for i, m in enumerate(tts_config["tts_models"])
+                            if m.get("menu_group") == active_group
+                            and m.get("language", "fr") == code), None)
+        if target is None:
+            target = next((i for i, m in enumerate(tts_config["tts_models"])
+                            if m.get("language", "fr") == code), None)
         if target is not None:
             pending_restart_tts_index = target
             window.destroy()
@@ -980,27 +1056,55 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     for _col in range(1, max_buttons + 2):
         main_content_frame.grid_columnconfigure(_col, weight=1)
 
-    # Battery percentage (DFRobot FIT0992 UPS HAT, chatterbox/power/battery.py) -- row 0, the space
-    # freed up when the TTS/vocoder model buttons moved into Settings -> Advanced. Silently hidden
-    # (grid_remove()) whenever read_battery() returns None: no hardware/smbus2 present is the
-    # normal case for any checkout without this HAT, not an error.
+    # Compact top header row (real-hardware feedback, 2026-07-28 round 2): Saisie/chatbox/
+    # Synthèse, the status light, "Mettre en veille" and the battery indicator used to sit on 3+
+    # separate rows -- one row.frame holds all of them side by side now, gridded at main_content_
+    # frame's row 0. Column 1 (the chatbox entry) is the only one that stretches; everything else
+    # keeps its natural width, same convention as _input_frame's own internal 2-column layout.
+    header_frame = tk.Frame(master=main_content_frame)
+    header_frame.grid(row=0, column=0, columnspan=max_buttons+2, sticky=tk.EW)
+    header_frame.grid_columnconfigure(1, weight=1)
+
+    # Battery percentage (DFRobot FIT0992 UPS HAT, chatterbox/power/battery.py) -- far-right column
+    # of the header row, freed up when the TTS/vocoder model buttons moved into Settings ->
+    # Advanced. Silently hidden (grid_remove()) whenever read_battery() returns None: no hardware/
+    # smbus2 present is the normal case for any checkout without this HAT, not an error. The
+    # indicator itself is a small drawn Canvas (same technique as canvas_circle's status light
+    # below), not a "\U0001F50B" glyph -- real-hardware check (fc-list on the Pi5 image) found no
+    # emoji-capable font installed at all, so that glyph rendered as a blank box; a drawn icon has
+    # no font dependency to break.
     lbl_battery = None
+    canvas_battery = None
     if main_panel_config.get("add_battery_info", True):
-        lbl_battery = tk.Label(master=main_content_frame, text="")
-        # sticky=tk.E (landscape spec Sec3: "far right") -- the label still spans the full row
-        # (columnspan unchanged) so its own hidden/shown grid() calls don't shift any other
-        # column's width, but it now hugs the row's right edge instead of centering across it.
-        lbl_battery.grid(row=0, column=0, columnspan=max_buttons+2, sticky=tk.E)
-        lbl_battery.grid_remove()
+        battery_frame = tk.Frame(master=header_frame)
+        battery_frame.grid(row=0, column=5, sticky=tk.E, padx=(8, 0))
+        canvas_battery = tk.Canvas(master=battery_frame, width=22, height=12, highlightthickness=0)
+        canvas_battery.grid(row=0, column=0)
+        lbl_battery = tk.Label(master=battery_frame, text="")
+        lbl_battery.grid(row=0, column=1, padx=(2, 0))
+        battery_frame.grid_remove()
+
+        def _draw_battery_icon(percent, fg_color):
+            canvas_battery.delete("all")
+            # Outline (18x10) + a small positive-terminal nub, then an inner fill bar sized to
+            # `percent` -- same shape convention as any generic low-battery icon, no glyph/font
+            # involved at all.
+            canvas_battery.create_rectangle(1, 1, 18, 11, outline=fg_color)
+            canvas_battery.create_rectangle(19, 4, 21, 8, fill=fg_color, outline=fg_color)
+            fill_w = max(0, min(16, round(16 * percent / 100)))
+            if fill_w > 0:
+                canvas_battery.create_rectangle(2, 2, 2 + fill_w, 10, fill=fg_color, outline="")
 
         def _poll_battery():
             reading = battery.read_battery()
             if reading is None:
-                lbl_battery.grid_remove()
+                battery_frame.grid_remove()
             else:
-                lbl_battery["fg"] = theme.color("battery_low_fg") if reading["percent"] < 20 else theme.color("battery_ok_fg")
-                lbl_battery["text"] = "\U0001F50B {:.0f}%".format(reading["percent"])
-                lbl_battery.grid()
+                fg_color = theme.color("battery_low_fg") if reading["percent"] < 20 else theme.color("battery_ok_fg")
+                lbl_battery["fg"] = fg_color
+                lbl_battery["text"] = "{:.0f}%".format(reading["percent"])
+                _draw_battery_icon(reading["percent"], fg_color)
+                battery_frame.grid()
             window.after(_BATTERY_POLL_MS, _poll_battery)
 
         window.after(500, _poll_battery)
@@ -1057,8 +1161,9 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         gui_script = globals()[tts_model["gui_script"]]
         state.update_selected_tts(id_button)
         gui_script(tts_model, main_panel_config)
-        tts_model_var.set(tts_model["label"])  # keeps the top-level TTS Model menu's radio in
-        # sync regardless of which picker (this menu or Settings -> Advanced) triggered the switch.
+        tts_model_var.set(_tts_menu_display_name(tts_model))  # keeps the top-level TTS Model
+        # menu's radio in sync regardless of which picker (this menu, its group-resolved variant,
+        # or Settings -> Advanced) triggered the switch.
         if _refresh_keyboard_capabilities is not None:
             _refresh_keyboard_capabilities()
         if _refresh_speaker_menu is not None:
@@ -1189,7 +1294,10 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     state.update_selected_tts(default_tts + 1)
     state.update_selected_vocoder(default_vocoder + 1)
     _loading_placeholder = tk.Label(master=main_content_frame, text=i18n.t("loading_model_label"), fg=theme.color("muted_fg"))
-    _loading_placeholder.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
+    # Same cell header_frame itself occupies (row 0) -- a harmless transient overlap, same
+    # convention as before: this placeholder is destroy()'d the moment the load finishes
+    # (_finish_initial_model_load()), well before the user has time to act on anything.
+    _loading_placeholder.grid(row=0, column=0, columnspan=max_buttons+2, sticky=tk.NSEW)
 
     # Add input field ("chatbox" -- input-row phase, landscape-refactor plan): an eye-icon toggle
     # masks the composed text (password-style, Entry's own native `show=` option) so a bystander
@@ -1199,7 +1307,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # outer window's column count/weights (main_panel_config-driven, see the responsive-layout
     # comment above) don't need to change for one extra button.
     _MASK_CHAR = "•"
-    _input_frame = tk.Frame(master=main_content_frame)
+    _input_frame = tk.Frame(master=header_frame)
     _input_frame.grid_columnconfigure(0, weight=1)
     ent_text_input = tk.Entry(master=_input_frame, width=main_panel_config["input_width"])
     ent_text_input.grid(row=0, column=0, sticky=tk.EW)
@@ -1223,18 +1331,18 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     btn_toggle_chatbox_mask.grid(row=0, column=1, sticky=tk.E, padx=(4, 0))
 
     btn_syn_audio = tk.Button(
-        master=main_content_frame,
+        master=header_frame,
         text=i18n.t("synthesize_button"),
     )
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
-        lbl_text_input = tk.Label(master=main_content_frame, text=i18n.t("input_text_label"))
-        lbl_text_input.grid(row=1, column=0, pady=4)
+        lbl_text_input = tk.Label(master=header_frame, text=i18n.t("input_text_label"))
+        lbl_text_input.grid(row=0, column=0, padx=(0, 4))
 
-        _input_frame.grid(row=1, column=1, sticky=tk.EW)
+        _input_frame.grid(row=0, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
-        btn_syn_audio.grid(row=1, column=2)
+        btn_syn_audio.grid(row=0, column=2, padx=(4, 4))
 
         # Chatbox visibility (Tools menu, input-row-phase follow-up): hides the label + input row
         # together, not just the label or just the entry alone -- persisted the same way theme/
@@ -1263,82 +1371,93 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         global _refresh_chatbox_visibility
         _refresh_chatbox_visibility = _toggle_chatbox_visibility
 
+    # Status light -- part of the compact header row now (real-hardware feedback: "aligned with
+    # the battery indicator and the green Synthesis light"), not its own row next to the duration
+    # labels below.
+    canvas_circle = tk.Canvas(master=header_frame, width=20, height=20)
+    canvas_circle.grid(row=0, column=3, padx=(4, 4))
+    canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill=theme.color("status_idle"))
+
     # Add audio infos
     if main_panel_config["add_audio_infos"]:
+        # Synthesis-data row (real-hardware feedback: "they should be all aligned on top of the
+        # screen") -- audio duration + the stage-duration pool + the total-synthesis-duration
+        # label used to be 5 stacked rows; they're packed side by side in one small-font row now,
+        # directly under the header, instead of eating 5 rows' worth of height before the keyboard.
+        # update_audio_infos() below only ever calls .grid()/.grid_remove() on these labels (never
+        # re-parents or re-positions them), so packing them here instead of grid()-ing them
+        # individually is a purely cosmetic change from that function's point of view.
+        _SYNTH_INFO_FONT = ("TkDefaultFont", 8)
+        synth_info_frame = tk.Frame(master=main_content_frame)
+        synth_info_frame.grid(row=1, column=0, columnspan=max_buttons+2, sticky=tk.W)
 
-        lbl_audio_infos_audio_duration = tk.Label(master=main_content_frame, text=i18n.t("audio_duration_label", duration=0.0))
-        lbl_audio_infos_audio_duration.grid(row=2, column=0, columnspan=max_buttons+2)
-
-        # Add a Canvas next to the lbl_audio_infos_audio_duration to draw a circle
-        canvas_circle = tk.Canvas(master=main_content_frame, width=20, height=20)
-        canvas_circle.grid(row=2, column=2)  # Positioned next to the label
-        # Create a circle on the canvas
-        canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill=theme.color("status_idle"))
+        lbl_audio_infos_audio_duration = tk.Label(
+            master=synth_info_frame, text=i18n.t("audio_duration_label", duration=0.0),
+            font=_SYNTH_INFO_FONT)
+        lbl_audio_infos_audio_duration.pack(side=tk.LEFT, padx=(0, 6))
 
         # Pool of generic stage-duration rows (interchangeable-backend GUI refactor) -- assigned
         # dynamically to whichever stage keys AudioResult.stage_durations (chatterbox/synth.py)
         # actually contains at synthesis time, instead of fixed named tts/vocoder/denoiser labels.
         # 3 slots covers every pipeline shape this repo currently anticipates (two-stage: tts +
-        # vocoder + denoiser; monolithic: tts + denoiser, one slot unused/hidden) without having to
-        # renumber every row below (replay/put-away/keyboard) for a rarer, wider pipeline.
-        # grid_remove()'d immediately -- real-hardware feedback: gridded-but-blank rows still
-        # claim their row height, leaving a dead, empty-looking gap before any synthesis has run
-        # (and stealing height the options panel's own weighted row could otherwise use, "as the
-        # synthesis data has been reduced, it may be useful to extend the upper window").
-        # update_audio_infos() grids whichever of these are actually in use once real data exists.
+        # vocoder + denoiser; monolithic: tts + denoiser, one slot unused/hidden). pack_forget()/
+        # pack() (not grid_remove()/grid(), now that these live in a pack()-managed frame) is what
+        # update_audio_infos() below actually calls to hide/show a pool slot -- real-hardware
+        # feedback: blank-but-mapped rows still claimed height even before this change.
         _STAGE_POOL_SIZE = 3
         lbl_audio_infos_stage_pool = []
         for _pool_i in range(_STAGE_POOL_SIZE):
-            _lbl = tk.Label(master=main_content_frame, text="")
-            _lbl.grid(row=3 + _pool_i, column=0, columnspan=max_buttons+2)
-            _lbl.grid_remove()
+            _lbl = tk.Label(master=synth_info_frame, text="", font=_SYNTH_INFO_FONT)
             lbl_audio_infos_stage_pool.append(_lbl)
 
-        lbl_audio_infos_synthesis_duration = tk.Label(master=main_content_frame, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
-        lbl_audio_infos_synthesis_duration.grid(row=6, column=0, columnspan=max_buttons+2)
+        lbl_audio_infos_synthesis_duration = tk.Label(
+            master=synth_info_frame, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0),
+            font=_SYNTH_INFO_FONT)
+        lbl_audio_infos_synthesis_duration.pack(side=tk.LEFT, padx=(6, 0))
 
         def _toggle_audio_info_visibility(visible_var):
             active_pool_labels = lbl_audio_infos_stage_pool[:_audio_info_active_stage_count]
-            labels = (lbl_audio_infos_audio_duration, *active_pool_labels,
-                      lbl_audio_infos_synthesis_duration)
             if visible_var.get():
-                for lbl in labels:
-                    lbl.grid()
+                lbl_audio_infos_audio_duration.pack(
+                    side=tk.LEFT, padx=(0, 6), before=lbl_audio_infos_synthesis_duration)
+                for lbl in active_pool_labels:
+                    lbl.pack(side=tk.LEFT, padx=4, before=lbl_audio_infos_synthesis_duration)
+                lbl_audio_infos_synthesis_duration.pack(side=tk.LEFT, padx=(6, 0))
             else:
-                for lbl in labels:
-                    lbl.grid_remove()
+                for lbl in (lbl_audio_infos_audio_duration, *active_pool_labels,
+                            lbl_audio_infos_synthesis_duration):
+                    lbl.pack_forget()
 
     # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- grid_remove()'d
     # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
     # blank row for the common no-error case.
     lbl_status = tk.Label(master=main_content_frame, text="", fg=theme.color("error_fg"))
-    lbl_status.grid(row=7, column=0, columnspan=max_buttons+2)
+    lbl_status.grid(row=2, column=0, columnspan=max_buttons+2)
     lbl_status.grid_remove()
 
     # Add audio infos
+    _next_content_row = 3
     if main_panel_config["add_GST_infos"]:
         lbl_gst_infos = {}
         label_gst_title = tk.Label(master=main_content_frame, text=i18n.t("gst_weights_title"))
-        label_gst_title.grid(row=8, column=0, columnspan=max_buttons+2)
-        for index_gst_token, gst_token in enumerate([*tts_config['tts_models'][0]['gst_token_list']]):
+        label_gst_title.grid(row=_next_content_row, column=0, columnspan=max_buttons+2)
+        _next_content_row += 1
+        for gst_token in tts_config['tts_models'][0]['gst_token_list']:
             lbl_gst_infos[gst_token] = tk.Label(master=main_content_frame, text="{}: 0.00".format(gst_token))
-            lbl_gst_infos[gst_token].grid(row=9+index_gst_token, column=0, columnspan=max_buttons+2)
-    else:
-        index_gst_token = 0
+            lbl_gst_infos[gst_token].grid(row=_next_content_row, column=0, columnspan=max_buttons+2)
+            _next_content_row += 1
 
     # No standalone Rejouer/Arrêter buttons anymore (real-hardware feedback: redundant once the
     # Texte-mode keyboard's own Play/Stop toggle exists, btn_letter_kb_play in
     # _create_letter_keyboard() -- see _set_ui_state()'s own comment for the full state machine).
 
-    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt), right
-    # after whatever header content precedes it (GST info if enabled, otherwise directly after the
-    # status/error label) and before the keyboard (keyboard_row below), which now always follows
-    # immediately -- layout-simplification phase removed the old fixed gap this used to leave for
-    # rows that no longer exist (the standalone Rejouer/Arrêter buttons).
+    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt). Part
+    # of the compact header row now (real-hardware feedback, 2026-07-28 round 2: "aligned with the
+    # battery indicator and the green Synthesis light"), not its own row above the keyboard.
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(master=main_content_frame, text=i18n.t("put_away_button"))
-        btn_put_away.grid(row=9+index_gst_token, column=0, columnspan=max_buttons+2)
+        btn_put_away = tk.Button(master=header_frame, text=i18n.t("put_away_button"))
+        btn_put_away.grid(row=0, column=4, padx=(4, 4))
 
     # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
     # area (row 18, keyboard at 19) and read as cluttered. Moved into the "Paramètres" menu entry
@@ -1488,7 +1607,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             # row, no grid_propagate(False)/explicit width-height capping -- Tk stretches
             # keyboard_area to fill whatever the row's weight actually allocates, in either window
             # shape.
-            keyboard_row = 10 + index_gst_token
+            keyboard_row = _next_content_row
             keyboard_area.grid(row=keyboard_row, column=0, columnspan=max_buttons+2, sticky=tk.NSEW)
             main_content_frame.grid_rowconfigure(keyboard_row, weight=1)
 
@@ -1563,9 +1682,13 @@ def update_audio_infos(audio_duration, stage_durations):
                 lbl["text"] = i18n.t(
                     "stage_duration_label", name=display_name, duration=stage_duration,
                     percent=100*stage_duration/audio_duration)
-                lbl.grid()
+                # before=... (not a bare pack()) -- pack() with no position hint always appends a
+                # newly-managed slave at the END of the packing order, which would land a freshly
+                # re-shown pool label after the already-packed synthesis-duration label instead of
+                # before it.
+                lbl.pack(side=tk.LEFT, padx=4, before=lbl_audio_infos_synthesis_duration)
             else:
-                lbl.grid_remove()
+                lbl.pack_forget()
 
         total_inference_duration = sum(stage_durations.values())
         lbl_audio_infos_synthesis_duration["text"] = i18n.t(

@@ -78,7 +78,15 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     single-speaker entry (no `speakers:` key — `describe_controls()` falls back to the legacy
     per-voice `speaker_id_map` path for any model config without one). Each `tts_models[i]` entry
     also carries a `language` field (defaults to `"fr"` when absent) — lessac is the first entry
-    with `language: "en"`, letting the GUI's "Langue" menu (below) find it. See its own `README.md`
+    with `language: "en"`, letting the GUI's "Langue" menu (below) find it. Both Piper entries also
+    carry a shared `menu_group: "Piper-tts"` (real-hardware feedback round 2 — "you can choose
+    either french piper or US piper, it would make more sense that you choose [it] once"):
+    `gui/app.py`'s top-level "TTS Model" menu collapses every entry sharing a `menu_group` into
+    ONE radiobutton, resolving which grouped member to actually load from the currently active
+    locale at click time (`_resolve_grouped_model()`); `_set_language()` prefers a same-`menu_group`
+    match over the first language-matching model overall, so switching Piper's language stays on
+    Piper instead of falling back to FastSpeech2. Settings → Advanced still lists both Piper
+    variants individually (an intentional finer-detail view, not grouped). See its own `README.md`
     for provenance/licence and
     `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what the original integration found and fixed in
     the contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in

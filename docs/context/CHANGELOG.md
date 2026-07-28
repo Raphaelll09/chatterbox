@@ -15,6 +15,95 @@ state before starting new work.
 
 ---
 
+## 2026-07-28 — Real-hardware feedback round 2: one-row header, drawn icons, unified Piper menu entry
+
+- What: a second live WayVNC/TigerVNC screenshot from the Pi5 (after the previous entry's layout
+  simplification already shipped) surfaced three more concrete issues, all fixed this round:
+  1. "Saisie :", the Synthèse button and "Mettre en veille" were still on 3+ separate rows,
+     visually disconnected from the battery indicator and the green status light even though all
+     five are conceptually one header. They're now one row, inside a new `header_frame`
+     (`chatterbox/gui/app.py`, gridded at `main_content_frame` row 0): Saisie label (col 0),
+     the chatbox `_input_frame` (col 1, the only stretching column), Synthèse (col 2), the status
+     circle (col 3), "Mettre en veille" (col 4), the battery indicator (col 5, far right). The
+     audio-duration / stage-duration-pool / total-synthesis-duration labels ("the Synthesis data
+     ... should be all aligned on top of the screen") moved out of 5 stacked rows into one
+     `synth_info_frame` row (row 1) with a smaller font, its labels `pack()`-ed side by side
+     instead of `grid()`-ed one per row -- `update_audio_infos()` and `_toggle_audio_info_
+     visibility()` switched from `.grid()`/`.grid_remove()` to `.pack(..., before=lbl_audio_infos_
+     synthesis_duration)`/`.pack_forget()` for the pool labels accordingly (mixing grid and pack
+     children under the same parent is a hard Tk error, and a bare `.pack()` with no `before=`
+     appends at the end of the current pack order, not where the label used to sit). Every row
+     below (status/error, GST, keyboard) shifted up to fill the header/put-away rows that no
+     longer exist; `keyboard_row` is now a running `_next_content_row` counter instead of
+     hardcoded arithmetic on `index_gst_token` (that old arithmetic put the put-away button on the
+     SAME row as the last GST token label whenever `add_GST_infos` was enabled -- latent, never
+     hit since that flag defaults `False`, fixed as a side effect of the rewrite, not separately).
+  2. "there is no play/stop triangle, there is no battery icon either" -- confirmed via `ssh pi5`
+     and `fc-list` that the Pi5 image has NO emoji-capable font installed at all (only dejavu/
+     noto-mono), and via an offline `fontTools` cmap dump against the exact installed `DejaVuSans.ttf`
+     that "▶" (U+25B6) IS in that font but "⏹" (U+23F9) is NOT, while "■" (U+25A0) is. Two
+     separate root causes, two separate fixes: (a) the Play button's font was `"Helvetica {size}
+     bold"` (a generic alias Tk/fontconfig substitutes to *something* installed -- whatever it
+     resolved to on that image doesn't have "▶", even though DejaVu Sans does) -- pinned that one
+     button's font to an explicit `("DejaVu Sans", size, "bold")` **tuple** (a
+     `"DejaVu Sans {size} bold"` *string* first attempt threw `TclError: expected integer but got
+     "Sans"` -- Tk's string font spec splits on whitespace with no quoting, so a two-word family
+     name breaks it; the tuple form has no such ambiguity) in `_create_letter_keyboard()`; (b) the
+     Stop glyph changed from "⏹" to "■" (`_set_ui_state()`) since no font fix helps a glyph that
+     isn't in the font at all. (c) The battery indicator dropped its "\U0001F50B" emoji glyph
+     entirely, replaced with a small drawn `tk.Canvas` icon (outline + terminal nub + a fill bar
+     sized to the actual charge %) -- same "draw it, don't depend on a font" technique the status
+     circle already used, so it has no font dependency to break regardless of what's installed.
+     Also added `fonts-noto-color-emoji` to `apt-packages-pi.txt` (commented as cosmetic-only) so
+     the GST mood-icon chip grid's 12 emoji faces (added last session, confirmed broken by the
+     same `fc-list` check) have a real font to render from -- not applied to play/stop/battery,
+     which were deliberately moved off font glyphs instead.
+  3. "When choosing the TTS Model, you can choose either french piper or US piper, it would make
+     more sense that you choose once piper and then when you choose between the Language it
+     decides if it goes to french or english" -- added a `menu_group` field to both Piper
+     `tts_models[]` entries in `config_tts.yaml` (`"Piper-tts"`, same value for both the fr and en
+     entries). `chatterbox/gui/app.py`'s top-level "TTS Model" menu construction now collapses
+     every entry sharing a `menu_group` into ONE radiobutton (label = the group name, first-seen
+     position), instead of one per language variant; picking it resolves, at click time, which
+     grouped member matches the CURRENTLY active locale (`i18n.get_locale()`) via a new
+     `_resolve_grouped_model()` closure, then loads that one through the existing
+     `_select_tts_model()` background-load path ("even if it takes more time to load" -- the user
+     already confirmed that cost is fine). `_set_language()` (the "Langue" menu handler) now
+     prefers a match sharing the ACTIVE model's own `menu_group` before falling back to the first
+     language-matching model overall -- without this, switching Piper from French to English would
+     have landed back on whichever model is FIRST in `tts_models[]` for French when switching back
+     (FastSpeech2, not Piper), since the old logic had no concept of "stay in the same family".
+     `_tts_menu_display_name()` (new small module-level helper) is what both the menu's initial
+     `tts_model_var` value and every later `.set()` call (`_finish_select_tts_model()`) go through,
+     so the group name (not the specific variant's own label) is what stays highlighted regardless
+     of which picker (this menu, its own group-resolved click, or Settings -> Advanced, which still
+     lists both Piper variants individually -- an intentional finer-detail view, not touched here)
+     triggered the switch.
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`, `apt-packages-pi.txt`.
+- Why: second round of the same real-hardware feedback loop (WayVNC/TigerVNC screenshot from the
+  Pi5) as the previous entry -- concrete visual/behavioral issues only visible once actually
+  looking at the device, not previously testable from a PC checkout with no Pi-matching font set.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged count --
+  no test files needed updating, this was all GUI-construction/config plumbing). Two new ad hoc Tk
+  smoke tests (mocked model loading, no pretrained weights, not part of the pytest suite):
+  `header_consolidation_smoke.py` (header_frame contains Saisie/Synthèse/circle/put-away; the
+  synth-info pack()/pack_forget() reflow doesn't crash across repeated stage-count changes; the
+  Play/Stop button's font and glyphs are exactly as described above) and
+  `piper_menu_group_smoke.py` (two `menu_group`-sharing fake models collapse into one menu entry;
+  clicking it loads the locale-matching member; the `_set_language()` group-aware resolution logic
+  picks the OTHER grouped member, not an unrelated model, when checked directly). `ssh pi5` +
+  `fc-list`/an offline `fontTools` cmap check (both read-only, no changes made on the device itself
+  beyond a throwaway venv used for the cmap check and removed immediately after) is what grounded
+  the icon-font root-cause analysis in this entry, instead of guessing.
+- Notes/gotchas: still NOT verified by actually looking at the live Pi5 screen again in this
+  session -- next real-hardware check should confirm the header row doesn't feel too cramped at
+  the real kiosk window width, and that `fonts-noto-color-emoji` (once someone re-runs
+  `scripts/setup_pi.sh` or installs it manually) actually fixes the GST mood-icon chips as
+  expected -- not verified here, since installing packages on the user's live device wasn't done
+  as part of this change (only a throwaway diagnostic venv, removed after use).
+
+---
+
 ## 2026-07-28 — Layout simplification: compact header on top, keyboard fills the rest (real-hardware feedback)
 
 - What: second and final part of the same real-hardware feedback round (screenshot via WayVNC/
