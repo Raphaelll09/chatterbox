@@ -175,6 +175,19 @@ btn_stop_audio = None
 main_content_frame = None
 emotion_bar_frame = None
 
+# Set once, inside _run_gui_session()'s input-row block (input-row phase follow-up, landscape-
+# refactor plan) -- rebindable-global pattern matching _refresh_orientation etc. above. Only set
+# when the chatbox/entry actually exists (gui_config["keyboard_options"]["show_entry"]).
+_refresh_chatbox_visibility = None
+
+# Single-instance Sliders Toplevel (sliders-window phase, landscape-refactor plan) -- mirrors
+# chatterbox/gui/settings.py's own _window/is_open()/close() single-instance pattern, except this
+# one is hidden (withdraw()), never destroyed, on close: slider VALUES must survive across
+# show/hide (unlike Settings' own fields, which legitimately re-read from a persisted file every
+# open). Rebuilt fresh -- old one destroyed first -- every gui_generic_controls() call (model
+# switch), same lifecycle the options panel already had before this phase.
+_sliders_window = None
+
 # Set once, near the top of create_gui(), to a closure that builds the Settings -> Advanced
 # model-picker widgets on demand (see create_gui()'s own comment for why this is dependency-
 # injected into settings.py rather than that module importing this one).
@@ -489,6 +502,25 @@ def _toggle_settings():
 
 def _show_about():
     messagebox.showinfo(i18n.t("about_title"), i18n.t("about_body"))
+
+
+def _toggle_sliders_window():
+    """Tools menu command (sliders-window phase, landscape-refactor plan). Shows/hides (not opens/
+    closes) the sliders Toplevel gui_generic_controls() builds -- withdraw() rather than destroy()
+    on hide, so slider positions/StyleTag text survive across repeated show/hide the same way they
+    already survive for as long as the model stays loaded today; re-reading fresh from
+    describe_controls() defaults on every hide (Settings' own approach) would silently reset an
+    AAC user's in-progress pitch/style tweaks each time they closed the window, an active UX
+    regression, not just a missed nicety. No-op if the active backend declared no sliders/text
+    controls at all (the window still exists -- gui_generic_controls() always builds one -- just
+    empty; not worth special-casing away)."""
+    if _sliders_window is None or not _sliders_window.winfo_exists():
+        return
+    if _sliders_window.winfo_viewable():
+        _sliders_window.withdraw()
+    else:
+        _sliders_window.deiconify()
+        _sliders_window.lift()
 
 
 def _set_orientation_override(value):
@@ -826,19 +858,25 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     if main_panel_config.get("add_settings_button", True):
         menubar.add_command(label=i18n.t("menu_settings"), command=_toggle_settings)
 
-    # Tools: today just the synthesis-data-visibility toggle (relocated here from its own top-level
-    # checkbutton) -- Sec3.1's other Tools item, a chatbox-visibility toggle, doesn't exist yet
-    # (that lands with the input-row phase) and will be added into this same cascade then, not a
-    # second one.
+    # Tools: synthesis-data visibility (relocated here from its own top-level checkbutton),
+    # chatbox visibility (input-row-phase follow-up), and the Sliders window toggle
+    # (sliders-window phase) -- all forward references (command only actually runs on a later user
+    # click, by which point the widgets/window it touches are long since created), same convention
+    # _build_advanced_settings already uses for widgets built even later than the menu itself.
     tools_menu = tk.Menu(menubar, tearoff=0)
     if main_panel_config["add_audio_infos"]:
         # Show/hide the synthesis timing-breakdown labels (real-hardware request: "capacity to
-        # hide the synthesis data"). Wired here (before the labels themselves exist, further down
-        # in this function) the same way _build_advanced_settings is: the command only actually
-        # runs on a later user click, by which point the labels are long since created.
+        # hide the synthesis data").
         audio_info_visible = tk.BooleanVar(value=True)
         tools_menu.add_checkbutton(label=i18n.t("menu_toggle_audio_info"), variable=audio_info_visible,
                                     command=lambda: _toggle_audio_info_visibility(audio_info_visible))
+    if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
+        chatbox_visible_var = tk.BooleanVar(
+            value=bool(_persisted_gui_prefs.get("show_chatbox", True)))
+        tools_menu.add_checkbutton(
+            label=i18n.t("menu_toggle_chatbox"), variable=chatbox_visible_var,
+            command=lambda: _refresh_chatbox_visibility(chatbox_visible_var))
+    tools_menu.add_command(label=i18n.t("menu_sliders"), command=_toggle_sliders_window)
     menubar.add_cascade(label=i18n.t("menu_tools"), menu=tools_menu)
 
     # TTS Model: promoted from Settings -> Advanced-only to a first-class top-level menu (still ALSO
@@ -1260,12 +1298,40 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     )
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
-        lbl_text_input = tk.Label(master=main_content_frame, text=i18n.t("input_text_label")).grid(row=7, column=0, pady = 4)
+        lbl_text_input = tk.Label(master=main_content_frame, text=i18n.t("input_text_label"))
+        lbl_text_input.grid(row=7, column=0, pady=4)
 
         _input_frame.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
 
         btn_syn_audio.grid(row=7, column=2)
+
+        # Chatbox visibility (Tools menu, input-row-phase follow-up): hides the label + input row
+        # together, not just the label or just the entry alone -- persisted the same way theme/
+        # keyboard-layout/mask already are. Applied once here to whatever was last chosen; live
+        # toggling is _toggle_chatbox_visibility() below (wired to the Tools menu checkbutton,
+        # built earlier in this function via a forward reference, same convention as
+        # _toggle_audio_info_visibility()).
+        def _toggle_chatbox_visibility(visible_var):
+            visible = visible_var.get()
+            if visible:
+                lbl_text_input.grid()
+                _input_frame.grid()
+            else:
+                lbl_text_input.grid_remove()
+                _input_frame.grid_remove()
+            try:
+                settings.write_gui_prefs(show_chatbox=visible)
+            except OSError as exc:
+                print("[gui] could not persist chatbox visibility preference: {}".format(exc),
+                      file=sys.stderr)
+
+        if not _persisted_gui_prefs.get("show_chatbox", True):
+            lbl_text_input.grid_remove()
+            _input_frame.grid_remove()
+
+        global _refresh_chatbox_visibility
+        _refresh_chatbox_visibility = _toggle_chatbox_visibility
 
     # Add audio infos
     if main_panel_config["add_audio_infos"]:
@@ -1948,6 +2014,7 @@ def gui_generic_controls(tts_config, main_panel_config):
     global gst_token_selection
     global canvas
     global _generic_control_widgets
+    global _sliders_window
 
     # Reset both compat globals at the top of every call, not just their module-level initial
     # values -- Piper integration finding (docs/context/CHANGELOG.md): FS2 is always today's
@@ -1984,12 +2051,36 @@ def gui_generic_controls(tts_config, main_panel_config):
     window.update_idletasks()
     landscape_at_build = window.winfo_width() > window.winfo_height()
 
+    # Sliders window (sliders-window phase, landscape-refactor plan): all per-model controls
+    # (sliders, StyleTag entry, speaker's own IntVar) render in a dedicated Toplevel now, not the
+    # main screen -- "style" chip_grid is the one exception, pulled out into emotion_bar_frame
+    # instead (previous phase). Rebuilt fresh every call, same lifecycle the options panel already
+    # had before this phase (torn down and recreated on every model switch) -- the OLD Toplevel is
+    # explicitly destroyed first (unlike frame/frame_options below, which just get silently
+    # replaced/leaked at the same grid cell -- a real, separate OS-level Toplevel window leaking on
+    # every model switch would be far more visible/confusing than an orphaned Frame). Starts
+    # hidden (withdraw()); _toggle_sliders_window() (Tools menu) shows/hides it without ever
+    # destroying it, so slider values survive across show/hide -- see that function's own
+    # docstring for why. +20+60 positioning mirrors chatterbox/gui/settings.py's own dialog (same
+    # title-bar-margin fix, same rationale).
+    if _sliders_window is not None:
+        try:
+            _sliders_window.destroy()
+        except tk.TclError:
+            pass
+    _sliders_window = tk.Toplevel(window)
+    _sliders_window.title(i18n.t("sliders_window_title"))
+    _sliders_window.geometry("+20+60")
+    _sliders_window.protocol("WM_DELETE_WINDOW", _sliders_window.withdraw)
+    _sliders_window.grid_rowconfigure(0, weight=1)
+    _sliders_window.grid_columnconfigure(0, weight=1)
+
     # Create Options Frame with Scrollbar (vertical AND horizontal -- real-hardware feedback: in
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
     # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
     # but a horizontal scrollbar is still added as an explicit fallback for whatever doesn't fit).
-    frame = tk.Frame(main_content_frame, highlightbackground=theme.color("border"), highlightthickness=2)
-    frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
+    frame = tk.Frame(_sliders_window, highlightbackground=theme.color("border"), highlightthickness=2)
+    frame.grid(row=0, column=0, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)
     canvas = tk.Canvas(frame)
@@ -2133,6 +2224,11 @@ def gui_generic_controls(tts_config, main_panel_config):
     # Make Scrollbar usable with mouse wheel
     canvas.bind('<Enter>', bound_to_mouse_wheel)
     canvas.bind('<Leave>', unbound_to_mouse_wheel)
+
+    # Starts hidden -- shown via the Tools menu's _toggle_sliders_window(), never on its own.
+    # Deferred to the very end (all content already built above) rather than right after creation,
+    # so nothing in between has to reason about widget geometry queries against a withdrawn window.
+    _sliders_window.withdraw()
 
 def bound_to_mouse_wheel(event):
     canvas.bind_all('<Button-4>', mouse_wheel_up)

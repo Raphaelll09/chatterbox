@@ -15,6 +15,58 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Sliders window + chatbox-visibility Tools item (sliders-window phase, landscape-refactor plan)
+
+- What: all remaining per-model controls (sliders, StyleTag text entry -- "style" chip_grid already
+  moved to the emotion bar, previous entry) now render in a dedicated Toplevel instead of the main
+  screen, opened/closed from a new Tools menu command. Also closed a gap noticed while touching the
+  Tools cascade: the menu-bar-restructure phase's own comment promised a chatbox-visibility toggle
+  "lands with the input-row phase" that never actually got built (only masking did) -- added now,
+  same cascade.
+  - `chatterbox/gui/app.py`: `gui_generic_controls()`'s options-panel `frame` now parents onto a new
+    per-call `_sliders_window` (`tk.Toplevel`) instead of `main_content_frame` -- `+20+60`
+    positioning mirrors `chatterbox/gui/settings.py`'s own dialog. Starts hidden (`withdraw()`,
+    deferred to the end of the function so nothing queries its geometry while withdrawn); the OLD
+    Toplevel is explicitly `destroy()`ed before building a new one on every model switch (unlike
+    `frame`/`frame_options` themselves, which have always just been silently replaced/leaked at the
+    same grid cell -- a real, separate OS-level Toplevel accumulating on every switch would be far
+    more visible/confusing than an orphaned Frame, so this got an explicit fix while touching the
+    code, not left to match the pre-existing pattern). New `_toggle_sliders_window()` (Tools menu):
+    `withdraw()`/`deiconify()`, deliberately never `destroy()`, so slider positions/StyleTag text
+    survive a hide/show cycle -- re-reading fresh defaults on every hide (Settings' own approach)
+    would silently reset an AAC user's in-progress tweaks each time they closed the window, an
+    active regression, not just a missed nicety.
+  - Chatbox-visibility: new Tools checkbutton hides/shows the "Saisie" label + input row together
+    (fixed a latent Tkinter gotcha while wiring this: `tk.Label(...).grid(...)` returns `None`, not
+    the Label -- the old one-liner silently made `lbl_text_input` unusable for exactly this kind of
+    later reference; split into two statements). Persists via the already-extended `gui:` prefs
+    schema's `show_chatbox` field (reserved but unwired since the settings-persistence phase).
+  - New rebindable global `_refresh_chatbox_visibility` (same pattern as `_refresh_orientation` etc.)
+    and `_toggle_sliders_window()` as a plain module-level function (same pattern as
+    `_toggle_settings()`/`_show_about()`), since `_sliders_window` needs no `_run_gui_session()`
+    closure state to act on.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new keys: `menu_toggle_chatbox`,
+  `menu_sliders`, `sliders_window_title`, both locales).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, sliders-window phase.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (fake model
+  with one slider control, monkeypatches `USER_PREFS_PATH`) confirms: the sliders Toplevel exists
+  and starts hidden; its slider control renders inside it; the Tools menu command shows it; a
+  second click hides it (`winfo_exists()` still true -- not destroyed); a slider value set while
+  visible survives a hide/show cycle; switching models destroys the old Toplevel and creates a
+  distinct new one (no accumulation); the chatbox-visibility checkbutton hides/shows the input row
+  and persists `show_chatbox` immediately.
+- Notes/gotchas: confirmed via `git status` that the real `user_prefs.yaml` stayed untouched (same
+  monkeypatch discipline as every GUI smoke script this session). `main_content_frame`'s own row-2
+  weighting (previous entry, now genuinely empty since the options panel moved out) was
+  deliberately **left unchanged** rather than removed -- the landscape keyboard's own height/rowspan
+  math explicitly depends on row 2 being *a* weighted row to absorb extra vertical space (see that
+  code's own long-standing comments); removing the weight would have meant re-deriving that math
+  blind, unverifiable without a Pi. The empty row becomes invisible padding roughly where the
+  options panel used to visually sit -- worth a real-hardware look once available again, but not
+  worth the regression risk of "fixing" preemptively.
+
+---
+
 ## 2026-07-24 — Full-height emotion icon bar (emotion-icon-bar phase, landscape-refactor plan, step 2/2)
 
 - What: the style chip grid (already icon-rendered, previous entry) now lives in a persistent
