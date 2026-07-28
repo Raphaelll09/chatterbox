@@ -168,6 +168,13 @@ btn_replay_audio = None
 # real tk.Button) alongside btn_replay_audio, same main_panel_config["add_play_button"] gate.
 btn_stop_audio = None
 
+# Set once near the top of _run_gui_session() (emotion-icon-bar phase, landscape-refactor plan):
+# window's own two grid children. Everything this module used to grid directly onto `window` now
+# grids onto main_content_frame instead; emotion_bar_frame is the persistent full-height left
+# column, rebuilt by gui_generic_controls() every model (re)load.
+main_content_frame = None
+emotion_bar_frame = None
+
 # Set once, near the top of create_gui(), to a closure that builds the Settings -> Advanced
 # model-picker widgets on demand (see create_gui()'s own comment for why this is dependency-
 # injected into settings.py rather than that module importing this one).
@@ -711,6 +718,8 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     global main_panel_config
     global TTS_CONFIG
     global window
+    global main_content_frame
+    global emotion_bar_frame
     global lbl_gst_infos
     global canvas_circle
     global canvas_circle_figure
@@ -785,6 +794,25 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # chatterbox.gui.theme directly instead of a literal, see those call sites). _apply_theme()
     # (below) re-applies this and walks the already-built tree for a live, no-restart switch.
     _apply_theme_option_db(window)
+
+    # Emotion icon bar + main content, side by side (emotion-icon-bar phase, landscape-refactor
+    # plan): window's own grid now holds exactly these two children -- everything this function
+    # used to grid directly onto `window` is reparented onto main_content_frame instead (a fresh
+    # grid namespace starting again at row/column 0, identical to what window's own grid used to
+    # be, so none of this function's row/column numbers below need to change). emotion_bar_frame is
+    # column 0, unweighted (natural width, like the landscape keyboard's own column -- deliberately
+    # not stretched); its content is built/rebuilt by gui_generic_controls() below, one vertical
+    # column of icon chips for the active backend's "style" chip_grid control, if it declares one.
+    # sticky=NS (not NSEW) on both -- the emotion bar has no reason to stretch horizontally,
+    # main_content_frame already gets NSEW because it's the one weighted column.
+    main_content_frame = tk.Frame(window)
+    main_content_frame.grid(row=0, column=1, sticky=tk.NSEW)
+    emotion_bar_frame = tk.Frame(
+        window, highlightbackground=theme.color("border"), highlightthickness=1)
+    emotion_bar_frame.grid(row=0, column=0, sticky=tk.NS)
+    window.grid_columnconfigure(0, weight=0)
+    window.grid_columnconfigure(1, weight=1)
+    window.grid_rowconfigure(0, weight=1)
 
     # App-bar (cc_prompt_gui_refactor.md Phase 1 item 6): "Paramètres" opens the settings dialog
     # (the physical "Réglages" button was removed -- PC-GUI feedback: it sat right above the
@@ -952,9 +980,16 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Bound is max_buttons+2 (not +3): the widest main-window content spans columns 0..max_buttons+1
     # (columnspan=max_buttons+2 starting at column 0) -- one column past that was weighted for
     # nothing, stealing width from the options panel in landscape (real-hardware bug report).
+    # Retargeted onto main_content_frame, not window itself (emotion-icon-bar phase, landscape-
+    # refactor plan): window's own grid now holds exactly two side-by-side children -- the emotion
+    # bar (column 0) and main_content_frame (column 1, everything below) -- see its construction
+    # right after window's own creation, above. main_content_frame is a fresh grid namespace
+    # starting again at row/column 0, identical to what window's grid used to be, so none of this
+    # function's own row/column numbers change, only which widget owns the grid they're numbered
+    # against.
     for _col in range(1, max_buttons + 2):
-        window.grid_columnconfigure(_col, weight=1)
-    window.grid_rowconfigure(2, weight=1)
+        main_content_frame.grid_columnconfigure(_col, weight=1)
+    main_content_frame.grid_rowconfigure(2, weight=1)
 
     # Battery percentage (DFRobot FIT0992 UPS HAT, chatterbox/power/battery.py) -- row 0, the space
     # freed up when the TTS/vocoder model buttons moved into Settings -> Advanced. Silently hidden
@@ -962,7 +997,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # normal case for any checkout without this HAT, not an error.
     lbl_battery = None
     if main_panel_config.get("add_battery_info", True):
-        lbl_battery = tk.Label(master=window, text="")
+        lbl_battery = tk.Label(master=main_content_frame, text="")
         # sticky=tk.E (landscape spec Sec3: "far right") -- the label still spans the full row
         # (columnspan unchanged) so its own hidden/shown grid() calls don't shift any other
         # column's width, but it now hugs the row's right edge instead of centering across it.
@@ -1185,7 +1220,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     busy = True
     state.update_selected_tts(default_tts + 1)
     state.update_selected_vocoder(default_vocoder + 1)
-    _loading_placeholder = tk.Label(master=window, text=i18n.t("loading_model_label"), fg=theme.color("muted_fg"))
+    _loading_placeholder = tk.Label(master=main_content_frame, text=i18n.t("loading_model_label"), fg=theme.color("muted_fg"))
     _loading_placeholder.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
 
     # Add input field ("chatbox" -- input-row phase, landscape-refactor plan): an eye-icon toggle
@@ -1196,7 +1231,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # outer window's column count/weights (main_panel_config-driven, see the responsive-layout
     # comment above) don't need to change for one extra button.
     _MASK_CHAR = "•"
-    _input_frame = tk.Frame(master=window)
+    _input_frame = tk.Frame(master=main_content_frame)
     _input_frame.grid_columnconfigure(0, weight=1)
     ent_text_input = tk.Entry(master=_input_frame, width=main_panel_config["input_width"])
     ent_text_input.grid(row=0, column=0, sticky=tk.EW)
@@ -1220,12 +1255,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     btn_toggle_chatbox_mask.grid(row=0, column=1, sticky=tk.E, padx=(4, 0))
 
     btn_syn_audio = tk.Button(
-        master=window,
+        master=main_content_frame,
         text=i18n.t("synthesize_button"),
     )
 
     if not gui_config["detach_keyboard"] and gui_config["keyboard_options"]["show_entry"]:
-        lbl_text_input = tk.Label(master=window, text=i18n.t("input_text_label")).grid(row=7, column=0, pady = 4)
+        lbl_text_input = tk.Label(master=main_content_frame, text=i18n.t("input_text_label")).grid(row=7, column=0, pady = 4)
 
         _input_frame.grid(row=7, column=1, sticky=tk.EW)
         ent_text_input.bind("<Return>", lambda event: dispatch(ginput.Action.SPEAK))
@@ -1235,11 +1270,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Add audio infos
     if main_panel_config["add_audio_infos"]:
 
-        lbl_audio_infos_audio_duration = tk.Label(master=window, text=i18n.t("audio_duration_label", duration=0.0))
+        lbl_audio_infos_audio_duration = tk.Label(master=main_content_frame, text=i18n.t("audio_duration_label", duration=0.0))
         lbl_audio_infos_audio_duration.grid(row=8, column=0, columnspan=max_buttons+2)
 
         # Add a Canvas next to the lbl_audio_infos_audio_duration to draw a circle
-        canvas_circle = tk.Canvas(master=window, width=20, height=20)
+        canvas_circle = tk.Canvas(master=main_content_frame, width=20, height=20)
         canvas_circle.grid(row=8, column=2)  # Positioned next to the label
         # Create a circle on the canvas
         canvas_circle_figure = canvas_circle.create_oval(2, 2, 18, 18, fill=theme.color("status_idle"))
@@ -1258,12 +1293,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         _STAGE_POOL_SIZE = 3
         lbl_audio_infos_stage_pool = []
         for _pool_i in range(_STAGE_POOL_SIZE):
-            _lbl = tk.Label(master=window, text="")
+            _lbl = tk.Label(master=main_content_frame, text="")
             _lbl.grid(row=9 + _pool_i, column=0, columnspan=max_buttons+2)
             _lbl.grid_remove()
             lbl_audio_infos_stage_pool.append(_lbl)
 
-        lbl_audio_infos_synthesis_duration = tk.Label(master=window, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
+        lbl_audio_infos_synthesis_duration = tk.Label(master=main_content_frame, text=i18n.t("synthesis_duration_label", duration=0.0, percent=0))
         lbl_audio_infos_synthesis_duration.grid(row=12, column=0, columnspan=max_buttons+2)
 
         def _toggle_audio_info_visibility(visible_var):
@@ -1280,17 +1315,17 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Status/error label (chatterbox_gui_spec_v0.1.md Sec2.2's "error" UI state) -- grid_remove()'d
     # by default (_set_ui_state() grids it back only for an actual error) so it doesn't reserve a
     # blank row for the common no-error case.
-    lbl_status = tk.Label(master=window, text="", fg=theme.color("error_fg"))
+    lbl_status = tk.Label(master=main_content_frame, text="", fg=theme.color("error_fg"))
     lbl_status.grid(row=13, column=0, columnspan=max_buttons+2)
     lbl_status.grid_remove()
 
     # Add audio infos
     if main_panel_config["add_GST_infos"]:
         lbl_gst_infos = {}
-        label_gst_title = tk.Label(master=window, text=i18n.t("gst_weights_title"))
+        label_gst_title = tk.Label(master=main_content_frame, text=i18n.t("gst_weights_title"))
         label_gst_title.grid(row=14, column=0, columnspan=max_buttons+2)
         for index_gst_token, gst_token in enumerate([*tts_config['tts_models'][0]['gst_token_list']]):
-            lbl_gst_infos[gst_token] = tk.Label(master=window, text="{}: 0.00".format(gst_token))
+            lbl_gst_infos[gst_token] = tk.Label(master=main_content_frame, text="{}: 0.00".format(gst_token))
             lbl_gst_infos[gst_token].grid(row=15+index_gst_token, column=0, columnspan=max_buttons+2)
     else:
         index_gst_token = 0
@@ -1307,7 +1342,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # already-running one to interrupt. Both wrapped in one sub-frame spanning the same row/
     # columnspan the bare Replay button used to occupy alone.
     if main_panel_config["add_play_button"]:
-        _play_controls_frame = tk.Frame(master=window)
+        _play_controls_frame = tk.Frame(master=main_content_frame)
         _play_controls_frame.grid(row=16+index_gst_token, column=0, columnspan=max_buttons+2)
         btn_replay_audio = tk.Button(master=_play_controls_frame, text=i18n.t("replay_button"), state="disabled")
         btn_replay_audio.grid(row=0, column=0, padx=2)
@@ -1319,7 +1354,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # the keyboard regardless of add_play_button/add_GST_infos.
     btn_put_away = None
     if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(master=window, text=i18n.t("put_away_button"))
+        btn_put_away = tk.Button(master=main_content_frame, text=i18n.t("put_away_button"))
         btn_put_away.grid(row=17+index_gst_token, column=0, columnspan=max_buttons+2)
 
     # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
@@ -1364,7 +1399,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             # style chip grid's advanced toggle). This is the ONE thing landscape reflow (item 2)
             # repositions now, instead of a single fixed keyboard frame -- whichever mode is active
             # travels with it.
-            keyboard_area = tk.Frame(master=window)
+            keyboard_area = tk.Frame(master=main_content_frame)
             keyboard_area.grid_columnconfigure(0, weight=1)
             keyboard_area.grid_columnconfigure(1, weight=1)
             keyboard_area.grid_rowconfigure(1, weight=1)
@@ -1521,7 +1556,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                     # disappeared" real-hardware report, reproduced at every fraction: the fraction
                     # only ever changed width). Measure the natural height with propagate still on
                     # (so it reflects the actual keyboard content) before locking width.
-                    window.grid_columnconfigure(_col, weight=0)
+                    main_content_frame.grid_columnconfigure(_col, weight=0)
                     _kb.grid_propagate(True)
                     _kb.update_idletasks()
                     natural_height = max(1, _kb.winfo_reqheight())
@@ -1557,7 +1592,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                     _kb.grid_propagate(False)
                     _kb.config(width=natural_width, height=target_height)
                     _kb.grid(**_portrait)
-                    window.grid_columnconfigure(_col, weight=0)
+                    main_content_frame.grid_columnconfigure(_col, weight=0)
 
             def _on_window_configure(event):
                 _apply_current_orientation()
@@ -1831,6 +1866,75 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     return selection_var, sub_row_index
 
 
+def _build_emotion_bar_control(parent_frame, control):
+    """Full-height left-column rendering of the style chip_grid control (emotion-icon-bar phase,
+    landscape-refactor plan) -- a single vertical stack of icon chips filling emotion_bar_frame,
+    instead of _build_chip_grid_control()'s wrapped multi-column grid (that one is sized for the
+    scrollable options panel's width; this one is a slim, always-visible column reused across
+    every model switch). Each visible chip's row gets equal weight so the whole stack stretches to
+    fill the bar's full height -- bigger touch targets on a kiosk screen with only ~12 options,
+    not just a cosmetic default. Options matching hidden_pattern (config_tts.yaml's unnamed
+    TOKEN13-16 placeholders) go behind a small toggle at the bottom, same show/hide idea as
+    _build_chip_grid_control()'s own "advanced" toggle, just without stealing a weighted row for
+    the hidden ones (only revealed rows are ever weighted). Returns the IntVar so
+    gui_generic_controls() can register it in _generic_control_widgets exactly like any other
+    chip_grid control."""
+    options = control["options"]
+    default_value = control["default"]
+    hidden_pattern = control.get("hidden_pattern")
+    hidden_re = re.compile(hidden_pattern) if hidden_pattern else None
+    icons = control.get("icons") or {}
+
+    selection_var = tk.IntVar(parent_frame)
+    selection_var.set(default_value)
+
+    # Default option first, same stable-sort convention as _build_chip_grid_control() -- value
+    # stays each option's ORIGINAL index into options regardless of display position (get_gui_
+    # controls()/keyboards.py's mood-shortcut indices both depend on that).
+    display_order = sorted(enumerate(options), key=lambda pair: pair[0] != default_value)
+
+    hidden_chips = []
+    row = 0
+    for original_index, option_text in display_order:
+        chip = tk.Radiobutton(
+            master=parent_frame,
+            text=icons.get(option_text, option_text),
+            variable=selection_var,
+            value=original_index,
+            indicatoron=0,
+            selectcolor=theme.color("select_color"),
+            font=("TkDefaultFont", 20) if icons else ("TkDefaultFont", 9),
+            padx=2,
+            pady=4,
+        )
+        chip.grid(row=row, column=0, padx=2, pady=2, sticky=tk.NSEW)
+        if hidden_re and hidden_re.match(option_text):
+            chip.grid_remove()
+            hidden_chips.append(chip)
+        else:
+            parent_frame.grid_rowconfigure(row, weight=1)
+        row += 1
+
+    if hidden_chips:
+        hidden_visible = tk.BooleanVar(value=False)
+
+        def _toggle_hidden_chips(_chips=hidden_chips, _var=hidden_visible):
+            for _chip in _chips:
+                if _var.get():
+                    _chip.grid()
+                else:
+                    _chip.grid_remove()
+
+        btn_toggle = tk.Checkbutton(
+            master=parent_frame, text="…", variable=hidden_visible, indicatoron=0,
+            command=_toggle_hidden_chips,
+        )
+        btn_toggle.grid(row=row, column=0, sticky=tk.EW, padx=2, pady=(4, 2))
+
+    parent_frame.grid_columnconfigure(0, weight=1)
+    return selection_var
+
+
 def gui_generic_controls(tts_config, main_panel_config):
     """Renders the model-options panel from the active backend's describe_controls() (renamed
     from gui_fastspeech2() -- interchangeable-backend GUI refactor, see docs/context/CHANGELOG.md)
@@ -1858,6 +1962,13 @@ def gui_generic_controls(tts_config, main_panel_config):
     gst_token_selection = None
     _generic_control_widgets = {}
     sub_row_index = 0
+
+    # Emotion icon bar (emotion-icon-bar phase, landscape-refactor plan): torn down and rebuilt
+    # fresh every call, same as frame/frame_options below -- a different backend may declare no
+    # "style" control at all (e.g. Piper), in which case the bar stays empty and hidden rather
+    # than showing stale chips from whatever model was loaded before.
+    for _child in emotion_bar_frame.winfo_children():
+        _child.destroy()
     _CHIPS_PER_ROW = 4  # width (grid units) for the speaker dropdown row and the shared
                         # "advanced controls" toggle; chip grids compute their own column count
 
@@ -1877,7 +1988,7 @@ def gui_generic_controls(tts_config, main_panel_config):
     # landscape, content still overflowed the canvas viewport horizontally with no way to reach
     # the rest; the wrapped chip grids (below) should mean less horizontal overflow than before,
     # but a horizontal scrollbar is still added as an explicit fallback for whatever doesn't fit).
-    frame = tk.Frame(window, highlightbackground=theme.color("border"), highlightthickness=2)
+    frame = tk.Frame(main_content_frame, highlightbackground=theme.color("border"), highlightthickness=2)
     frame.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW)
     frame.grid_rowconfigure(0, weight=1)
     frame.grid_columnconfigure(0, weight=1)
@@ -1917,25 +2028,34 @@ def gui_generic_controls(tts_config, main_panel_config):
     # before (gui_control_bias: False used to mean permanently absent, no way to reveal from the
     # GUI) -- a small, low-risk side effect of building this generically, not a design goal.
     advanced_widgets = []  # [(label, widget), ...]
+    found_style_control = False
 
     for control in controls:
         control_type = control["type"]
         key = control["key"]
 
+        if control_type == "chip_grid" and key == "style":
+            # Rendered in the persistent full-height emotion_bar_frame (emotion-icon-bar phase,
+            # landscape-refactor plan), not the scrollable options panel -- doesn't consume a
+            # sub_row_index slot there at all.
+            found_style_control = True
+            selection_var = _build_emotion_bar_control(emotion_bar_frame, control)
+            _generic_control_widgets[key] = selection_var
+            # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its own
+            # hardcoded mood-shortcut keys (:D/:p/:(/:O) that look up this exact global by name
+            # (create_keyboard()'s globals()[key_arg] resolution) to set/restore the GST style
+            # selection around a quick styled phrase. Those are themselves FS2/GST-specific
+            # (unchanged, out of scope here) -- keep the name they already depend on working
+            # rather than touching that table. (global gst_token_selection is already declared
+            # once, at the top of this function -- a second `global` statement here is a
+            # SyntaxError once an assignment under the first one has already happened.)
+            gst_token_selection = selection_var
+            continue
+
         if control_type == "chip_grid":
             selection_var, sub_row_index = _build_chip_grid_control(
                 frame_options, control, sub_row_index, landscape_at_build)
             _generic_control_widgets[key] = selection_var
-            if key == "style":
-                # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its
-                # own hardcoded mood-shortcut keys (:D/:p/:(/:O) that look up this exact global by
-                # name (create_keyboard()'s globals()[key_arg] resolution) to set/restore the GST
-                # style selection around a quick styled phrase. Those are themselves FS2/GST-
-                # specific (unchanged, out of scope here) -- keep the name they already depend on
-                # working rather than touching that table. (global gst_token_selection is already
-                # declared once, at the top of this function -- a second `global` statement here
-                # is a SyntaxError once an assignment under the first one has already happened.)
-                gst_token_selection = selection_var
             continue
 
         if control_type == "slider":
@@ -1958,6 +2078,13 @@ def gui_generic_controls(tts_config, main_panel_config):
             advanced_widgets.append((lbl, widget))
 
         _generic_control_widgets[key] = widget
+
+    # Hide the emotion bar entirely for a backend that declares no "style" control at all (e.g.
+    # Piper) rather than leaving an empty bordered column with nothing in it.
+    if found_style_control:
+        emotion_bar_frame.grid()
+    else:
+        emotion_bar_frame.grid_remove()
 
     if advanced_widgets:
         advanced_visible = tk.BooleanVar(value=False)

@@ -15,6 +15,77 @@ state before starting new work.
 
 ---
 
+## 2026-07-24 — Full-height emotion icon bar (emotion-icon-bar phase, landscape-refactor plan, step 2/2)
+
+- What: the style chip grid (already icon-rendered, previous entry) now lives in a persistent
+  full-height column on the left, not the scrollable options panel. Confirmed with the user before
+  starting: this touches the same grid geometry as the portrait/landscape keyboard reflow (several
+  real-hardware iterations deep already), so it's the riskiest single change of this whole
+  landscape-refactor session -- proceeded carefully rather than deferring or simplifying, per the
+  user's explicit choice.
+  - `chatterbox/gui/app.py`: `window`'s own grid now holds exactly two children side by side --
+    `emotion_bar_frame` (new, column 0, unweighted/natural width, `sticky=NS`) and
+    `main_content_frame` (new, column 1, weight=1, `sticky=NSEW`). Every widget `_run_gui_session()`
+    used to grid directly onto `window` (~15 call sites: battery label, loading placeholder, input
+    row, audio-info labels/status circle, GST title, replay/stop/put-away buttons, the keyboard
+    area) now grids onto `main_content_frame` instead -- a **fresh grid namespace starting again at
+    row/column 0**, identical to what `window`'s own grid used to be, so **none of this function's
+    existing row/column numbers changed**, only which widget owns the grid they're numbered
+    against. The responsive-layout column/row weighting and the landscape-keyboard's own dynamic
+    `grid_columnconfigure` calls (`_apply_current_orientation()`) retarget from `window` to
+    `main_content_frame` the same way. `gui_generic_controls()`'s own options-panel frame
+    (`tk.Frame(window, ...)`) retargets too.
+  - New `_build_emotion_bar_control(parent_frame, control)`: a single vertical stack of icon chips
+    (not `_build_chip_grid_control()`'s wrapped multi-column grid, which is sized for the options
+    panel's width) -- each visible chip's row gets equal weight so the stack stretches to fill the
+    bar's full height (bigger touch targets, not just cosmetic default). Hidden options
+    (`TOKEN13-16`) go behind a small `…` toggle at the bottom, same idea as the options panel's own
+    advanced toggle.
+  - `gui_generic_controls()`: the `"style"` chip_grid control is now intercepted before the normal
+    per-control loop and routed to `_build_emotion_bar_control(emotion_bar_frame, ...)` instead of
+    `_build_chip_grid_control(frame_options, ...)` -- it no longer consumes an options-panel row at
+    all. `emotion_bar_frame`'s previous children are torn down and rebuilt fresh every call (same
+    as `frame`/`frame_options`), and the bar itself is `grid_remove()`'d for a backend that declares
+    no `"style"` control at all (e.g. Piper) rather than showing stale chips or an empty bordered
+    column.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, emotion-icon-bar phase, completing what step 1 (emoji
+  labels, previous entry) started.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (two fake
+  models, one with a style control + an ordinary slider, one with none) confirms: `window`'s
+  row-0/column-0 and column-1 slaves are exactly `emotion_bar_frame`/`main_content_frame`; the
+  style control's icon chip renders inside `emotion_bar_frame` and NOT duplicated in the scrollable
+  options panel; an ordinary (non-style) slider control still renders in the options panel, not the
+  emotion bar; forcing both `_set_orientation_override("landscape")` and `"portrait"` (the
+  highest-risk regression target) still reflows correctly, confirmed by finding the keyboard's
+  Texte/Phonèmes toggle under `main_content_frame` in both cases; switching to the no-style model
+  leaves `emotion_bar_frame` empty and hidden, not stale.
+- Notes/gotchas: **two real issues caught during this step's own verification, both fixed before
+  committing**:
+  1. An early draft of the smoke test called `_set_orientation_override()`/`gui_generic_controls()`
+     directly from the probe thread (not the Tk thread) -- both perform real Tk widget mutations,
+     and calling them from a background thread hung the process indefinitely (a genuine Tcl
+     deadlock, not just a lint-level "should use `post()`" concern). Fixed the *test* by routing
+     those calls through `window.after()` + a `threading.Event`, mirroring this codebase's own
+     `post()`/worker-thread discipline -- not a production code change, but worth remembering for
+     any future smoke script that pokes orientation or panel-rebuild functions directly.
+  2. A routine `git status` check (this session's standing habit) caught the real, git-tracked
+     `chatterbox/config/user_prefs.yaml` showing a modified `brightness_dim` and a full default
+     `gui:` section -- leftover pollution from an earlier, unmonkeypatched smoke-test run (predates
+     this step; it was already flagged in this session's very first `git status` snapshot).
+     Reverted via `git checkout -- chatterbox/config/user_prefs.yaml` before committing this step's
+     real changes. Confirms, yet again: any ad hoc script that ends up calling `write_gui_prefs()`
+     (directly or via `_set_theme()`/`_set_keyboard_layout()`) or `write_settings()` must monkeypatch
+     `chatterbox.config.paths.USER_PREFS_PATH` before importing `chatterbox.gui.app`.
+  - **Still not verified on real Pi/Linux hardware** (no Pi5 access this session): the emotion bar's
+    actual on-screen proportions relative to the keyboard/options panel at real kiosk resolution
+    (800x480), and whether the landscape keyboard's width-share calculation
+    (`_KEYBOARD_SCREEN_SHARE`, based on `window.winfo_width()`, deliberately left unchanged rather
+    than narrowed to `main_content_frame`'s own width) ends up generous now that the emotion bar
+    claims some of `window`'s width -- worth a real-hardware check once available again.
+
+---
+
 ## 2026-07-24 — Emotion icons for the style chip grid (emotion-icon-bar phase, landscape-refactor plan, step 1/2)
 
 - What: first of two steps for the emotion icon bar (the second, moving it into a full-height left
