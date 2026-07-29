@@ -1000,6 +1000,10 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                             if m.get("language", "fr") == code), None)
         if target is not None:
             pending_restart_tts_index = target
+            # Explicit settings.close() before destroying the root -- same reasoning as
+            # _set_gui_language()'s own comment (window.destroy() alone would leave settings.py's
+            # _window singleton dangling if Settings happened to be open when this menu was used).
+            settings.close()
             window.destroy()
 
     global _set_gui_language
@@ -1013,7 +1017,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         Piper voice with French interface text, or vice versa). Restarts onto the SAME model
         (state.TTS_INDEX, not a language-matched lookup) since only the interface text needs to
         re-render, same restart mechanism as _set_language() for the reason given in its own
-        docstring."""
+        docstring. Explicitly settings.close()s first (real-hardware feedback: "when I change the
+        gui language, the Settings button doesn't work anymore") -- this control lives INSIDE the
+        Settings dialog itself, so window.destroy() below would otherwise tear down that Toplevel
+        directly, without settings.py's own close() (which resets its _window singleton) ever
+        running; settings.is_open() is now defensive against that regardless (see its own
+        docstring), but closing it properly here is one less thing relying on that fallback."""
         nonlocal pending_restart_tts_index
         i18n.set_locale(code)
         try:
@@ -1022,6 +1031,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             print("[gui] could not persist interface language preference: {}".format(exc),
                   file=sys.stderr)
         pending_restart_tts_index = state.TTS_INDEX
+        settings.close()
         window.destroy()
 
     lang_menu = tk.Menu(menubar, tearoff=0)
@@ -1908,7 +1918,11 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
     # (or the control not declaring one at all) falls back to its plain option text, so this stays
     # generic rather than assuming every chip_grid has icons.
     icons = control.get("icons") or {}
-    chip_font = ("TkDefaultFont", 20) if icons else ("TkDefaultFont", 9)
+    # "Noto Color Emoji" explicitly, sized up to 28 -- same reasoning (font coverage + real-
+    # hardware "too small"/"blank squares" feedback) as _build_emotion_bar_control()'s own icon
+    # font, kept in sync in case a future chip_grid control other than "style" ever declares
+    # icons (today, "style" is the only one, and it's always routed to that function instead).
+    chip_font = ("Noto Color Emoji", 28) if icons else ("TkDefaultFont", 9)
 
     # Display order: default option first (row 0, col 0) -- real-hardware feedback -- everyone
     # else keeps their original relative order after it (stable sort). value stays each option's
@@ -1998,6 +2012,17 @@ def _build_emotion_bar_control(parent_frame, control):
     hidden_chips = []
     row = 0
     for original_index, option_text in display_order:
+        # "Noto Color Emoji" explicitly, not "TkDefaultFont" (real-hardware feedback: "some icons
+        # are just blank squares") -- these glyphs are supplementary-plane Emoji-block codepoints
+        # (GST_TOKEN_ICONS, chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py), which
+        # DejaVu Sans (confirmed present on the Pi5, and what TkDefaultFont resolves to there --
+        # see the Play/Stop button's own font-pinning fix) does NOT contain; only a real emoji
+        # font does. Naming it here doesn't fix anything until fonts-noto-color-emoji (apt-
+        # packages-pi.txt) is actually installed, but it does mean the chip WILL pick it up the
+        # moment it is, rather than depending on TkDefaultFont's own fontconfig aliasing to
+        # happen to route there. Size bumped 20 -> 28 (real-hardware feedback: "emotions icons may
+        # be a bit too small") -- Tk sizes indicatoron=0 Radiobuttons from the font's own glyph
+        # metrics, so this also enlarges the touch target itself, not just the glyph.
         chip = tk.Radiobutton(
             master=parent_frame,
             text=icons.get(option_text, option_text),
@@ -2005,7 +2030,7 @@ def _build_emotion_bar_control(parent_frame, control):
             value=original_index,
             indicatoron=0,
             selectcolor=theme.color("select_color"),
-            font=("TkDefaultFont", 20) if icons else ("TkDefaultFont", 9),
+            font=("Noto Color Emoji", 28) if icons else ("TkDefaultFont", 9),
             padx=2,
             pady=4,
         )

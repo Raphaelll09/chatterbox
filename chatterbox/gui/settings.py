@@ -24,7 +24,30 @@ _window = None  # the single open settings Toplevel, if any -- so Action.BACK ca
 
 
 def is_open():
-    return _window is not None and _window.winfo_exists()
+    """False for a genuinely-closed dialog OR a stale reference left over from a destroyed root
+    window (real-hardware feedback: "when I change the gui language, the Settings button doesn't
+    work anymore"). chatterbox/gui/app.py's _set_gui_language()/_set_language() rebuild the whole
+    GUI via window.destroy() -- if Settings happened to be open at that moment (the "Interface
+    language" control lives INSIDE Settings -> Advanced, so this is the normal case for that
+    control, not an edge case), destroying the root Tk instance destroys this Toplevel too, but
+    WITHOUT running close() (which is what resets _window to None below) -- window.destroy() on
+    the root tears down the whole widget tree directly, it doesn't call any child's own protocol
+    handlers. _window is then left pointing at a Toplevel whose entire Tcl interpreter no longer
+    exists: winfo_exists() itself raises TclError in that case (not a clean False), which used to
+    propagate out of _toggle_settings() uncaught -- a plain Tk menu command, not routed through
+    dispatch()'s own try/except -- silently breaking every later Settings click with no visible
+    error. Caught here and treated as "not open" (plus resetting _window so this only needs
+    detecting once per stale reference)."""
+    global _window
+    if _window is None:
+        return False
+    try:
+        exists = _window.winfo_exists()
+    except tk.TclError:
+        exists = False
+    if not exists:
+        _window = None
+    return exists
 
 
 def close():

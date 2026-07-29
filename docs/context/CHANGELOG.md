@@ -15,6 +15,71 @@ state before starting new work.
 
 ---
 
+## 2026-07-29 — Real-hardware feedback round 4: Settings-after-language-switch bug, bigger/pinned emotion-icon font
+
+- What: two of three new reports from live Pi5 testing are fixed here; the third (Piper English
+  mispronouncing the first word of every utterance) was investigated but not fixed -- see Notes.
+  1. "When I change the gui language for English, the Settings button doesn't work anymore" --
+     `chatterbox/gui/settings.py`'s `is_open()` used to be `_window is not None and _window.
+     winfo_exists()`. The new "Interface language" control (previous entry) lives INSIDE the
+     Settings dialog's own "Avancé" section -- clicking it calls `_set_gui_language()`, which
+     `window.destroy()`s the whole root Tk instance to rebuild the GUI in the new locale. That
+     tears down the open Settings `Toplevel` too, but WITHOUT ever calling `settings.close()`
+     (which is what resets the module's `_window` singleton back to `None`) -- root `.destroy()`
+     takes the whole widget tree down directly, it doesn't invoke any descendant's own protocol
+     handler. The next "Paramètres" click, in the freshly-rebuilt session, then called `is_open()`
+     against a `_window` pointing at a Toplevel whose entire Tcl interpreter no longer exists --
+     `winfo_exists()` itself raises `TclError` there, not a clean `False`, and that exception
+     propagated straight out of `_toggle_settings()` (a plain Tk menu `command`, not routed
+     through `dispatch()`'s own try/except) -- Tk's default `report_callback_exception` prints it
+     to stderr and moves on, so the button just silently did nothing from then on. Made `is_open()`
+     defensive (catches `TclError`, treats it as "not open", self-heals `_window` back to `None`)
+     and had both `_set_gui_language()` and `_set_language()` explicitly `settings.close()` before
+     `window.destroy()`, so the common case doesn't even need to fall back on the defensive catch.
+  2. "Emotions icons may be a bit too small and some of the icons are just blank square" -- the
+     emotion bar's chip font was `("TkDefaultFont", 20)`, bumped to `("Noto Color Emoji", 28)` in
+     both `_build_emotion_bar_control()` (the emotion bar itself) and `_build_chip_grid_control()`
+     (kept in sync for any future non-"style" chip_grid control that declares icons, though none
+     exists today). Naming the font explicitly doesn't fix the blank squares by itself -- these are
+     supplementary-plane Emoji-block codepoints that DejaVu Sans (what TkDefaultFont resolves to
+     on the Pi5, per the Play/Stop button's own font-pinning fix, round 3) simply doesn't contain
+     -- but it means the chips WILL pick up `fonts-noto-color-emoji` (already recommended in
+     `apt-packages-pi.txt`, round 3) the moment it's actually installed, rather than hoping
+     TkDefaultFont's own fontconfig aliasing happens to route there. Tk sizes `indicatoron=0`
+     Radiobuttons from the font's own glyph metrics, so the larger point size also enlarges the
+     touch target itself, addressing "too small" independently of the font-coverage question.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`.
+- Why: fourth round of the same live real-hardware feedback loop (Pi5) as the three previous
+  entries.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). One new
+  ad hoc Tk smoke test (mocked model loading, no pretrained weights, not part of the pytest
+  suite): `settings_after_language_switch_smoke.py` reproduces the exact report end to end via
+  `create_gui()`'s own restart loop -- opens Settings, calls `_set_gui_language("en")` from inside
+  it (destroying and rebuilding the whole window), then confirms Settings actually reopens in the
+  new session (`settings.is_open()` true both before and after, locale genuinely switched to
+  `"en"`) -- flaky at final process teardown on this Windows dev box (~1 run in 3, a `Tcl_
+  AsyncDelete: async handler deleted by the wrong thread` crash after both sessions' own logic had
+  already completed and produced correct results) from stacking two full Tk() root instances in
+  one process for testing purposes, not a sign of an app-level bug -- the passing runs' results
+  were consistent and correct every time.
+- Notes/gotchas: **Piper English mispronunciation not fixed.** "the first word/sound is always
+  mispronounced, it sounds kind of everytime the same word ... while the rest is correct" --
+  investigated via `ssh pi5`: generated 3 short English lessac utterances with different first
+  words directly through `PiperVoice.synthesize_wav()` (bypassing the GUI entirely) and compared
+  their 10ms-window RMS envelopes for the first 500ms. No obvious glitch signature (a sudden
+  spike/dropout/discontinuity) turned up -- each onset looked like a plausible, if different,
+  natural attack for its own first phoneme, which argues against a raw audio-level artifact
+  (amp/ffplay preroll timing, a decoder-cold-start click) and leaves a genuine phonetic
+  mispronunciation of the first word as the more likely explanation -- consistent with a
+  documented espeak-ng quirk where the very first word of an utterance can get slightly wrong
+  prosody/stress from lacking any preceding context. The standard mitigation (prepend a short
+  throwaway leading phrase so the effect lands on that instead of the user's real first word,
+  then crop the resulting extra audio) was NOT implemented -- it requires actually hearing the
+  output to verify it helps rather than just moving the artifact or, worse, clipping real speech,
+  and this session has no way to listen. Flagged back to the user rather than guessed at.
+
+---
+
 ## 2026-07-28 — Real-hardware feedback round 3: startup-load error handling, moon icon, independent interface language
 
 - What: live testing against round 2's build (previous entry) on the Pi5 surfaced four more items:
