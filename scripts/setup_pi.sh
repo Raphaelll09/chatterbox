@@ -265,7 +265,7 @@ if [[ -f "$UNIT_SRC_DIR/chatterbox-powerd.service" && -f "$UNIT_SRC_DIR/chatterb
     then
         echo "   Installed and enabled chatterbox-powerd.service + chatterbox-gui.service (not started)."
         echo "   Added '$INSTALL_USER' to the '$POWERD_GROUP' group (log out/in, or reboot, for it to take effect)."
-        echo "   NOTE: both units reference /home/gerantos/chatterbox by default -- edit"
+        echo "   NOTE: both units reference /home/chatterbox/chatterbox by default -- edit"
         echo "         /etc/systemd/system/chatterbox-{powerd,gui}.service if your user/clone path differs,"
         echo "         then \`sudo systemctl daemon-reload\`."
         echo "   NOT done automatically (see INSTALL.md \"chatterbox-powerd\" for the manual steps):"

@@ -93,10 +93,10 @@ adds the user running the script to it (needed for the GUI to connect to powerd'
 `/run/chatterbox/powerd.sock`), and `systemctl enable`s both units — but does **not** `start`
 them, and does **not** touch any of the following, which need a one-time manual pass:
 
-1. **Unit file paths/user.** Both units default to `gerantos` / `/home/gerantos/chatterbox`
-   (matching `chatterbox-powerd_spec_v0.1.md`'s own examples). If your deployment uses a different
-   user or clone location, edit both files under `/etc/systemd/system/`, then
-   `sudo systemctl daemon-reload`.
+1. **Unit file paths/user.** Both units default to `chatterbox` / `/home/chatterbox/chatterbox`
+   (this deployment's actual account — `chatterbox-powerd_spec_v0.1.md`'s own examples use
+   `gerantos` as a generic placeholder). If your deployment uses a different user or clone
+   location, edit both files under `/etc/systemd/system/`, then `sudo systemctl daemon-reload`.
 2. **Hardware confirmation** in `chatterbox/config/user_prefs.yaml` before trusting the amp/
    backlight on a new board: `amp.sd_pin` and `amp.enable_active_high` (SD-line wiring/polarity),
    `display.backlight` (sysfs node name, or leave as `auto`). Wrong values here degrade safely

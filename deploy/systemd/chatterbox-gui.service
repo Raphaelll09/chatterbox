@@ -5,9 +5,9 @@
 # actually enable+start it and disable the conflicting getty@tty1.
 #
 # Same venv-path fix as chatterbox-powerd.service -- ExecStart uses the venv scripts/setup_pi.sh
-# creates, not the bare system python3. "gerantos"/uid 1000/"/home/gerantos/chatterbox" are
-# placeholders -- adjust to your actual deployment user (matching /etc/passwd's uid and
-# chatterbox-powerd.service's WorkingDirectory).
+# creates, not the bare system python3. User/uid/path below are set for this deployment's actual
+# account (chatterbox, uid 1000) -- if you reuse this unit on a Pi with a different deployment
+# user, adjust these to match /etc/passwd's uid and chatterbox-powerd.service's WorkingDirectory.
 #
 # TTYPath=/dev/tty1 + PAMName=login below makes this service *become* the tty1 session directly
 # (the standard systemd kiosk pattern) -- don't also run a getty on tty1 (kiosk_finalize.sh
@@ -20,12 +20,12 @@ After=chatterbox-powerd.service systemd-user-sessions.service
 Wants=chatterbox-powerd.service
 
 [Service]
-User=gerantos
+User=chatterbox
 PAMName=login
 TTYPath=/dev/tty1
-WorkingDirectory=/home/gerantos/chatterbox
+WorkingDirectory=/home/chatterbox/chatterbox
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-ExecStart=/usr/bin/cage -s -- /home/gerantos/chatterbox/venv/bin/python3 /home/gerantos/chatterbox/do_tts.py --gui
+ExecStart=/usr/bin/cage -s -- /home/chatterbox/chatterbox/venv/bin/python3 /home/chatterbox/chatterbox/do_tts.py --gui
 Restart=always
 RestartSec=2
 
