@@ -15,6 +15,60 @@ state before starting new work.
 
 ---
 
+## 2026-07-29 — Emotion bar: drop the "…" hidden-tokens toggle; kiosk fullscreen hardening
+
+- What: two more items, one a direct real-hardware request, one a forward-looking question about
+  the not-yet-deployed Pi OS Lite/cage target (no live device to test against yet):
+  1. "Maybe we could drop the 3 dots at the bottom of the emoticons. We don't really need
+     additional tokens on top of the already existing emoticons and it will leave more space to
+     the icons" -- `_build_emotion_bar_control()` (`chatterbox/gui/app.py`) no longer builds a
+     hidden-then-revealed chip for `hidden_pattern` matches (config_tts.yaml's unnamed TOKEN13-16
+     GST placeholders) at all -- they're skipped in the build loop entirely, and the "…" toggle
+     Checkbutton that used to reveal them is gone. Frees that row for the 12 real, always-visible
+     mood icons; `_build_chip_grid_control()` (a different function, for the Sliders window's own
+     generic chip grids) keeps its own "advanced" toggle unchanged -- not what the user was
+     looking at.
+  2. "Once the Pi5 will run on Pi OS Lite, the GUI will be in fullscreen, will it be able to adapt
+     to the full dimension of the screen?" -- the window-creation code already tries `-zoomed`
+     (X11/Tk "maximize") first, falling back to a manually-computed, config-capped size+position
+     only if that raises `TclError`. Two real gaps found reasoning through this (not yet testable
+     live -- the Pi5 currently runs a full desktop image over WayVNC, not Pi OS Lite + cage):
+     (a) `-zoomed` asks a window manager to maximize a *decorated* window -- a genuinely desktop-
+     WM concept that `cage` (a minimal, chrome-less kiosk compositor, `docs/kiosk/KIOSK.md`) may
+     not implement/honor at all, and critically, an unsupported EWMH state doesn't necessarily
+     make Tk raise `TclError` the way an genuinely-unsupported *attribute* would -- the compositor
+     can simply ignore the hint, silently, with the fallback path never triggering either. Added
+     `window.attributes("-fullscreen", True)` (the more basic, far-more-universally-honored "give
+     this client the whole output" EWMH state) as an ADDITIONAL attempt alongside `-zoomed`, not
+     instead of it -- gated to non-Windows (this repo's PC dev/test platform; forcing every dev
+     machine test run fullscreen would be actively disruptive there and Windows was never the
+     fullscreen target anyway). (b) Independent of (a): `config_tts.yaml`'s `GUI_config.main_panel.
+     width`/`height` (the fallback path's own size ceiling) were still `440`/`800` -- stale,
+     portrait-shaped leftovers predating the whole landscape refactor (confirmed via `git log -p`
+     during an earlier session, never acted on since nothing had surfaced it as broken yet) --
+     which would have clamped the fallback window well below any real landscape kiosk display's
+     actual resolution if that path ever triggered. Raised to `1920`/`1200` (still a sane ceiling
+     for an unusual multi-monitor dev setup, but high enough that `min(this, real screen)` reduces
+     to "the real screen" on any display this project actually targets).
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
+- Why: (1) direct real-hardware feedback; (2) a forward-looking question about the Pi OS Lite/
+  cage migration, answered by code-reading `docs/kiosk/KIOSK.md` + the window-creation code itself
+  rather than guessing, since there's no live cage deployment to test against yet.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). One new
+  ad hoc Tk smoke test (mocked model/controls, no pretrained weights, not part of the pytest
+  suite): `emotion_bar_no_toggle_smoke.py` (a fake chip_grid control with 2 real options + 2
+  hidden_pattern-matched placeholders builds exactly 2 Radiobuttons and zero Checkbuttons in
+  `emotion_bar_frame` -- confirms both the hidden options AND the toggle itself are gone, not
+  just hidden again).
+- Notes/gotchas: item 2 is **explicitly unverified against real cage** -- this session reasoned
+  from `docs/kiosk/KIOSK.md` and Tk/EWMH semantics, not a live test (the Pi5 currently runs a full
+  desktop image, not Pi OS Lite). Next session should confirm live once that migration actually
+  happens: does the window fill the real screen under cage, and does adding `-fullscreen`
+  interfere with anything (e.g. the Settings/Sliders `Toplevel`s, which aren't set fullscreen
+  themselves and may need to be checked they still layer correctly above a fullscreen root).
+
+---
+
 ## 2026-07-29 — Round 4 follow-up: emoji font installed on Pi5, experimental Piper leading-pause opt-in
 
 - What: two loose ends from the previous entry (same day), both explicitly confirmed with the

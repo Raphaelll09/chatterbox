@@ -790,8 +790,9 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Create the main window
     window = tk.Tk()
     window.title(main_panel_config['name_window'])
-    # main_panel_config["width"]/["height"] (440x800, portrait-shaped) is a fixed config value,
-    # not screen-aware -- on a landscape display shorter than 800px tall, a window manager's
+    # main_panel_config["width"]/["height"] is a fixed config value (config_tts.yaml's own comment
+    # on it), only ever used as an upper-bound fallback ceiling below -- on a landscape display
+    # shorter than a too-small configured height, a window manager's
     # default placement centers a too-tall window, pushing roughly half its height (including the
     # title bar and its maximize/close controls) above the visible screen entirely -- confirmed
     # live on the Pi in landscape (docs/context/CHANGELOG.md): unreachable window, no way to even
@@ -819,6 +820,25 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         pos_x = max(0, (window.winfo_screenwidth() - win_w) // 2)
         pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
         window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
+
+    # '-fullscreen' (EWMH _NET_WM_STATE_FULLSCREEN), in ADDITION to '-zoomed' above, not instead
+    # of it -- real-hardware question (not yet tested): "once the Pi5 runs Pi OS Lite, will the
+    # GUI adapt to the full screen?" '-zoomed' asks a WM to "maximize" a window, a genuinely
+    # desktop-WM concept (biggest a normal, still-decorated window can be); cage (docs/kiosk/
+    # KIOSK.md) is a minimal, chrome-less kiosk compositor with no desktop to maximize within, and
+    # may simply not implement/honor that EWMH state at all -- Tk wouldn't necessarily raise
+    # TclError for that (the attribute call can "succeed" from Tk's own point of view even if the
+    # compositor silently ignores the underlying hint), so this wasn't caught by the try/except
+    # above. '-fullscreen' requests the more basic, more universally-honored "give this client the
+    # whole output, no chrome" state instead -- the two are independent Tk attributes, setting
+    # both is harmless (whichever the compositor actually understands takes effect). Not attempted
+    # on Windows (this repo's PC dev/test platform) -- forcing every dev-machine test run
+    # fullscreen would be actively disruptive there, and Windows was never the fullscreen target.
+    if platform.system() != "Windows":
+        try:
+            window.attributes("-fullscreen", True)
+        except tk.TclError:
+            pass
 
     # Theme (landscape-refactor session): sets Tk's option database defaults for every widget
     # class *created after this call* -- covers the classic-Tk widgets built below with no
@@ -1990,11 +2010,13 @@ def _build_emotion_bar_control(parent_frame, control):
     every model switch). Each visible chip's row gets equal weight so the whole stack stretches to
     fill the bar's full height -- bigger touch targets on a kiosk screen with only ~12 options,
     not just a cosmetic default. Options matching hidden_pattern (config_tts.yaml's unnamed
-    TOKEN13-16 placeholders) go behind a small toggle at the bottom, same show/hide idea as
-    _build_chip_grid_control()'s own "advanced" toggle, just without stealing a weighted row for
-    the hidden ones (only revealed rows are ever weighted). Returns the IntVar so
-    gui_generic_controls() can register it in _generic_control_widgets exactly like any other
-    chip_grid control."""
+    TOKEN13-16 placeholders) are skipped entirely, not built-then-hidden-behind-a-toggle (real-
+    hardware feedback: "we don't really need additional tokens on top of the already existing
+    emoticons ... it will leave more space to the icons") -- this bar has no "advanced"/"…" reveal
+    at all, unlike _build_chip_grid_control()'s own toggle (a different function, for the
+    Sliders window's generic chip grids, untouched by this). Returns the IntVar so gui_generic_
+    controls() can register it in _generic_control_widgets exactly like any other chip_grid
+    control."""
     options = control["options"]
     default_value = control["default"]
     hidden_pattern = control.get("hidden_pattern")
@@ -2009,9 +2031,10 @@ def _build_emotion_bar_control(parent_frame, control):
     # controls()/keyboards.py's mood-shortcut indices both depend on that).
     display_order = sorted(enumerate(options), key=lambda pair: pair[0] != default_value)
 
-    hidden_chips = []
     row = 0
     for original_index, option_text in display_order:
+        if hidden_re and hidden_re.match(option_text):
+            continue
         # "Noto Color Emoji" explicitly, not "TkDefaultFont" (real-hardware feedback: "some icons
         # are just blank squares") -- these glyphs are supplementary-plane Emoji-block codepoints
         # (GST_TOKEN_ICONS, chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py), which
@@ -2035,28 +2058,8 @@ def _build_emotion_bar_control(parent_frame, control):
             pady=4,
         )
         chip.grid(row=row, column=0, padx=2, pady=2, sticky=tk.NSEW)
-        if hidden_re and hidden_re.match(option_text):
-            chip.grid_remove()
-            hidden_chips.append(chip)
-        else:
-            parent_frame.grid_rowconfigure(row, weight=1)
+        parent_frame.grid_rowconfigure(row, weight=1)
         row += 1
-
-    if hidden_chips:
-        hidden_visible = tk.BooleanVar(value=False)
-
-        def _toggle_hidden_chips(_chips=hidden_chips, _var=hidden_visible):
-            for _chip in _chips:
-                if _var.get():
-                    _chip.grid()
-                else:
-                    _chip.grid_remove()
-
-        btn_toggle = tk.Checkbutton(
-            master=parent_frame, text="…", variable=hidden_visible, indicatoron=0,
-            command=_toggle_hidden_chips,
-        )
-        btn_toggle.grid(row=row, column=0, sticky=tk.EW, padx=2, pady=(4, 2))
 
     parent_frame.grid_columnconfigure(0, weight=1)
     return selection_var

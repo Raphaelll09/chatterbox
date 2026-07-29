@@ -28,9 +28,17 @@ GUI_config:
     add_settings_button: True  # opens the power-settings screen (gui/settings.py)
     add_battery_info: True  # shows battery % from the DFRobot FIT0992 UPS HAT (chatterbox/power/
                              # battery.py); silently hidden if that hardware/smbus2 isn't present
-    # width: 800
-    width: 440
-    height: 800
+    # Only a fallback ceiling for the rare case neither '-zoomed' nor '-fullscreen' (chatterbox/
+    # gui/app.py's window-creation code) is honored by the current WM/compositor -- gui/app.py
+    # always takes min(this, the ACTUAL detected screen size), so these numbers only ever shrink
+    # the window below the real screen, never grow it past it. Previously 440x800 (portrait) --
+    # stale leftovers from before the landscape refactor that would have clamped the window well
+    # below any real landscape kiosk display's actual resolution in that fallback path. Set high
+    # enough here that min(this, real screen) reduces to "the real screen" on any display this
+    # project targets; not literally unbounded, so an unusual multi-monitor/virtual-display dev
+    # setup still gets a sane cap instead of an enormous window.
+    width: 1920
+    height: 1200
     input_width: 30
     control_width: 440
     control_height: 400
