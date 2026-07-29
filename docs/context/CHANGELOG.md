@@ -15,6 +15,47 @@ state before starting new work.
 
 ---
 
+## 2026-07-29 — Round 4 follow-up: emoji font installed on Pi5, experimental Piper leading-pause opt-in
+
+- What: two loose ends from the previous entry (same day), both explicitly confirmed with the
+  user first (AskUserQuestion) rather than assumed:
+  1. `fonts-noto-color-emoji` (recommended in `apt-packages-pi.txt` since round 2) actually
+     installed on the Pi5 via `ssh pi5` + `sudo apt-get install` -- confirmed registered
+     afterward (`fc-list | grep -i "noto color emoji"` -> `/usr/share/fonts/truetype/noto/
+     NotoColorEmoji.ttf`). Combined with the previous entry's font-pinning fix, the emotion bar's
+     12 mood icons should now actually render as color emoji instead of blank boxes.
+  2. An experimental, opt-in fix for "the first word/sound is always mispronounced" (Piper
+     English): `chatterbox/synthesis/backends/piper/text_frontend.py`'s `prepare()` now prepends
+     `". "` to the cleaned text when the model's `default_args.prepend_leading_pause` is `true` --
+     a period produces a brief pause in espeak-ng's phonemization, not spoken content, so unlike
+     prepending an actual dummy word, nothing needs cropping from the resulting audio afterward.
+     The reasoning (previous entry's Notes/gotchas): a waveform-envelope check found no audio-
+     level glitch, pointing at a genuine phonetic issue -- consistent with a documented espeak-ng
+     quirk where the very first word of an utterance can get wrong stress/prosody from having no
+     preceding context; giving it a throwaway leading pause first is the standard mitigation.
+     Enabled only on `"Piper en_US (lessac, medium)"` (`config_tts.yaml`) -- the specific entry
+     that was reported, not the French Piper voices, which haven't had this reported against them.
+     Explicitly **unverified by ear** in this session (no way to listen here) -- the user is
+     testing live and will report back whether it helps, hurts, or does nothing; revert by setting
+     the flag back to `false` if it doesn't.
+- Files: `chatterbox/config/config_tts.yaml`, `chatterbox/synthesis/backends/piper/text_frontend.py`.
+- Why: direct follow-through on the previous entry's two open items, both confirmed with the user
+  before acting (installing a system package and shipping an unverified-by-ear experimental
+  synthesis change both warranted asking first, per this project's own "actions with care"
+  convention).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged -- no
+  existing tests cover `text_frontend.py` at all). Verified `prepend_leading_pause` directly
+  (not via a Tk smoke test -- this is a pure text transform, no GUI involved): `False`/absent
+  leaves text unchanged, `True` prepends `". "`, empty input stays empty (no lone pause marker
+  glued onto nothing); confirmed the parsed `config_tts.yaml` has the flag `True` only on the
+  English Piper entry, absent (defaults `False`) on both French ones.
+- Notes/gotchas: the `prepend_leading_pause` fix's actual effectiveness is unconfirmed -- next
+  session should check back on what the user heard and either keep it, tune the leading marker
+  (e.g. a longer pause, or a different punctuation mark, if `". "` alone isn't enough context for
+  espeak-ng's prosody model), or revert it entirely if it made no audible difference.
+
+---
+
 ## 2026-07-29 — Real-hardware feedback round 4: Settings-after-language-switch bug, bigger/pinned emotion-icon font
 
 - What: two of three new reports from live Pi5 testing are fixed here; the third (Piper English

@@ -253,6 +253,12 @@ tts_models:
       noise_scale: 0.667
       noise_w_scale: 0.8
       apply_custom_regex_rules: false
+      # Experimental, opt-in (real-hardware feedback: "on each prompt the first word/sound is
+      # always mispronounced" -- English Piper only, not yet reported against the French voices
+      # above, so left False there). See chatterbox/synthesis/backends/piper/text_frontend.py's
+      # own comment on prepend_leading_pause for the reasoning -- set back to false if this
+      # doesn't actually help once tested live (this session has no way to listen and confirm).
+      prepend_leading_pause: true
 
 vocoder_models:
   - label: "Hifi-GAN V2 FR 570000"

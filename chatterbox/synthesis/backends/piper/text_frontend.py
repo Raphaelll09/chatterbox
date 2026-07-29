@@ -100,4 +100,17 @@ def prepare(text_to_syn, tts_config):
         text_to_syn = text_pipeline.parse_pronunciation_mistakes(text_to_syn)
     text_to_syn = text_pipeline.trim_punctuation_mistakes(text_to_syn)
 
+    # Experimental, opt-in, default False (real-hardware feedback: "on each prompt the first
+    # word/sound is always mispronounced, it sounds kind of everytime the same word ... while the
+    # rest is correct"). A waveform-envelope check (ssh pi5, comparing different first words'
+    # onsets) found no obvious audio-level glitch, which points at a genuine phonetic issue --
+    # consistent with a documented espeak-ng quirk where the very first word of an utterance can
+    # get wrong stress/prosody purely from having no preceding context. "." adds a brief pause
+    # (not spoken content -- unlike prepending an actual dummy word, this needs no cropping
+    # afterward) so the first REAL word is no longer the first thing in the utterance. Unverified
+    # by ear in this session (no way to listen here) -- config_tts.yaml's own comment on this flag
+    # is the place to turn it back off if it doesn't help.
+    if tts_config["default_args"].get("prepend_leading_pause", False) and text_to_syn:
+        text_to_syn = ". " + text_to_syn
+
     return text_to_syn, speaker_name
