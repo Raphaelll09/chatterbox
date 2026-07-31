@@ -821,10 +821,24 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # unconditionally is harmless when a real WM *does* honor '-zoomed' (it takes over size/
     # position on maximize regardless of whatever geometry was requested beforehand).
     _TITLE_BAR_MARGIN_PX = 60
-    win_w = min(main_panel_config["width"], window.winfo_screenwidth())
-    win_h = min(main_panel_config["height"], window.winfo_screenheight() - _TITLE_BAR_MARGIN_PX)
-    pos_x = max(0, (window.winfo_screenwidth() - win_w) // 2)
-    pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+    win_w = min(main_panel_config["width"], screen_w)
+    if main_panel_config["width"] >= screen_w and main_panel_config["height"] >= screen_h:
+        # config_tts.yaml's main_panel width/height are both >= the real screen -- genuine
+        # fullscreen intent (the kiosk case), not a deliberately-smaller windowed size. Real-
+        # hardware finding (plain-Xorg-without-a-WM fallback): reserving _TITLE_BAR_MARGIN_PX and
+        # centering here left a black gap at both the top AND bottom of the real screen -- that
+        # margin only makes sense when an actual window manager is going to draw a title bar
+        # *into* it, which a bare `startx` session with zero WM never does. Anchor flush to
+        # (0, 0) at the exact real screen size instead.
+        win_h = screen_h
+        pos_x = 0
+        pos_y = 0
+    else:
+        win_h = min(main_panel_config["height"], screen_h - _TITLE_BAR_MARGIN_PX)
+        pos_x = max(0, (screen_w - win_w) // 2)
+        pos_y = max(0, (screen_h - win_h) // 2)
     window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
     try:
         window.attributes("-zoomed", True)
