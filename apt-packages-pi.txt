@@ -48,6 +48,15 @@ fonts-noto-color-emoji
 # see embedded_tts/README.md "Profilage" / "Capteur INA226".
 i2c-tools
 
+# gpiozero's lgpio backend (physical switches) has no prebuilt PyPI wheel for aarch64 on newer
+# Python builds (observed on Debian 13/trixie's Python 3.13) -- pip falls back to compiling it
+# from source, which needs swig to generate the C extension bindings, and liblgpio-dev to link
+# against (liblgpio1, the runtime .so, ships by default on Raspberry Pi OS trixie, but not the
+# -dev headers/linkable lib pip's build needs). Neither is needed on Debian 12/bookworm's Python
+# 3.11, where a prebuilt wheel exists.
+swig
+liblgpio-dev
+
 # Kiosk compositor (deploy/systemd/chatterbox-gui.service, docs/kiosk/KIOSK.md) -- cage is a
 # minimal Wayland kiosk compositor that runs a single app fullscreen; Tk itself only speaks X11,
 # so xwayland is required alongside it. If cage fails to acquire the seat when launched as a
