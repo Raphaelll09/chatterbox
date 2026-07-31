@@ -425,6 +425,11 @@ Compositor decision (open in the workstream README) is finalized: **cage** (Wayl
 Tk), matching `deploy/systemd/chatterbox-gui.service`. `apt-packages-pi.txt` gained `cage`+
 `xwayland`.
 
+**Superseded 2026-07-31** (real Pi5 hardware bring-up, `docs/context/CHANGELOG.md`): a
+reproducible `libwlroots` SIGSEGV with no fixed package available ruled cage back out — current
+default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/kiosk/KIOSK.md`). The description
+below is left as the historical record of that 2026-07-21 decision, not the current mechanism.
+
 `scripts/kiosk_finalize.sh` is the one opt-in script (not part of `setup_pi.sh`'s default run —
 that stays scoped to "get the app runnable") that commits a verified Pi to unattended kiosk boot:
 disables `getty@tty1.service` (since `chatterbox-gui.service`'s `TTYPath=/dev/tty1`+

@@ -8,18 +8,29 @@ Prerequisite: T0-T7 green on real hardware, with the **real** (non-test) timers 
 `chatterbox/config/user_prefs.yaml` — don't finalize kiosk boot with the short test timers T0
 asked you to set.
 
-## Compositor: cage
+## Compositor: plain Xorg (cage ruled out — see `deploy/xorg-kiosk/README.md`)
 
-Finalized choice (was an open decision in the workstream README): **cage**, a minimal Wayland
-kiosk compositor that runs a single app fullscreen via XWayland (Tk itself only speaks X11, not
-native Wayland). `deploy/systemd/chatterbox-gui.service` already assumes this. Packages:
-`cage`+`xwayland` in `apt-packages-pi.txt` (installed by `scripts/setup_pi.sh`).
+**cage** (a minimal Wayland kiosk compositor running the Tk app fullscreen via XWayland) was the
+originally finalized choice — an open decision in the workstream README, resolved in an earlier
+session. Real Pi5 hardware bring-up (2026-07-31, `docs/context/CHANGELOG.md`) overturned that:
+a reproducible SIGSEGV deep inside `libwlroots` (Raspberry Pi Foundation's own `0.18.2-3+rpt4`
+build), triggered by essentially any input event causing a seat/focus signal, confirmed via
+`coredumpctl` — backtrace bottoms out in `wl_signal_emit_mutable` inside `libwlroots-0.18.so`, not
+in any chatterbox code, cage's own logic, or the XWayland version (reproduced identically on
+`22.1.9` and `24.1.6`). No fixed package is available in either the Raspberry Pi or Debian repos
+as of that date.
 
-If cage fails to acquire the display seat when launched as a systemd service
-(`journalctl -u chatterbox-gui` showing a seat/session error): the usual fix is installing
-`seatd` as a fallback seat manager — not pre-installed here, since systemd-logind (already
-present on Raspberry Pi OS) is normally sufficient; only reach for it if you actually see that
-failure.
+**Current default: plain Xorg**, launched via a real `agetty --autologin` console session (not a
+systemd `TTYPath=`/`PAMName=login` unit — that pattern is Wayland/logind-oriented and was
+measurably flakier for legacy X11's own console/VT expectations). Tk only ever needs X11 — it
+doesn't care whether that X11 comes via XWayland-under-cage or a plain Xorg session — so this
+sidesteps `wlroots` entirely. Full mechanism, exact files, and every real bug found getting there
+(a `Toplevel.grab_set()` crash, a fullscreen-sizing gap, a relative-config-path crash, output
+buffering hiding a traceback): `deploy/xorg-kiosk/README.md`.
+
+`deploy/systemd/chatterbox-gui.service` (the cage unit) is untouched in the repo, not deleted —
+see its own header comment for what reverting looks like if a fixed `libwlroots` package ever
+lands.
 
 ## `scripts/kiosk_finalize.sh`
 
@@ -40,16 +51,16 @@ backed-up-before-write (never a blind rewrite of a boot-config file):
 | 1. EEPROM check | **Read-only** — reports current `POWER_OFF_ON_HALT`. Never writes EEPROM. | N/A (nothing written) |
 | 2. `config.txt` | Backs up, then appends (only if missing) `dtoverlay=disable-wifi`, `dtoverlay=disable-bt`, `arm_freq_min=500`. Auto-detects `/boot/firmware/config.txt` vs `/boot/config.txt`. | Restore the printed `.bak.<timestamp>` file |
 | 3. `cmdline.txt` | Same backup+idempotent-append approach: adds `quiet`, `loglevel=1`, `logo.nologo` tokens if not already present. | Restore the printed `.bak.<timestamp>` file |
-| 4. `getty@tty1.service` | Disabled — `chatterbox-gui.service` uses `TTYPath=/dev/tty1`+`PAMName=login` to become the tty1 session directly (the standard systemd kiosk pattern); a stock getty on the same tty would race with it. | `sudo systemctl enable --now getty@tty1.service` |
-| 5. Services | `chatterbox-powerd` + `chatterbox-gui` enabled **and started** (`setup_pi.sh` already enables them but deliberately doesn't start them). | `sudo systemctl disable --now chatterbox-powerd chatterbox-gui` |
+| 4. `getty@tty1.service` | **Verified** enabled with the autologin override (**inverted** from this step's cage-era behavior, which used to *disable* it) — the plain-Xorg mechanism (`deploy/xorg-kiosk/`) needs a real `agetty --autologin` session on tty1 to launch the GUI via `.bash_profile` → `startx` → `.xinitrc`; `scripts/setup_pi.sh`'s own step 9 is what actually installs this, this step just confirms it didn't drift. | Re-run `scripts/setup_pi.sh`, or see `deploy/xorg-kiosk/README.md` |
+| 5. Services | `chatterbox-powerd` enabled **and started** (`setup_pi.sh` already enables it but deliberately doesn't start it). `chatterbox-gui.service` is **not** touched — see step 4, the GUI autostarts via the console login instead of a systemd unit. | `sudo systemctl disable --now chatterbox-powerd` |
 
-Exits non-zero (with a `RESULT: FAIL` summary) if the getty-disable or service-start step failed —
-review the warnings before rebooting unattended in that case. Safe to re-run: every step is
-idempotent.
+Exits non-zero (with a `RESULT: FAIL` summary) if the getty-autologin check or service-start step
+failed — review the warnings before rebooting unattended in that case. Safe to re-run: every step
+is idempotent.
 
-After a clean run: **`sudo reboot`** and confirm the Pi boots straight into the GUI with no login
-prompt, no getty on tty1, and both services running (`systemctl status chatterbox-powerd
-chatterbox-gui` over SSH).
+After a clean run: **`sudo reboot`** and confirm the Pi boots straight into the GUI via tty1's
+autologin (briefly shows a text console before `startx` takes over — that's normal, not a stuck
+login prompt) with `chatterbox-powerd` running (`systemctl status chatterbox-powerd` over SSH).
 
 ## Deliberately not automated
 
@@ -65,25 +76,25 @@ chatterbox-gui` over SSH).
 
 ## Maintenance / recovery access
 
-Deliberately **not** an in-GUI "maintenance mode" button — the two things `kiosk_finalize.sh`
-locks down (wifi/bluetooth radios, tty1's getty) are boot-time config changes, not runtime
-toggles, so a GUI button couldn't flip them live anyway (both need a reboot to take effect), and a
-kiosk-escape control has real access-control implications (who can reach it, PIN-gated or not) that
-haven't been designed. Manual recovery instead:
+Deliberately **not** an in-GUI "maintenance mode" button — wifi/bluetooth radios are boot-time
+config changes, not runtime toggles, so a GUI button couldn't flip them live anyway (needs a
+reboot to take effect), and a kiosk-escape control has real access-control implications (who can
+reach it, PIN-gated or not) that haven't been designed. Manual recovery instead:
 
 - **SSH is never disabled by `kiosk_finalize.sh`** — only step 2's `dtoverlay=disable-wifi/-bt`
-  and step 4's `getty@tty1` are touched, neither of which affects `sshd`. If the Pi has an
-  **Ethernet** cable connected, SSH in over that even with wifi disabled by `config.txt`.
+  are touched, which doesn't affect `sshd`. If the Pi has an **Ethernet** cable connected, SSH in
+  over that even with wifi disabled by `config.txt`.
 - **To restore wifi/bluetooth**: remove (or comment out) the `dtoverlay=disable-wifi` /
   `dtoverlay=disable-bt` lines from `config.txt` — either restore the `.bak.<timestamp>` file
   `kiosk_finalize.sh` printed the path to at the time, or SSH in and edit `config.txt` by hand —
   then `sudo reboot`. This is a boot-time overlay, not a running-kernel toggle; nothing short of a
   reboot re-enables the radios.
-- **To get a terminal on the physical screen**: `sudo systemctl stop chatterbox-gui` (frees
-  `tty1`, which the GUI service and a getty would otherwise both want), then
-  `sudo systemctl enable --now getty@tty1.service` for a normal login prompt. Reverse with
-  `sudo systemctl disable --now getty@tty1.service && sudo systemctl start chatterbox-gui` to
-  return to kiosk mode.
+- **To get a plain terminal on the physical screen** (plain-Xorg mechanism, unlike the old cage
+  setup — tty1's autologin now `exec`s straight into `startx`, so there's no separate "GUI
+  service" to stop): SSH in and temporarily break the autologin→`startx` chain, e.g.
+  `mv ~/.bash_profile ~/.bash_profile.disabled && sudo systemctl restart getty@tty1` — the next
+  autologin drops to a plain shell instead of launching X. Reverse with
+  `mv ~/.bash_profile.disabled ~/.bash_profile && sudo systemctl restart getty@tty1`.
 - **No network access at all** (e.g. wifi-only Pi, disabled, no Ethernet handy): pull the SD card,
   edit `config.txt` from another machine, reinsert, boot.
 

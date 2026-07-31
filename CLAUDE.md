@@ -163,9 +163,14 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
     DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
     `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
-- `deploy/systemd/` — `chatterbox-powerd.service` / `chatterbox-gui.service` units, installed by
-  `scripts/setup_pi.sh` (see `INSTALL.md` "chatterbox-powerd"). `chatterbox-gui.service` runs the
-  GUI under `cage` (finalized kiosk compositor choice — see `docs/kiosk/KIOSK.md`).
+- `deploy/systemd/` — `chatterbox-powerd.service` (installed by `scripts/setup_pi.sh`, see
+  `INSTALL.md` "chatterbox-powerd") + `chatterbox-gui.service`, which ran the GUI under `cage`
+  (the *originally* finalized kiosk compositor choice) — **legacy, not installed by default**:
+  real Pi5 hardware bring-up (2026-07-31) found a reproducible SIGSEGV deep inside Raspberry Pi
+  Foundation's own `libwlroots` build, with no fixed package available — see
+  `deploy/xorg-kiosk/README.md` for the full writeup and `docs/kiosk/KIOSK.md` for the plain-Xorg
+  mechanism (`deploy/xorg-kiosk/` + a real console `agetty --autologin` session, installed by
+  `setup_pi.sh`'s own step 9) that replaced it as the current default.
 - `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
   - `measurement/benchmark/` — fixed 10-sentence French benchmark set + runner (was `benchmark/`).
   - `measurement/pmic_calibrate.py` — guided PMIC→meter calibration wizard.

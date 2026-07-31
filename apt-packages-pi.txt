@@ -57,11 +57,21 @@ i2c-tools
 swig
 liblgpio-dev
 
-# Kiosk compositor (deploy/systemd/chatterbox-gui.service, docs/kiosk/KIOSK.md) -- cage is a
-# minimal Wayland kiosk compositor that runs a single app fullscreen; Tk itself only speaks X11,
-# so xwayland is required alongside it. If cage fails to acquire the seat when launched as a
-# systemd service (TTYPath=/dev/tty1 + PAMName=login), the usual fix is installing `seatd` as a
-# fallback seat manager -- not pre-installed here speculatively, only flagged as a troubleshooting
-# step in docs/kiosk/KIOSK.md, since systemd-logind (already present) is normally sufficient.
-cage
-xwayland
+# Kiosk display: plain Xorg (deploy/xorg-kiosk/, docs/kiosk/KIOSK.md), the CURRENT default --
+# NOT cage/Wayland. Real Pi5 hardware bring-up (2026-07-31, docs/context/CHANGELOG.md) found a
+# reproducible SIGSEGV deep inside libwlroots (Raspberry Pi Foundation's own build), triggered by
+# essentially any input event, with no fixed package available in either the Raspberry Pi or
+# Debian repos -- see deploy/xorg-kiosk/README.md for the full writeup and how to revert if a fix
+# ever lands. xinit provides `startx`; x11-xserver-utils provides `xrandr` (bring-up debugging
+# only, not required at runtime).
+xserver-xorg
+xinit
+x11-xserver-utils
+
+# Legacy/reference only, NOT installed by scripts/setup_pi.sh by default -- the originally
+# finalized compositor choice (docs/kiosk/KIOSK.md), abandoned per the wlroots bug above. Left
+# commented here (rather than deleted) so reverting is a one-line uncomment + `sudo apt install`
+# if a fixed libwlroots package ever reaches the repos; deploy/systemd/chatterbox-gui.service
+# (cage's own unit) is untouched and ready to re-enable alongside it.
+# cage
+# xwayland

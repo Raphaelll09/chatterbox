@@ -188,6 +188,12 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     _TITLE_BAR_MARGIN_PX = 60
     win.geometry("+{}+{}".format(20, _TITLE_BAR_MARGIN_PX))
     win.transient(parent)
+    # wait_visibility() before grab_set() -- Tk/X11 requires a window to already be viewable
+    # (mapped) before it can be grabbed; skipping this raced the window manager on this Pi's
+    # cage/XWayland stack (real-hardware bring-up), producing a BadMatch "grab: window not
+    # viewable" X error that crashed XWayland outright (segfault) instead of the harmless TclError
+    # a desktop Xorg session tolerates for the same mistake.
+    win.wait_visibility()
     win.grab_set()  # modal -- PC-GUI bug report: without this, clicks landed on the main window
     # behind instead of this dialog (no exclusive input grab meant nothing actually stopped them
     # from falling through).

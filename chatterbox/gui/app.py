@@ -811,15 +811,25 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # under Wayland per apt-packages-pi.txt); not every WM/platform supports it (Tk raises
     # TclError if not), so the centered-with-margin geometry from the first fix attempt is kept as
     # a fallback for that case, not deleted.
+    # Always compute and apply the explicit, screen-matching geometry as a baseline -- not only
+    # in the TclError except branch below. Real-hardware finding (plain-Xorg-without-a-WM
+    # fallback, docs/kiosk/KIOSK.md): '-zoomed' can "succeed" from Tk's own point of view (no
+    # TclError) even with literally no window manager present to actually enforce the maximize --
+    # unlike cage, which acts as a minimal WM/compositor for its one client, a bare `startx`
+    # session run with no WM at all leaves the window at Tk's natural widget-sizing default,
+    # narrower than the real screen, with the difference showing as a black gap. Setting this
+    # unconditionally is harmless when a real WM *does* honor '-zoomed' (it takes over size/
+    # position on maximize regardless of whatever geometry was requested beforehand).
+    _TITLE_BAR_MARGIN_PX = 60
+    win_w = min(main_panel_config["width"], window.winfo_screenwidth())
+    win_h = min(main_panel_config["height"], window.winfo_screenheight() - _TITLE_BAR_MARGIN_PX)
+    pos_x = max(0, (window.winfo_screenwidth() - win_w) // 2)
+    pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
+    window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
     try:
         window.attributes("-zoomed", True)
     except tk.TclError:
-        _TITLE_BAR_MARGIN_PX = 60
-        win_w = min(main_panel_config["width"], window.winfo_screenwidth())
-        win_h = min(main_panel_config["height"], window.winfo_screenheight() - _TITLE_BAR_MARGIN_PX)
-        pos_x = max(0, (window.winfo_screenwidth() - win_w) // 2)
-        pos_y = max(0, (window.winfo_screenheight() - win_h) // 2)
-        window.geometry("{}x{}+{}+{}".format(win_w, win_h, pos_x, pos_y))
+        pass
 
     # '-fullscreen' (EWMH _NET_WM_STATE_FULLSCREEN), in ADDITION to '-zoomed' above, not instead
     # of it -- real-hardware question (not yet tested): "once the Pi5 runs Pi OS Lite, will the

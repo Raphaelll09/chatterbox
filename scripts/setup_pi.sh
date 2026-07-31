@@ -34,6 +34,7 @@ STEP_WEIGHTS_OK=0
 STEP_SMOKE_TORCH_OK=0
 STEP_SMOKE_SYNTH_OK=0
 STEP_POWERD_OK=0
+STEP_XORG_KIOSK_OK=0
 
 echo "== Chatterbox Pi5 provisioning =="
 echo "Working root: $WORKING_ROOT"
@@ -43,7 +44,7 @@ echo
 # ---------------------------------------------------------------------------
 # 1. System (apt) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [1/8] Installing apt packages from apt-packages-pi.txt"
+echo "-- [1/9] Installing apt packages from apt-packages-pi.txt"
 APT_LIST_FILE="$WORKING_ROOT/apt-packages-pi.txt"
 if [[ ! -f "$APT_LIST_FILE" ]]; then
     echo "ERROR: $APT_LIST_FILE not found." >&2
@@ -59,7 +60,7 @@ echo
 # ---------------------------------------------------------------------------
 # 2. Python venv.
 # ---------------------------------------------------------------------------
-echo "-- [2/8] Creating/reusing venv at $VENV_DIR"
+echo "-- [2/9] Creating/reusing venv at $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"
 if [[ -f "$VENV_DIR/bin/activate" ]]; then
     echo "   venv already exists, reusing it."
@@ -74,7 +75,7 @@ echo
 # ---------------------------------------------------------------------------
 # 3. Python (pip) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [3/8] Installing requirements-pi.txt"
+echo "-- [3/9] Installing requirements-pi.txt"
 pip install --upgrade pip
 pip install -r "$WORKING_ROOT/requirements-pi.txt"
 STEP_PIP_OK=1
@@ -89,7 +90,7 @@ echo
 # demo. Link left below as a comment for anyone who wants it manually.
 #   Waveglow: https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing
 # ---------------------------------------------------------------------------
-echo "-- [4/8] Downloading pretrained weights"
+echo "-- [4/9] Downloading pretrained weights"
 pip install --quiet gdown
 
 # fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file> [sentinel-file ...]
@@ -190,7 +191,7 @@ echo
 # ---------------------------------------------------------------------------
 # 5. Smoke test: torch CPU sanity.
 # ---------------------------------------------------------------------------
-echo "-- [5/8] Smoke test: torch CPU tensor ops"
+echo "-- [5/9] Smoke test: torch CPU tensor ops"
 if python3 - <<'PYEOF'
 import torch
 a = torch.randn(4, 4)
@@ -210,7 +211,7 @@ echo
 # ---------------------------------------------------------------------------
 # 6. Smoke test: end-to-end synthesis (best-effort — only if weights are present).
 # ---------------------------------------------------------------------------
-echo "-- [6/8] Smoke test: end-to-end synthesis (best-effort)"
+echo "-- [6/9] Smoke test: end-to-end synthesis (best-effort)"
 if [[ "$STEP_WEIGHTS_OK" -eq 1 ]]; then
     (
         cd "$WORKING_ROOT"
@@ -232,7 +233,7 @@ echo
 # ---------------------------------------------------------------------------
 # 7. Lock file.
 # ---------------------------------------------------------------------------
-echo "-- [7/8] Writing lock file"
+echo "-- [7/9] Writing lock file"
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 ]]; then
     pip freeze > "$LOCK_FILE"
     echo "   Wrote $LOCK_FILE"
@@ -242,44 +243,109 @@ fi
 echo
 
 # ---------------------------------------------------------------------------
-# 8. chatterbox-powerd systemd units (chatterbox-powerd_spec_v0.1.md Sec8/Sec9.5).
+# 8. chatterbox-powerd systemd unit (chatterbox-powerd_spec_v0.1.md Sec8/Sec9.5).
 #
 # Non-fatal if any part of this fails (matches the weights/synth-smoke-test steps above) --
 # powerd is an optional appliance-mode feature, not required for `do_tts.py` itself to work.
 # Deliberately does NOT touch EEPROM/config.txt (POWER_OFF_ON_HALT, dtoverlay=disable-wifi/-bt,
 # arm_freq_min) -- those are boot-config edits with a brick-on-mistake risk this script avoids
 # elsewhere too; see INSTALL.md "chatterbox-powerd" for the manual steps.
+#
+# chatterbox-gui.service (cage/Wayland) is deliberately NOT installed/enabled here anymore -- see
+# step 9 below and deploy/xorg-kiosk/README.md for why the GUI now starts via a real console
+# autologin + startx instead of a systemd unit. The unit file itself is untouched in the repo
+# (deploy/systemd/) for anyone reverting once/if a fixed libwlroots package lands.
 # ---------------------------------------------------------------------------
-echo "-- [8/8] Installing chatterbox-powerd systemd units"
+echo "-- [8/9] Installing chatterbox-powerd systemd unit"
 UNIT_SRC_DIR="$WORKING_ROOT/deploy/systemd"
 POWERD_GROUP="chatterbox"
 INSTALL_USER="${SUDO_USER:-$USER}"
 
-if [[ -f "$UNIT_SRC_DIR/chatterbox-powerd.service" && -f "$UNIT_SRC_DIR/chatterbox-gui.service" ]]; then
-    if sudo cp "$UNIT_SRC_DIR/chatterbox-powerd.service" "$UNIT_SRC_DIR/chatterbox-gui.service" \
-            /etc/systemd/system/ \
+if [[ -f "$UNIT_SRC_DIR/chatterbox-powerd.service" ]]; then
+    if sudo cp "$UNIT_SRC_DIR/chatterbox-powerd.service" /etc/systemd/system/ \
         && sudo groupadd -f "$POWERD_GROUP" \
         && sudo usermod -aG "$POWERD_GROUP" "$INSTALL_USER" \
         && sudo systemctl daemon-reload \
-        && sudo systemctl enable chatterbox-powerd.service chatterbox-gui.service
+        && sudo systemctl enable chatterbox-powerd.service
     then
-        echo "   Installed and enabled chatterbox-powerd.service + chatterbox-gui.service (not started)."
+        echo "   Installed and enabled chatterbox-powerd.service (not started)."
         echo "   Added '$INSTALL_USER' to the '$POWERD_GROUP' group (log out/in, or reboot, for it to take effect)."
-        echo "   NOTE: both units reference /home/chatterbox/chatterbox by default -- edit"
-        echo "         /etc/systemd/system/chatterbox-{powerd,gui}.service if your user/clone path differs,"
+        echo "   NOTE: the unit references /home/chatterbox/chatterbox by default -- edit"
+        echo "         /etc/systemd/system/chatterbox-powerd.service if your user/clone path differs,"
         echo "         then \`sudo systemctl daemon-reload\`."
         echo "   NOT done automatically (see INSTALL.md \"chatterbox-powerd\" for the manual steps):"
         echo "     - EEPROM/config.txt: keep POWER_OFF_ON_HALT=0; consider dtoverlay=disable-wifi,"
         echo "       dtoverlay=disable-bt, arm_freq_min=500."
         echo "     - Confirm amp SD-pin polarity and the backlight sysfs node against real hardware"
         echo "       (chatterbox/config/user_prefs.yaml: amp.sd_pin / amp.enable_active_high / display.backlight)."
-        echo "     - Start the services when ready: sudo systemctl start chatterbox-powerd chatterbox-gui"
+        echo "     - Start it when ready: sudo systemctl start chatterbox-powerd"
         STEP_POWERD_OK=1
     else
         echo "   WARNING: systemd unit install failed partway through -- see errors above." >&2
     fi
 else
-    echo "   WARNING: $UNIT_SRC_DIR/*.service not found -- skipping (repo checkout out of sync?)." >&2
+    echo "   WARNING: $UNIT_SRC_DIR/chatterbox-powerd.service not found -- skipping (repo checkout out of sync?)." >&2
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 9. Plain-Xorg kiosk autostart (deploy/xorg-kiosk/, docs/kiosk/KIOSK.md).
+#
+# Non-fatal if any part of this fails, matching the powerd step above -- a failure here just
+# means falling back to running `do_tts.py --gui` by hand at the console. See
+# deploy/xorg-kiosk/README.md for the full rationale (a real, reproducible libwlroots SIGSEGV on
+# real Pi5 hardware ruled out cage/Wayland, the originally finalized compositor choice).
+# ---------------------------------------------------------------------------
+echo "-- [9/9] Installing plain-Xorg kiosk autostart"
+XORG_KIOSK_SRC_DIR="$WORKING_ROOT/deploy/xorg-kiosk"
+KIOSK_USER="${SUDO_USER:-$USER}"
+KIOSK_HOME="$(getent passwd "$KIOSK_USER" | cut -d: -f6)"
+
+if [[ -d "$XORG_KIOSK_SRC_DIR" && -n "$KIOSK_HOME" ]]; then
+    XORG_KIOSK_OK=1
+
+    sudo mkdir -p /etc/systemd/system/getty@tty1.service.d \
+        && sudo cp "$XORG_KIOSK_SRC_DIR/getty-tty1-autologin.conf" \
+            /etc/systemd/system/getty@tty1.service.d/override.conf \
+        || XORG_KIOSK_OK=0
+
+    cp "$XORG_KIOSK_SRC_DIR/xinitrc" "$KIOSK_HOME/.xinitrc" \
+        && chmod +x "$KIOSK_HOME/.xinitrc" \
+        || XORG_KIOSK_OK=0
+
+    # Idempotent append -- grep -qF check first so re-running this script doesn't duplicate the
+    # block in .bash_profile.
+    if ! grep -qF "plain-Xorg fallback" "$KIOSK_HOME/.bash_profile" 2>/dev/null; then
+        cat "$XORG_KIOSK_SRC_DIR/bash_profile_snippet.sh" >> "$KIOSK_HOME/.bash_profile" \
+            || XORG_KIOSK_OK=0
+    fi
+
+    # allowed_users=console (Debian's default) requires Xorg's wrapper to recognize the session
+    # as a genuine console login -- relaxed to "anybody" for this single-purpose embedded kiosk
+    # device (not a shared multi-user system). Idempotent: a no-op sed match if already "anybody".
+    if [[ -f /etc/X11/Xwrapper.config ]]; then
+        sudo sed -i 's/allowed_users=console/allowed_users=anybody/' /etc/X11/Xwrapper.config \
+            || XORG_KIOSK_OK=0
+    else
+        echo "   WARNING: /etc/X11/Xwrapper.config not found -- is xserver-xorg-legacy installed?" >&2
+        XORG_KIOSK_OK=0
+    fi
+
+    sudo systemctl daemon-reload && sudo systemctl enable getty@tty1 || XORG_KIOSK_OK=0
+
+    if [[ "$XORG_KIOSK_OK" -eq 1 ]]; then
+        echo "   Installed getty@tty1 autologin override, ~/.xinitrc, .bash_profile startx trigger,"
+        echo "   and relaxed /etc/X11/Xwrapper.config's allowed_users to 'anybody'."
+        echo "   NOTE: paths above assume user 'chatterbox' -- if your deployment uses a different"
+        echo "         user, edit /etc/systemd/system/getty@tty1.service.d/override.conf and"
+        echo "         ~/.xinitrc's hardcoded paths to match."
+        echo "   Reboot (or: sudo systemctl restart getty@tty1) for the GUI to autostart on tty1."
+        STEP_XORG_KIOSK_OK=1
+    else
+        echo "   WARNING: plain-Xorg kiosk autostart install failed partway through -- see errors above." >&2
+    fi
+else
+    echo "   WARNING: $XORG_KIOSK_SRC_DIR not found or could not resolve \$KIOSK_USER's home -- skipping." >&2
 fi
 echo
 
@@ -293,7 +359,8 @@ printf '%-45s %s\n' "pip install -r requirements-pi.txt:" "$([[ $STEP_PIP_OK -eq
 printf '%-45s %s\n' "pretrained weights present:"     "$([[ $STEP_WEIGHTS_OK -eq 1 ]] && echo PASS || echo "FAIL (see warnings above)")"
 printf '%-45s %s\n' "torch CPU smoke test:"            "$([[ $STEP_SMOKE_TORCH_OK -eq 1 ]] && echo PASS || echo FAIL)"
 printf '%-45s %s\n' "end-to-end synthesis smoke test:" "$([[ $STEP_SMOKE_SYNTH_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal)")"
-printf '%-45s %s\n' "chatterbox-powerd systemd units:"  "$([[ $STEP_POWERD_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
+printf '%-45s %s\n' "chatterbox-powerd systemd unit:"  "$([[ $STEP_POWERD_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
+printf '%-45s %s\n' "plain-Xorg kiosk autostart:"      "$([[ $STEP_XORG_KIOSK_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
 
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "$STEP_SMOKE_TORCH_OK" -eq 1 ]]; then
     echo
@@ -302,7 +369,9 @@ if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "
     [[ "$STEP_WEIGHTS_OK" -eq 1 && "$STEP_SMOKE_SYNTH_OK" -eq 1 ]] || \
         echo "NOTE: weights and/or end-to-end synthesis need manual follow-up — see warnings above."
     [[ "$STEP_POWERD_OK" -eq 1 ]] || \
-        echo "NOTE: chatterbox-powerd systemd units were not installed — see warnings above (optional feature)."
+        echo "NOTE: chatterbox-powerd systemd unit was not installed — see warnings above (optional feature)."
+    [[ "$STEP_XORG_KIOSK_OK" -eq 1 ]] || \
+        echo "NOTE: plain-Xorg kiosk autostart was not installed — see warnings above (optional feature)."
     exit 0
 else
     echo

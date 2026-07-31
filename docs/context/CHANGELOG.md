@@ -15,6 +15,84 @@ state before starting new work.
 
 ---
 
+## 2026-07-31 — Pi5 Lite real hardware bring-up: cage/wlroots ruled out, plain-Xorg fallback built
+
+- What: first real Raspberry Pi OS Lite bring-up on the Pi5 (previous install was a full-desktop
+  image over WayVNC — this is the actual target OS for the first time). Two OS attempts (trixie,
+  then Bookworm to match the old Pi5 exactly) both hit the same crash, isolating it to a genuine
+  upstream bug rather than an OS-version regression:
+  1. **cage/wlroots ruled out.** Touching the screen (or even just Tab/Enter on a keyboard, no
+     touch involved) reliably segfaulted `cage` within seconds. `coredumpctl` + `gdb` backtrace
+     bottoms out in `wl_signal_emit_mutable` inside `libwlroots-0.18.so` (Raspberry Pi Foundation's
+     own `0.18.2-3+rpt4` build) — not chatterbox code, not `cage`'s own logic, and not the XWayland
+     version (reproduced identically on `22.1.9` and `24.1.6`, ruling out an XWayland-side fix).
+     No newer `libwlroots` package exists in either the Raspberry Pi or Debian repos. Full writeup:
+     `deploy/xorg-kiosk/README.md`.
+  2. **Plain Xorg fallback built and verified working end-to-end** (touch, Speak, audio through
+     the IQaudio DAC+, Piper voice switching, Settings dialog) — `deploy/xorg-kiosk/`'s 3 files
+     (`getty-tty1-autologin.conf`, `xinitrc`, `bash_profile_snippet.sh`) plus an
+     `/etc/X11/Xwrapper.config` relaxation, installed by `scripts/setup_pi.sh`'s new step 9.
+     `chatterbox-gui.service` (cage) is left in the repo, untouched, for reverting if a fixed
+     `libwlroots` package ever lands.
+  3. **Three real, independent bugs found and fixed along the way** (none of them the wlroots
+     crash — each had to be separated out from it, since more than one was live simultaneously):
+     - `chatterbox/gui/settings.py`'s Settings `Toplevel` called `grab_set()` with no preceding
+       `wait_visibility()` — harmless `TclError` on an ordinary desktop Xorg session, but crashed
+       this Pi's `cage`/XWayland stack outright. Fixed with `wait_visibility()` before `grab_set()`
+       (Tk/X11's own documented ordering requirement).
+     - `chatterbox/gui/app.py`'s fullscreen fallback assumed `-zoomed` raising `TclError` reliably
+       signals "no WM, use the explicit geometry fallback" — false under a **bare** Xorg session
+       with zero window manager: `-zoomed` "succeeds" from Tk's own point of view with nothing
+       there to enforce it, so the fallback never ran, leaving the window narrower than the real
+       800x480 screen. Fixed by always applying the explicit, screen-matching geometry as a
+       baseline, not only in the `except` branch.
+     - `chatterbox-powerd.service` was missing `Group=chatterbox` alongside `User=root` — systemd's
+       `RuntimeDirectory=chatterbox` fell back to root's own group for `/run/chatterbox`, so the
+       GUI client (running as user `chatterbox`) could never actually reach the powerd socket
+       despite `ipc.py` correctly `chown`-ing the socket *file* itself (the containing directory
+       is systemd's job, not the daemon code's). Found during Phase 1 hardware verification, before
+       the wlroots issue was even hit.
+  4. Smaller fixes discovered purely from doing a fresh install for the first time (not specific to
+     the cage/Xorg question): `setup_pi.sh`/`kiosk_finalize.sh`/`fetch_piper_voices.sh` were stored
+     non-executable (`100644`) in git (likely from being committed on Windows) — every fresh clone
+     hit `Permission denied` running them directly; `swig` + `liblgpio-dev` added to
+     `apt-packages-pi.txt` (gpiozero's `lgpio` backend has no prebuilt wheel for aarch64 on newer
+     Python builds, needing a from-source build); `i2c-dev` needed loading + persisting via
+     `/etc/modules-load.d/` for `/dev/i2c-1` to exist even after `dtparam=i2c_arm=on`; the
+     `gerantos`-placeholder username/paths in the two systemd units were switched to this
+     deployment's actual `chatterbox` account.
+- Files: `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`, `deploy/systemd/
+  chatterbox-powerd.service`, `deploy/systemd/chatterbox-gui.service` (legacy-marked, not
+  deleted), `deploy/xorg-kiosk/` (new: `README.md`, `getty-tty1-autologin.conf`, `xinitrc`,
+  `bash_profile_snippet.sh`), `scripts/setup_pi.sh`, `scripts/kiosk_finalize.sh`,
+  `apt-packages-pi.txt`, `INSTALL.md`, `docs/kiosk/KIOSK.md`, `docs/context/ARCHITECTURE.md`,
+  `CLAUDE.md`.
+- Why: first real Pi OS Lite deployment — the whole point of the reorg's target platform.
+- Verify: manually, on real Pi5 hardware (no pretrained-weight-free automated test covers a
+  physical touchscreen/compositor) — full pipeline confirmed working via the plain-Xorg path:
+  touch input, Speak → synthesis → audio through the DAC+ HAT, Settings dialog open/close via its
+  own Annuler/Enregistrer buttons (no window-manager close button exists by design, chrome-less
+  kiosk), Piper voice install + selection. `wait_visibility()`/geometry fixes are plain code
+  changes, not yet covered by an automated regression test (no existing test harness drives a real
+  Toplevel grab or measures actual on-screen window geometry under a WM-less X session).
+- Notes/gotchas:
+  - The `Bring-up_Integration_Test_Protocol_v0.1.md`/`chatterbox-powerd_spec_v0.1.md`/
+    `README_power_gui_workstream.md` docs referenced throughout this repo (including by this very
+    session) do not actually exist in the git checkout — external planning docs never committed.
+    Phase 1 (powerd standalone) verification this session was reconstructed from
+    `docs/power/POWERD.md`'s own "needs real Pi 5 hardware" section instead.
+  - `torch>=2.4.1` (`requirements-pi.txt`) pulls in a full CUDA-bundled build
+    (`nvidia-cu13-*`/`cuda-toolkit`/`triton`, several hundred MB) on this aarch64 target that has
+    no GPU at all — reproduced on both trixie and Bookworm, so not an OS-version artifact. Flagged,
+    not fixed this session (didn't want to risk the already-working install chasing a
+    `--index-url`/CPU-wheel change without dedicated testing) — a real "keep dependencies minimal"
+    violation worth a focused follow-up.
+  - `deploy/xorg-kiosk/xinitrc` redirects the app's stdout/stderr to `~/gui_output.log` with no
+    rotation — fine for occasional crash debugging, but will grow unbounded over a long kiosk
+    uptime with frequent restarts. Not addressed this session.
+
+---
+
 ## 2026-07-29 — Emotion bar: drop the "…" hidden-tokens toggle; kiosk fullscreen hardening
 
 - What: two more items, one a direct real-hardware request, one a forward-looking question about

@@ -136,30 +136,41 @@ fi
 echo
 
 # ---------------------------------------------------------------------------
-# 4. Disable getty@tty1 -- chatterbox-gui.service uses TTYPath=/dev/tty1 + PAMName=login to
-# become the tty1 session directly (the standard systemd kiosk pattern); leaving the stock
-# getty enabled on the same tty races with it. Fully reversible.
+# 4. Verify getty@tty1 is enabled with the autologin override -- INVERTED from this step's
+# original cage/Wayland-era behavior (which disabled getty@tty1, since chatterbox-gui.service
+# used TTYPath=/dev/tty1 + PAMName=login to become the tty1 session directly). The current
+# deployment (deploy/xorg-kiosk/, docs/kiosk/KIOSK.md -- cage ruled out by a real libwlroots
+# SIGSEGV on this hardware, 2026-07-31) needs the OPPOSITE: a real agetty --autologin session on
+# tty1 is what launches the GUI now (via .bash_profile -> startx -> .xinitrc), so getty@tty1 must
+# stay enabled. scripts/setup_pi.sh's step 9 already installs the autologin override and enables
+# this unit -- this step just verifies that didn't drift, rather than repeating the install.
 # ---------------------------------------------------------------------------
-echo "-- [4/5] Disabling getty@tty1.service (chatterbox-gui.service replaces it on tty1)"
-if sudo systemctl disable getty@tty1.service; then
-    echo "   Disabled. Undo with: sudo systemctl enable --now getty@tty1.service"
+echo "-- [4/5] Verifying getty@tty1.service is enabled with the autologin override"
+if [[ -f /etc/systemd/system/getty@tty1.service.d/override.conf ]] \
+    && grep -q autologin /etc/systemd/system/getty@tty1.service.d/override.conf \
+    && sudo systemctl is-enabled getty@tty1.service >/dev/null 2>&1
+then
+    echo "   OK: autologin override present, getty@tty1.service enabled."
     STEP_GETTY_OK=1
 else
-    echo "   WARNING: could not disable getty@tty1.service -- check manually." >&2
+    echo "   WARNING: getty@tty1's autologin override is missing or the unit isn't enabled --" >&2
+    echo "            re-run scripts/setup_pi.sh (its step 9 installs deploy/xorg-kiosk/) or see" >&2
+    echo "            deploy/xorg-kiosk/README.md to install it manually." >&2
 fi
 echo
 
 # ---------------------------------------------------------------------------
-# 5. Enable + start chatterbox-powerd / chatterbox-gui. setup_pi.sh already installs+enables
-# these but deliberately does not start them -- this is that explicit "go" step.
+# 5. Enable + start chatterbox-powerd. setup_pi.sh already installs+enables it but deliberately
+# does not start it -- this is that explicit "go" step. chatterbox-gui.service is NOT started
+# here (see step 4's comment) -- the GUI autostarts via the real console login instead.
 # ---------------------------------------------------------------------------
-echo "-- [5/5] Enabling + starting chatterbox-powerd and chatterbox-gui"
-if sudo systemctl enable --now chatterbox-powerd.service chatterbox-gui.service; then
-    echo "   Started. Check with: systemctl status chatterbox-powerd chatterbox-gui"
+echo "-- [5/5] Enabling + starting chatterbox-powerd"
+if sudo systemctl enable --now chatterbox-powerd.service; then
+    echo "   Started. Check with: systemctl status chatterbox-powerd"
     STEP_SERVICES_OK=1
 else
-    echo "   WARNING: failed to enable/start one or both services -- check with" >&2
-    echo "            'journalctl -u chatterbox-powerd -u chatterbox-gui'." >&2
+    echo "   WARNING: failed to enable/start chatterbox-powerd -- check with" >&2
+    echo "            'journalctl -u chatterbox-powerd'." >&2
 fi
 echo
 
@@ -170,8 +181,8 @@ echo "== Summary =="
 printf '%-40s %s\n' "EEPROM POWER_OFF_ON_HALT:"  "$([[ $STEP_EEPROM_OK -eq 1 ]] && echo PASS || echo "WARN (see above)")"
 printf '%-40s %s\n' "config.txt tuning:"          "$([[ $STEP_CONFIG_TXT_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL")"
 printf '%-40s %s\n' "cmdline.txt tuning:"         "$([[ $STEP_CMDLINE_TXT_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL")"
-printf '%-40s %s\n' "getty@tty1 disabled:"        "$([[ $STEP_GETTY_OK -eq 1 ]] && echo PASS || echo FAIL)"
-printf '%-40s %s\n' "services enabled+started:"   "$([[ $STEP_SERVICES_OK -eq 1 ]] && echo PASS || echo FAIL)"
+printf '%-40s %s\n' "getty@tty1 autologin verified:" "$([[ $STEP_GETTY_OK -eq 1 ]] && echo PASS || echo FAIL)"
+printf '%-40s %s\n' "chatterbox-powerd enabled+started:" "$([[ $STEP_SERVICES_OK -eq 1 ]] && echo PASS || echo FAIL)"
 echo
 
 if [[ "$STEP_GETTY_OK" -eq 1 && "$STEP_SERVICES_OK" -eq 1 ]]; then

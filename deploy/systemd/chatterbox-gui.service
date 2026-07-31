@@ -1,3 +1,13 @@
+# LEGACY / NOT CURRENTLY USED, kept for reference in case of reversion (2026-07-31,
+# docs/context/CHANGELOG.md) -- real Pi5 hardware bring-up found a reproducible SIGSEGV deep
+# inside libwlroots (Raspberry Pi Foundation's own build), triggered by essentially any input
+# event, with no fixed package available in either the Raspberry Pi or Debian repos as of that
+# date. See deploy/xorg-kiosk/README.md for the full writeup and the plain-Xorg mechanism that
+# replaced this unit as the current default. scripts/setup_pi.sh no longer installs/enables this
+# unit by default. If a fixed libwlroots package ever lands, reverting means re-running the
+# `sudo cp .../chatterbox-gui.service /etc/systemd/system/ && systemctl enable` steps this file
+# used to get via setup_pi.sh, and undoing deploy/xorg-kiosk/'s 3 files + Xwrapper.config change.
+#
 # Chatterbox GUI kiosk unit (chatterbox-powerd_spec_v0.1.md Sec8): cage runs the Tk app fullscreen
 # via XWayland -- the finalized compositor choice for this deployment (see
 # README_power_gui_workstream.md's "Compositor" open decision, resolved in step 3;

@@ -87,16 +87,23 @@ for day-to-day running/configuration/testing. Not required to run `do_tts.py` no
 integration point (`chatterbox/audio/playback.py`'s amp handshake, `chatterbox/gui/app.py`'s
 activity/put-away wiring) degrades to a no-op if powerd isn't running.
 
-`scripts/setup_pi.sh` installs `deploy/systemd/chatterbox-powerd.service` and
-`deploy/systemd/chatterbox-gui.service` to `/etc/systemd/system/`, creates a `chatterbox` group,
-adds the user running the script to it (needed for the GUI to connect to powerd's socket at
-`/run/chatterbox/powerd.sock`), and `systemctl enable`s both units — but does **not** `start`
-them, and does **not** touch any of the following, which need a one-time manual pass:
+`scripts/setup_pi.sh` installs `deploy/systemd/chatterbox-powerd.service` to
+`/etc/systemd/system/`, creates a `chatterbox` group, adds the user running the script to it
+(needed for the GUI to connect to powerd's socket at `/run/chatterbox/powerd.sock`), and
+`systemctl enable`s the unit — but does **not** `start` it. The same script's step 9 separately
+installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/kiosk/KIOSK.md`) —
+**not** `deploy/systemd/chatterbox-gui.service` (cage/Wayland), which real Pi5 hardware bring-up
+ruled out (a reproducible `libwlroots` SIGSEGV with no fixed package available; see
+`deploy/xorg-kiosk/README.md`). Neither of these touches the following, which need a one-time
+manual pass:
 
-1. **Unit file paths/user.** Both units default to `chatterbox` / `/home/chatterbox/chatterbox`
-   (this deployment's actual account — `chatterbox-powerd_spec_v0.1.md`'s own examples use
-   `gerantos` as a generic placeholder). If your deployment uses a different user or clone
-   location, edit both files under `/etc/systemd/system/`, then `sudo systemctl daemon-reload`.
+1. **Unit file paths/user.** `chatterbox-powerd.service` defaults to `chatterbox` /
+   `/home/chatterbox/chatterbox` (this deployment's actual account —
+   `chatterbox-powerd_spec_v0.1.md`'s own examples use `gerantos` as a generic placeholder). If
+   your deployment uses a different user or clone location, edit the file under
+   `/etc/systemd/system/`, then `sudo systemctl daemon-reload` — and separately update the
+   hardcoded paths in `~/.xinitrc` and `/etc/systemd/system/getty@tty1.service.d/override.conf`
+   (`deploy/xorg-kiosk/`).
 2. **Hardware confirmation** in `chatterbox/config/user_prefs.yaml` before trusting the amp/
    backlight on a new board: `amp.sd_pin` and `amp.enable_active_high` (SD-line wiring/polarity),
    `display.backlight` (sysfs node name, or leave as `auto`). Wrong values here degrade safely
@@ -107,21 +114,24 @@ them, and does **not** touch any of the following, which need a one-time manual 
    `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7. This is what actually catches the two
    silent-failure hardware items (amp SD polarity, backlight sysfs node) before they corrupt every
    later result — don't skip straight to the kiosk boot below.
-4. **Start the services manually** once you're ready to test them under systemd specifically
-   (T6 of the bring-up protocol needs this):
+4. **Start `chatterbox-powerd` manually** once you're ready to test it under systemd specifically
+   (T6 of the bring-up protocol needs this) — the GUI itself doesn't need a manual start step; it
+   autostarts via tty1's console login once `deploy/xorg-kiosk/` is installed:
 
    ```bash
-   sudo systemctl start chatterbox-powerd chatterbox-gui
+   sudo systemctl start chatterbox-powerd
    ```
 
 ## Finalizing the kiosk (step 3 — unattended boot)
 
-Once the bring-up protocol above is fully green (including T6/T7, which need the systemd units),
-`scripts/kiosk_finalize.sh` is the one opt-in script that commits the Pi to booting straight into
-the kiosk GUI unattended — disables the console login (`getty@tty1`, which would otherwise race
-with `chatterbox-gui.service` for the same tty), applies the `config.txt`/`cmdline.txt` idle-power
-and boot-quiet tuning (backed up, idempotent — see `docs/kiosk/KIOSK.md` for exactly what and how
-to undo it), and enables+starts both services:
+Once the bring-up protocol above is fully green (including T6/T7), `scripts/kiosk_finalize.sh` is
+the one opt-in script that commits the Pi to booting straight into the kiosk GUI unattended —
+verifies `getty@tty1`'s autologin override is in place (installed by `setup_pi.sh`'s step 9;
+**inverted** from this step's original cage-era behavior, which used to *disable* `getty@tty1` —
+the plain-Xorg mechanism needs it enabled instead, see `docs/kiosk/KIOSK.md`), applies the
+`config.txt`/`cmdline.txt` idle-power and boot-quiet tuning (backed up, idempotent — see
+`docs/kiosk/KIOSK.md` for exactly what and how to undo it), and enables+starts
+`chatterbox-powerd`:
 
 ```bash
 cd ~/chatterbox
