@@ -100,12 +100,12 @@ def prepare(text_to_syn, tts_config):
         text_to_syn = text_pipeline.parse_pronunciation_mistakes(text_to_syn)
     text_to_syn = text_pipeline.trim_punctuation_mistakes(text_to_syn)
 
-    # NOTE: this used to also prepend ". " here when default_args.prepend_leading_pause was set,
-    # as a cheap attempt at giving espeak-ng leading context for the "first word is always
-    # mispronounced" report. Confirmed (2026-08-20) to have been a complete no-op: piper-tts's
-    # bundled espeak-ng phonemizer silently discards a bare leading "." with nothing before it --
-    # voice.phonemize(". Hello, this is a test.") and voice.phonemize("Hello, this is a test.")
-    # produce byte-identical phonemes. The real fix (backend.py's PiperBackend._prime_and_crop())
-    # needs an actual synthesized audio buffer to crop, so it now lives in backend.py's tts()
-    # instead of here -- this function stays a pure text transform.
+    # NOTE: this used to also prepend ". " here for default_args.prepend_leading_pause (English
+    # Piper's "first word is always mispronounced" report) -- confirmed a complete no-op (piper-
+    # tts's bundled espeak-ng silently discards a bare leading "." with nothing before it), and a
+    # follow-up fix attempt in backend.py (priming with a real leading word, then cropping it back
+    # off) was also abandoned after real statistical testing showed it made things worse, not
+    # better. See docs/context/CHANGELOG.md's 2026-08-20 entries and backend.py's own module
+    # comment for the full investigation -- no working fix exists yet, this function stays a pure
+    # text transform with nothing prepended.
     return text_to_syn, speaker_name

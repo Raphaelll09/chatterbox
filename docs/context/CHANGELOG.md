@@ -15,6 +15,69 @@ state before starting new work.
 
 ---
 
+## 2026-08-20 — Revert: Piper English priming+crop fix made the artifact worse, not better
+
+- What: live Pi5 test of the previous entry's priming+crop fix -- "there is still this word at
+  the beginning of each synthesis. With the sentence 'Have you written already' the synthesis
+  adds 'don't' at the beginning and with 'Have you eaten already?' the synthesis starts with
+  'Well don't'." The "Well don't" report was the key clue: "Well" is `_LEADING_CONTEXT_FILLER`
+  itself, audible -- meaning the crop wasn't just imperfect, it was failing to fire at all in at
+  least some runs. Investigated with real evidence this time rather than another guess:
+  1. Installed `openai-whisper` locally as a one-off diagnostic tool (not a project dependency,
+     removed again after) to get real ASR transcription as ground truth instead of eyeballing
+     waveform envelopes, which had already proven unable to distinguish these cases.
+  2. Reproduced the exact two reported sentences locally and ran each 8 times (VITS sampling is
+     stochastic, no fixed seed anywhere in this pipeline -- a single run tells you little) through
+     the primed+crop path, transcribing every output. Result: **0/16 runs produced "don't"**, but
+     **12/16 (75%) left "Well"/"Well," audible and un-cropped** -- confirming the crop detector
+     routinely fires on a false-early dip inside "Well," itself (its own attack/decay shape)
+     rather than the real pause after it, exactly the failure mode the user's report pointed at.
+  3. Ran the same 16 syntheses again with priming disabled entirely (`prepend_leading_pause:
+     false`, i.e. today's plain `synthesize_wav()` call, matching every French voice) as a
+     control. Result: **15/16 clean**, 1/16 an unrelated garble ("Happy Wheat and all ready"
+     instead of "eaten already", no "don't"). The original "first word always mispronounced"
+     report is real but **rare (~6%)**, not "always" -- likely a case of a genuine but
+     infrequent glitch feeling more common than it is after only 2-3 manual tries.
+  4. Conclusion: the priming+crop approach is not just unreliable, it's net-negative -- it turns
+     a rare (~6%) glitch into a near-constant (~75%) spurious extra word. The live-reported
+     "don't" is this checkpoint's own garbled rendering of the un-cropped "Well," (a real word
+     failing to render cleanly is itself unsurprising for a checkpoint that already mispronounces
+     ~6% of real first words) -- not the original bug re-appearing under a different name.
+  5. Reverted rather than attempting a fourth guess: `PiperBackend._prime_and_crop()`,
+     `_find_post_filler_crop_sample()`, and `_LEADING_CONTEXT_FILLER` removed entirely (not left
+     disabled-but-present -- proven actively harmful if re-enabled, not merely unused, so kept as
+     dead code would be a landmine for a future re-enable without re-deriving this investigation).
+     `config_tts.yaml`'s `prepend_leading_pause` removed from the English entry (defaults False,
+     matching French). `PiperBackend.tts()` is back to a single unconditional
+     `voice.synthesize_wav(clean_text, wav_file, syn_config=syn_config)` call -- byte-identical
+     code path for every Piper voice, English included, to what existed before either of today's
+     two fix attempts.
+- Files: `chatterbox/synthesis/backends/piper/backend.py` (removed the priming/crop mechanism,
+  restored the plain `tts()` body, dropped the now-unused `numpy` import),
+  `chatterbox/synthesis/backends/piper/text_frontend.py` (updated comment), `chatterbox/config/
+  config_tts.yaml` (removed `prepend_leading_pause` from the English entry), `tests/
+  test_piper_backend.py` (removed the 7 tests written for the now-reverted mechanism).
+- Why: asked directly -- "The issue is still here... Explore further the problem.", followed by
+  explicit authorization to commit/push directly this round.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 305 passed, 1 pre-existing skip
+  (Windows) -- back to the pre-priming-fix count (312 - 7 removed tests). The 48 real synthesis
+  runs (16 primed, 16 unprimed, 16 from the individual repro/batch steps) analyzed via Whisper
+  ASR are the actual verification for this entry, not just the test suite.
+- Notes/gotchas: **the original rare (~6%) English mispronunciation is still unfixed** -- this
+  entry only removes a fix that made it worse, it doesn't solve the underlying issue. Given the
+  low base rate, the most promising next avenues (neither attempted): (a) a different English
+  voice/checkpoint -- the instability shown here (both in the real first word ~6% of the time,
+  and in a synthetic "Well," filler ~75%+ of the time) looks like a property of this specific
+  `en_US-lessac-medium` ONNX export, not something fixable from the text/priming side at all;
+  (b) simply accepting a ~6% glitch rate as a known limitation, which may be the pragmatic answer
+  given how much effort three consecutive attempts (2026-07-29's no-op, today's two -- the no-op
+  audit and the priming+crop revert) have already cost without a working fix. If revisiting
+  priming again despite this, do NOT retune `_LEADING_CONTEXT_FILLER`/the crop threshold without
+  first confirming a different filler word actually renders *reliably* on this checkpoint --
+  today's investigation never established that any leading word does.
+
+---
+
 ## 2026-08-20 — Fix: Piper English "first word mispronounced" — the previous fix was a no-op
 
 - What: user report -- "there is an artifact at the beginning of each synthesis which doesn't
