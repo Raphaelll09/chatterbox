@@ -100,17 +100,12 @@ def prepare(text_to_syn, tts_config):
         text_to_syn = text_pipeline.parse_pronunciation_mistakes(text_to_syn)
     text_to_syn = text_pipeline.trim_punctuation_mistakes(text_to_syn)
 
-    # Experimental, opt-in, default False (real-hardware feedback: "on each prompt the first
-    # word/sound is always mispronounced, it sounds kind of everytime the same word ... while the
-    # rest is correct"). A waveform-envelope check (ssh pi5, comparing different first words'
-    # onsets) found no obvious audio-level glitch, which points at a genuine phonetic issue --
-    # consistent with a documented espeak-ng quirk where the very first word of an utterance can
-    # get wrong stress/prosody purely from having no preceding context. "." adds a brief pause
-    # (not spoken content -- unlike prepending an actual dummy word, this needs no cropping
-    # afterward) so the first REAL word is no longer the first thing in the utterance. Unverified
-    # by ear in this session (no way to listen here) -- config_tts.yaml's own comment on this flag
-    # is the place to turn it back off if it doesn't help.
-    if tts_config["default_args"].get("prepend_leading_pause", False) and text_to_syn:
-        text_to_syn = ". " + text_to_syn
-
+    # NOTE: this used to also prepend ". " here when default_args.prepend_leading_pause was set,
+    # as a cheap attempt at giving espeak-ng leading context for the "first word is always
+    # mispronounced" report. Confirmed (2026-08-20) to have been a complete no-op: piper-tts's
+    # bundled espeak-ng phonemizer silently discards a bare leading "." with nothing before it --
+    # voice.phonemize(". Hello, this is a test.") and voice.phonemize("Hello, this is a test.")
+    # produce byte-identical phonemes. The real fix (backend.py's PiperBackend._prime_and_crop())
+    # needs an actual synthesized audio buffer to crop, so it now lives in backend.py's tts()
+    # instead of here -- this function stays a pure text transform.
     return text_to_syn, speaker_name

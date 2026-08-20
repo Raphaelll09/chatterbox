@@ -263,9 +263,14 @@ tts_models:
       apply_custom_regex_rules: false
       # Experimental, opt-in (real-hardware feedback: "on each prompt the first word/sound is
       # always mispronounced" -- English Piper only, not yet reported against the French voices
-      # above, so left False there). See chatterbox/synthesis/backends/piper/text_frontend.py's
-      # own comment on prepend_leading_pause for the reasoning -- set back to false if this
-      # doesn't actually help once tested live (this session has no way to listen and confirm).
+      # above, so left False there). The original implementation (a bare ". " prepended in
+      # text_frontend.py) was confirmed a complete no-op (2026-08-20): piper-tts's bundled
+      # espeak-ng phonemizer silently discards a leading "." with nothing before it, so it never
+      # changed the synthesized audio at all -- see chatterbox/synthesis/backends/piper/
+      # backend.py's _LEADING_CONTEXT_FILLER/_prime_and_crop()/_find_post_filler_crop_sample()
+      # for the replacement (primes with a real leading word, crops it back off using a measured
+      # pause in the actual audio). Still unverified by ear -- set back to false if this doesn't
+      # actually help once tested live (this session has no way to listen and confirm).
       prepend_leading_pause: true
 
 vocoder_models:

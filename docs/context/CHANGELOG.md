@@ -15,6 +15,78 @@ state before starting new work.
 
 ---
 
+## 2026-08-20 — Fix: Piper English "first word mispronounced" — the previous fix was a no-op
+
+- What: user report -- "there is an artifact at the beginning of each synthesis which doesn't
+  appear in French" (English Piper only). Investigated from scratch rather than assuming the
+  existing `prepend_leading_pause` flag (2026-07-29, left "unverified by ear") was working:
+  1. **Confirmed the existing fix does nothing.** It prepends `". "` to the text
+     (`text_frontend.py`) hoping to give espeak-ng leading context. Direct test against the real
+     `piper-tts` phonemizer: `voice.phonemize(". Hello, this is a test.")` and
+     `voice.phonemize("Hello, this is a test.")` return byte-identical phonemes -- a bare leading
+     "." with nothing before it is silently discarded before synthesis ever starts. The flag has
+     been a no-op since it was added.
+  2. **Ruled out `chatterbox/synth.py`** as a cause: its denoise/postprocess pipeline has zero
+     language-conditional code, driven only by `needs_vocoder`/`use_denoiser` (identical for
+     every Piper voice) -- can't explain an English-only difference.
+  3. **Ruled out a raw audio-level glitch**: sample-by-sample inspection of several EN/FR
+     syntheses found no amplitude spike/discontinuity in the first 50ms of either language,
+     matching the 2026-07-29 entry's own RMS-envelope finding. Asked the user directly what the
+     artifact actually sounds like (rather than guess a third time) -- confirmed it's a genuine
+     first-word mispronunciation/garble, not a click or a cut-off attack, matching the original
+     report exactly.
+  4. **Investigated why a real fix is hard**: a real word-based lead-in (e.g. `"Well, hello..."`,
+     comma-joined so it stays one sentence/chunk) DOES survive phonemization and gives the VITS
+     decoder genuine preceding context (confirmed: produces a real leading phoneme block, not
+     silently dropped). But cropping it back off precisely requires knowing exactly how many
+     samples it produced -- `voice.synthesize(..., include_alignments=True)` (the API meant to
+     answer that) returned `None` for this checkpoint; the medium-quality lessac `.onnx` export
+     doesn't include the per-phoneme duration output alignments need. A fixed/guessed crop
+     duration was rejected as unsafe (VITS duration prediction is itself context/noise-dependent,
+     confirmed by measuring the filler's own rendered length across repeated calls -- it varies
+     run to run).
+  5. **Implemented instead**: `PiperBackend._prime_and_crop()` synthesizes
+     `_LEADING_CONTEXT_FILLER + " " + real_text` ("Well," + the real sentence) as one utterance,
+     then `_find_post_filler_crop_sample()` locates the actual pause after the filler by
+     measuring the audio's own 10ms-window RMS envelope (not a guessed duration) and crops there,
+     plus a 5ms fade-in to guard against any residual discontinuity at the new start of the file.
+     If no clear pause is found (sanity-bounded: must resolve within ~700ms and before 80% of the
+     chunk's own length), falls back to synthesizing the real text alone -- today's behavior,
+     never a half-applied or unsafely-guessed crop. Multi-sentence input's later sentences (each
+     their own independently-synthesized/normalized chunk) are untouched, appended as-is.
+     `prepend_leading_pause: false`/absent (every French voice today) takes the exact same code
+     path as before this change -- the new `voice.synthesize()`-based priming call is never even
+     reached.
+- Files: `chatterbox/synthesis/backends/piper/text_frontend.py` (removed the no-op prepend),
+  `chatterbox/synthesis/backends/piper/backend.py` (`_LEADING_CONTEXT_FILLER`,
+  `_find_post_filler_crop_sample()`, `PiperBackend._prime_and_crop()`, wired into `tts()`),
+  `chatterbox/config/config_tts.yaml` (updated comment), `tests/test_piper_backend.py` (+9 tests:
+  4 pure-DSP tests for the crop-point detector using synthetic tone/silence arrays, no real Piper
+  weights needed; 3 integration tests via a fake voice confirming crop-on-success,
+  fallback-on-no-pause-found, and -- the important regression guard -- that the flag being
+  off/absent never even calls the priming `synthesize()` path).
+- Why: asked directly -- "there is an artifact at the beginning of each synthesis which doesn't
+  appear in French. Find out why and fix the issue."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 312 passed, 1 pre-existing skip
+  (Windows). Ran the real end-to-end `PiperBackend.tts()` path (not just the fake-voice unit
+  tests) against 5 different English sentences with `prepend_leading_pause: true`: crop
+  succeeded on every one, each output's audio starts with either a clean sub-50ms fade-in
+  straight into real speech, or a short natural-sounding pre-speech pause -- no spikes,
+  discontinuities, or audible residue from the filler word in any of the raw sample dumps
+  inspected.
+- Notes/gotchas: **still unverified by ear** -- this session has no way to listen, same
+  limitation as 2026-07-29's attempt. Unlike that attempt, this one is now provably doing
+  something (a measurably different, shorter, cropped audio buffer, confirmed via direct
+  inspection) rather than silently doing nothing -- but whether the mispronunciation is actually
+  gone can only be confirmed by the user testing live on the Pi. If it doesn't help, the next
+  things worth trying (not attempted here): a different English voice/checkpoint (this may be a
+  property of the specific `en_US-lessac-medium` ONNX export rather than something a text-side
+  fix can address at all), or tuning `noise_w_scale` down for the primed call specifically (less
+  duration-prediction variance might make the model's rendering of the real first word more
+  consistent, independent of priming).
+
+---
+
 ## 2026-08-20 — Fix: no audio out of the real speaker — ALSA default pointed at HDMI, not the DAC
 
 - What: live real-hardware debugging (same session/device as the geometry fix above): "the speaker

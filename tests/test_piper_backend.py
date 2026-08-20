@@ -6,12 +6,14 @@ tests/test_export_xlsx.py guards its own optional openpyxl dependency.
 """
 import os
 import sys
+import wave
 
+import numpy as np
 import pytest
 
 piper = pytest.importorskip("piper", reason="piper-tts not installed (optional dependency)")
 
-from chatterbox.synthesis.backends.piper.backend import PiperBackend
+from chatterbox.synthesis.backends.piper.backend import PiperBackend, _find_post_filler_crop_sample
 
 
 class _FakeConfig:
@@ -176,3 +178,129 @@ def test_tts_never_imports_flaubert(tmp_path):
 
     after = {m for m in sys.modules if "flaubert" in m.lower()}
     assert after == before
+
+
+# ---------------------------------------------------------------------------
+# default_args.prepend_leading_pause (2026-08-20): the original implementation (a bare ". "
+# prepended in text_frontend.py) was confirmed a complete no-op -- piper-tts's bundled espeak-ng
+# phonemizer silently discards a leading "." with nothing before it, so it never changed the
+# synthesized phonemes at all. The replacement primes the model with a real leading word
+# (backend.py's _LEADING_CONTEXT_FILLER) and crops it back off using a measured pause in the
+# actual audio (_find_post_filler_crop_sample()), not a guessed/fixed duration -- these tests
+# cover both pieces without needing real Piper weights.
+# ---------------------------------------------------------------------------
+
+def _tone(duration_s, sample_rate, freq_hz, amplitude):
+    t = np.arange(int(sample_rate * duration_s)) / sample_rate
+    return (amplitude * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
+
+
+def _near_silence(duration_s, sample_rate, amplitude=0.0005):
+    n = int(sample_rate * duration_s)
+    return (amplitude * np.ones(n)).astype(np.float32)
+
+
+def test_find_post_filler_crop_sample_locates_a_real_pause():
+    sr = 22050
+    filler = _tone(0.15, sr, 200, 0.5)   # ~150ms leading filler word, moderate level
+    pause = _near_silence(0.10, sr)      # ~100ms near-silent pause
+    content = _tone(0.30, sr, 200, 0.9)  # real content, louder than the filler
+    audio = np.concatenate([filler, pause, content])
+
+    crop_at = _find_post_filler_crop_sample(audio, sr)
+
+    assert crop_at is not None
+    # Should land within (or right at the edge of) the pause region, not inside the filler or
+    # already inside the real content.
+    assert len(filler) - int(sr * 0.02) <= crop_at <= len(filler) + len(pause)
+
+
+def test_find_post_filler_crop_sample_returns_none_without_a_pause():
+    sr = 22050
+    audio = _tone(0.5, sr, 200, 0.8)  # continuous tone, nothing resembling a pause anywhere
+    assert _find_post_filler_crop_sample(audio, sr) is None
+
+
+def test_find_post_filler_crop_sample_returns_none_for_short_audio():
+    sr = 22050
+    audio = _tone(0.02, sr, 200, 0.5)  # well under the 10-window minimum
+    assert _find_post_filler_crop_sample(audio, sr) is None
+
+
+def test_find_post_filler_crop_sample_returns_none_for_near_silent_audio():
+    sr = 22050
+    audio = _near_silence(0.5, sr)  # no real peak to measure a threshold against
+    assert _find_post_filler_crop_sample(audio, sr) is None
+
+
+class _FakeAudioChunk:
+    def __init__(self, audio_float_array, sample_rate=22050):
+        self.audio_float_array = audio_float_array
+        self.sample_rate = sample_rate
+
+
+class _PrimableFakeVoice(_FakeVoice):
+    """Fake voice whose synthesize() returns audio shaped like a real "filler + pause + content"
+    utterance (or, with has_pause=False, no pause at all) -- config/synthesize_wav() inherited
+    from _FakeVoice so _resolve_speaker()'s legacy single-checkpoint branch still works."""
+    def __init__(self, has_pause=True):
+        self.has_pause = has_pause
+        self.synthesize_wav_calls = []
+        self.synthesize_calls = []
+
+    def synthesize(self, text, syn_config=None):
+        self.synthesize_calls.append(text)
+        sr = 22050
+        filler = _tone(0.15, sr, 200, 0.5)
+        content = _tone(0.30, sr, 200, 0.9)
+        parts = [filler, _near_silence(0.10, sr), content] if self.has_pause else [filler, content]
+        return [_FakeAudioChunk(np.concatenate(parts), sr)]
+
+    def synthesize_wav(self, text, wav_file, syn_config=None):
+        self.synthesize_wav_calls.append(text)
+        super().synthesize_wav(text, wav_file, syn_config=syn_config)
+
+
+def test_prepend_leading_pause_off_by_default_never_primes(tmp_path):
+    # The flag defaults False/absent (matches every French config_tts.yaml entry today) -- tts()
+    # must go straight to synthesize_wav(), never touching the priming path at all.
+    backend = PiperBackend()
+    backend._active_voice = _PrimableFakeVoice(has_pause=True)
+    tts_config = _make_tts_config(tmp_path)  # no prepend_leading_pause key
+
+    backend.tts("Bonjour.", tts_config, None, False)
+
+    assert backend._active_voice.synthesize_calls == []
+    assert backend._active_voice.synthesize_wav_calls == ["Bonjour."]
+
+
+def test_prepend_leading_pause_crops_filler_when_a_pause_is_found(tmp_path):
+    backend = PiperBackend()
+    backend._active_voice = _PrimableFakeVoice(has_pause=True)
+    tts_config = _make_tts_config(tmp_path)
+    tts_config["default_args"]["prepend_leading_pause"] = True
+
+    location_mel_file, _ = backend.tts("Hello.", tts_config, None, False)
+
+    # Never falls back when priming succeeds.
+    assert backend._active_voice.synthesize_wav_calls == []
+    wav_path = os.path.join(location_mel_file, "audio_file.wav")
+    with wave.open(wav_path, "rb") as w:
+        n_frames = w.getnframes()
+    # The written audio must be shorter than the raw filler+pause+content chunk -- proof the
+    # filler was actually cropped off, not just left in place.
+    raw_len = int(22050 * (0.15 + 0.10 + 0.30))
+    assert n_frames < raw_len
+
+
+def test_prepend_leading_pause_falls_back_when_no_pause_is_found(tmp_path):
+    backend = PiperBackend()
+    backend._active_voice = _PrimableFakeVoice(has_pause=False)
+    tts_config = _make_tts_config(tmp_path)
+    tts_config["default_args"]["prepend_leading_pause"] = True
+
+    backend.tts("Hello.", tts_config, None, False)
+
+    # No safe crop point exists -- must fall back to the plain, un-primed synthesize_wav() call
+    # rather than ship audio with an un-cropped filler word stuck on the front.
+    assert backend._active_voice.synthesize_wav_calls == ["Hello."]
