@@ -15,6 +15,53 @@ state before starting new work.
 
 ---
 
+## 2026-08-20 — Fix: no audio out of the real speaker — ALSA default pointed at HDMI, not the DAC
+
+- What: live real-hardware debugging (same session/device as the geometry fix above): "the speaker
+  is connected but when I run a synthesis, it only makes noise louder. I don't know if it comes
+  from the speaker or from the program." Diagnosed by playing a known-good ALSA reference WAV
+  (`/usr/share/sounds/alsa/Front_Center.wav`, a standard file that audibly announces itself)
+  through chatterbox's OWN playback path (`chatterbox/audio/playback.py:play_audio()`, imported
+  and called directly, not reimplemented) instead of through TTS-generated audio — isolates
+  hardware/playback-chain problems from TTS-generation-specific ones. First run: **no sound at
+  all**. `aplay -l` showed the real culprit: the onboard `vc4-hdmi0`/`vc4-hdmi1` outputs enumerate
+  as cards 0/1, ahead of the actually-wired `IQaudIODAC` at card 2, with **no ALSA default-device
+  override anywhere on the system** (`/etc/asound.conf` didn't exist) — so `ffplay`'s bare default
+  device (what `_play_raw()` uses, no explicit device argument) silently went out via HDMI, not
+  the connected speaker. This also fully explains the ORIGINAL "noise that gets louder" report,
+  not just the diagnostic's later silence: `chatterbox-powerd`'s amp GPIO handshake
+  (`chatterbox/power/amp.py`) still enables the amplifier around every playback regardless of
+  where the audio signal actually goes (it has no way to know) — an enabled amp fed no real
+  signal is exactly the kind of symptom described, not a TTS audio-quality bug. Fixed by adding
+  `deploy/audio/asound.conf` (`pcm.!default`/`ctl.!default` pointed at `hw:IQaudIODAC,0`, `type
+  plug` so format/rate mismatches convert automatically, card referenced by NAME not numeric
+  index since indices can shift across reboots) as a new `scripts/setup_pi.sh` step 10 (checks
+  `aplay -l` for an `IQaudIODAC` card first, non-fatal/skips with a warning otherwise, same
+  convention as the powerd/Xorg-kiosk steps). Re-ran the same known-good-WAV-through-chatterbox's-
+  own-playback-path test after installing the file live — user confirmed "I heard it clearly."
+- Files: `deploy/audio/asound.conf` (new), `scripts/setup_pi.sh`, `apt-packages-pi.txt`
+  (`alsa-utils`, for `aplay -l` — usually already present on Raspberry Pi OS's base image but not
+  guaranteed, listed explicitly per this file's own convention), `INSTALL.md`.
+- Why: direct real-hardware bug report, diagnosed and fixed live against the actual production
+  kiosk device via SSH (not a follow-up commit for later deployment).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged — this is
+  ALSA/system config with no PC-testable equivalent, no new automated test added); `bash -n
+  scripts/setup_pi.sh` (syntax-checked, not run, on this Windows dev checkout — Linux-only script).
+  Verified live instead, twice: silence with the known-good WAV before `/etc/asound.conf` existed,
+  clearly audible ("I heard it clearly") after installing it and re-running the identical test.
+- Notes/gotchas: deployed `/etc/asound.conf` directly to the live device via `ssh`/`sudo tee`
+  before writing the `scripts/setup_pi.sh` step, then wrote the step afterward from that confirmed-
+  working content — the two should now match, but worth a diff if either is ever edited
+  independently. `deploy/audio/asound.conf` hardcodes the card name `IQaudIODAC` -- a different
+  DAC/HAT on a future deployment needs that name updated to match its own `aplay -l` output (the
+  new `setup_pi.sh` step's own warning message says this too, not just this changelog entry). Two
+  small diagnostic-only packages (`x11-utils`, `scrot`) were also installed live on this device
+  during this and the previous session's debugging, for `xwininfo`/screenshot verification -- left
+  installed (small, harmless) but deliberately NOT added to `apt-packages-pi.txt`, since neither is
+  something the app itself needs at runtime.
+
+---
+
 ## 2026-08-20 — Fix: kiosk fullscreen geometry left a black gap top+bottom under bare Xorg
 
 - What: live real-hardware debugging (`ssh pi5`, actively running against the deployed kiosk

@@ -26,6 +26,12 @@ libsndfile1
 # simpleaudio/sounddevice being Windows-only); ffmpeg also covers any non-wav format conversions.
 ffmpeg
 
+# aplay -l, used by scripts/setup_pi.sh's ALSA-default-device step (deploy/audio/asound.conf) to
+# confirm the IQaudio DAC is actually present before pinning ALSA's default output to it. Usually
+# already present on Raspberry Pi OS's base image, but not guaranteed -- listed explicitly rather
+# than assumed, same convention as every other dependency in this file.
+alsa-utils
+
 # unzip the pretrained-weight archives downloaded by scripts/setup_pi.sh.
 unzip
 

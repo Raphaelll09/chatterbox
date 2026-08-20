@@ -94,8 +94,18 @@ activity/put-away wiring) degrades to a no-op if powerd isn't running.
 installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/kiosk/KIOSK.md`) —
 **not** `deploy/systemd/chatterbox-gui.service` (cage/Wayland), which real Pi5 hardware bring-up
 ruled out (a reproducible `libwlroots` SIGSEGV with no fixed package available; see
-`deploy/xorg-kiosk/README.md`). Neither of these touches the following, which need a one-time
-manual pass:
+`deploy/xorg-kiosk/README.md`). Step 10 pins ALSA's system-default output to the IQaudio DAC
+(`deploy/audio/asound.conf`) — real-hardware bug report: with no override, ALSA's bare `default`
+device (what `chatterbox/audio/playback.py`'s `ffplay` call uses) resolved to the onboard
+`vc4-hdmi` output instead of the DAC actually wired to the amp/speaker, so audio played but never
+reached the speaker — meanwhile powerd's amp GPIO handshake still enabled the amplifier around
+every playback regardless, producing an audible noise floor with no real signal behind it. If a
+deployment's real speaker output is silent (or only ever produces noise, never intelligible
+audio) even though everything else in the bring-up protocol below passes, check this first —
+`aplay -l` lists the actual card names/order on that specific board, and
+`deploy/audio/asound.conf`'s `hw:IQaudIODAC,0` needs to match whichever one is actually wired to
+the amp if it differs from this reference hardware. Neither of these touches the following, which
+need a one-time manual pass:
 
 1. **Unit file paths/user.** `chatterbox-powerd.service` defaults to `chatterbox` /
    `/home/chatterbox/chatterbox` (this deployment's actual account —
