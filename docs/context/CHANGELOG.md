@@ -15,6 +15,62 @@ state before starting new work.
 
 ---
 
+## 2026-08-20 — Fix: kiosk fullscreen geometry left a black gap top+bottom under bare Xorg
+
+- What: live real-hardware debugging (`ssh pi5`, actively running against the deployed kiosk
+  checkout at `/home/chatterbox/chatterbox`, the `chatterbox-gui` production user, not a dev
+  checkout): "the GUI is slightly off screen, a part of the bottom (keyboard and smileys) is
+  cropped." Root cause found via `xwininfo -root -tree` (a new read-only diagnostic dependency,
+  `x11-utils`, installed for this): the main "TTS" toplevel's real, X11-negotiated size was
+  `800x512` against the real `800x480` screen (confirmed separately via `fbset -i`/`xrandr`) --
+  32px of pure overflow, rendered entirely below the visible display since the window is anchored
+  at `(0, 0)`. `chatterbox/gui/app.py`'s window-geometry code (the previous entry's "always apply
+  explicit, screen-matching geometry" fix) runs and sets `window.geometry("800x480+0+0")` BEFORE
+  the app-bar menu (`window.config(menu=menubar)`) is even built, much later in the same function
+  -- on this Tk/X11 build, attaching a menu to an already-geometry'd toplevel grows its actual
+  rendered height by the menu's own height, on top of whatever was already requested, and neither
+  the earlier geometry() call nor anything downstream ever accounted for that. Two measurement
+  approaches were tried live and BOTH failed before landing on the actual fix: (a) `window.
+  winfo_height()` right after attaching the menu always reported back the ALREADY-explicitly-set
+  480 (Tk's own "what was I told to be" bookkeeping, not the true post-menu X11 size, so the
+  detected overflow was always zero); (b) `window.winfo_reqheight()`, measured again later, once
+  after `gui_script()` had built the real keyboard/emotion-bar content, reported 722 -- the
+  UNCOMPRESSED natural size of every `weight=1` grid row summed together, not the actual
+  menu-driven delta (those rows already compress fine into whatever height IS available; 722
+  isn't a usable "how much extra does the menu need" signal). Landed on a reserved, empirically-
+  measured constant instead (`_MENU_BAR_MARGIN_PX = 32`, same convention as the pre-existing
+  `_TITLE_BAR_MARGIN_PX` a few lines below it, for the unrelated WM-title-bar case) -- confirmed
+  reproducible identically across two separate live restarts before committing to it.
+- Files: `chatterbox/gui/app.py`.
+- Why: direct real-hardware bug report, fixed live against the actual production kiosk process
+  (not just a follow-up commit for later deployment) -- the user was mid-session on the device via
+  SSH, so the fix was iterated and verified on the real hardware before being written up here.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged -- this is
+  pure X11/Tk geometry behavior with no PC-testable equivalent, no new automated test added).
+  Verified live instead: `xwininfo -root -tree` showed the "TTS" toplevel at exactly `800x480+0+0`
+  after the fix (was `800x512+0+0` before), content area `800x448+0+32` correctly reduced to make
+  room for the `800x32` menu strip within that same 480px total; a `scrot` screenshot (also newly
+  installed for this) of the live display confirmed visually -- full menu bar, header row (Saisie/
+  Synthèse/status circle/put-away moon/battery), duration info, Texte/Phonèmes toggle, and all 5
+  keyboard rows fully on-screen, all 12 emotion icons visible top-to-bottom with no bottom crop --
+  and, as a bonus confirmation, the emotion icons are now rendering as real color emoji faces (the
+  `fonts-noto-color-emoji` install from an earlier session's follow-up).
+- Notes/gotchas: deployed directly to the live kiosk checkout (`/home/chatterbox/chatterbox`,
+  distinct from this repo's own Windows dev checkout and from an earlier session's separate
+  `/home/gerantos/chatterbox` checkout) via `scp` + killing the running GUI process -- the
+  `agetty --autologin` + `.bash_profile` + `.xinitrc` chain (`deploy/xorg-kiosk/`) self-healed and
+  relaunched the app automatically within seconds, confirming that chain's own resilience as a
+  side effect. That checkout already had uncommitted local edits matching commits `0afc6bf`/
+  `c8a0a2e` (inspected via `git diff` before overwriting anything, to confirm they were superseded-
+  not-novel content, not a risk of clobbering an undocumented live fix) -- left as uncommitted
+  working-tree state there, same as before this session touched it; this repo's own git history
+  (the authoritative source) has the real commit. `_MENU_BAR_MARGIN_PX` is a reserved constant,
+  not dynamically measured -- if a future theme/font change alters the app-bar menu's own height,
+  this number would need re-measuring the same way (`ssh` + `xwininfo -root -tree`), not assumed
+  to self-correct.
+
+---
+
 ## 2026-07-31 — Pi5 Lite real hardware bring-up: cage/wlroots ruled out, plain-Xorg fallback built
 
 - What: first real Raspberry Pi OS Lite bring-up on the Pi5 (previous install was a full-desktop

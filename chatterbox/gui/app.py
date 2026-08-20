@@ -821,6 +821,20 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # unconditionally is harmless when a real WM *does* honor '-zoomed' (it takes over size/
     # position on maximize regardless of whatever geometry was requested beforehand).
     _TITLE_BAR_MARGIN_PX = 60
+    # Empirically measured live on the Pi5's actual bare-Xorg kiosk session (ssh + `xwininfo -root
+    # -tree`), not guessed: attaching the app-bar menu (window.config(menu=menubar), much later in
+    # this function, after menubar itself is built) grows the toplevel's ACTUAL X11-negotiated
+    # height by exactly this many pixels beyond whatever geometry() requests here -- confirmed
+    # reproducible across two separate live restarts. Neither winfo_height() nor winfo_reqheight()
+    # reliably reflect this specific growth from Python at any point (tried both, live, before
+    # landing on a reserved constant): winfo_height() only ever reports back whatever geometry()
+    # was last explicitly told (never "corrects" itself to the true X11-negotiated size), and
+    # winfo_reqheight() reports the UNCOMPRESSED natural size of every weighted grid row summed
+    # together (722px in one live measurement) -- real, but not what's actually needed here, since
+    # weighted rows already compress fine into whatever height IS given; neither number isolates
+    # "how much extra does attaching the menu specifically cost". Reserved upfront instead, same
+    # convention as _TITLE_BAR_MARGIN_PX below for a WM's title bar.
+    _MENU_BAR_MARGIN_PX = 32
     screen_w = window.winfo_screenwidth()
     screen_h = window.winfo_screenheight()
     win_w = min(main_panel_config["width"], screen_w)
@@ -831,8 +845,12 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         # centering here left a black gap at both the top AND bottom of the real screen -- that
         # margin only makes sense when an actual window manager is going to draw a title bar
         # *into* it, which a bare `startx` session with zero WM never does. Anchor flush to
-        # (0, 0) at the exact real screen size instead.
-        win_h = screen_h
+        # (0, 0), height reduced by _MENU_BAR_MARGIN_PX (real-hardware feedback: "the GUI is
+        # slightly off screen, a part of the bottom [keyboard and smileys] is cropped" -- without
+        # this, the window's true on-screen height ends up screen_h + _MENU_BAR_MARGIN_PX once the
+        # menu is attached, with that whole extra strip rendered below the visible display since
+        # the window is anchored at y=0).
+        win_h = screen_h - _MENU_BAR_MARGIN_PX
         pos_x = 0
         pos_y = 0
     else:
