@@ -43,7 +43,7 @@ The script:
 - Creates (or reuses) a venv at `~/chatterbox/venv`.
 - Installs `requirements-pi.txt`.
 - Downloads the FastSpeech2, FlauBERT, and HiFi-GAN pretrained weights (links from
-  `README.md`) into the paths the code expects (`docs/ARCHITECTURE.md` "Weights and
+  `README.fr.md`) into the paths the code expects (`docs/ARCHITECTURE.md` "Weights and
   config locations").
 - Smoke-tests a CPU torch matmul (fatal if this fails) and, best-effort, one end-to-end sentence
   through `do_tts.py` (non-fatal — a missing microphone/speaker or a slow first run on a fresh Pi

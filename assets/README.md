@@ -24,9 +24,9 @@ None of the following is tracked. A fresh clone needs them before it can speak:
 
 | What | Where it goes | How |
 |---|---|---|
-| FastSpeech 2 `config/`, `output/`, `preprocessed_data/` (checkpoint `390000`) | `models/FastSpeech2/` | Google Drive link in `README.md` |
-| HiFi-GAN `FR_V2/` (`g_00570000` + config) | `models/hifi-gan-master/` | Google Drive link in `README.md` |
-| FlauBERT large cased | `models/flaubert/flaubert_large_cased/` | Google Drive link in `README.md` |
+| FastSpeech 2 `config/`, `output/`, `preprocessed_data/` (checkpoint `390000`) | `models/FastSpeech2/` | Google Drive link in `README.fr.md` |
+| HiFi-GAN `FR_V2/` (`g_00570000` + config) | `models/hifi-gan-master/` | Google Drive link in `README.fr.md` |
+| FlauBERT large cased | `models/flaubert/flaubert_large_cased/` | Google Drive link in `README.fr.md` |
 | Piper voices (3 `.onnx` + `.json`) | `models/Piper/` | `./scripts/fetch_piper_voices.sh` — verifies sha256 |
 
 `scripts/setup_pi.sh` automates this on a fresh Pi 5.

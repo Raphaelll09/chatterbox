@@ -1,5 +1,7 @@
 # `docs/` — documentation index
 
+Start at the root [README.md](../README.md) for the full guide (install, structure, models, GUI, maintenance); [README.fr.md](../README.fr.md) is the French reference, fullest on the control-tag syntax.
+
 Split by who needs it.
 
 ## Running and understanding the software

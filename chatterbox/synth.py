@@ -87,7 +87,7 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     # stage to run.
     needs_vocoder = tts_config['tts_models'][tts_idx].get('needs_vocoder', True)
 
-    # Profiling: one recorder per top-level input line (shared across any "§" sub-utterances
+    # Profiling: one recorder per top-level input line (shared across any "|" sub-utterances
     # synthesized below). No-op when profiling is disabled.
     profiling_rec = profiling.begin_sentence(text_to_syn, complexity_tag=complexity_tag, sentence_id=sentence_id)
     profiling_rec.set(char_count=len(text_to_syn), word_count=len(text_to_syn.split()))
@@ -113,7 +113,9 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
         duration_by_symbol_subtitles = []
         duration_by_frame = tts_config["subtitles"]["duration_by_frame"]["hop_length"] / tts_config["subtitles"]["duration_by_frame"]["sampling_rate"]
 
-    # Parse Multiple utterances with "§"
+    # Parse multiple utterances separated by "|". NOTE: the comment here used to say "§", and
+    # README.fr.md documented "§" too -- both were wrong. The split has always been on "|";
+    # "§" is only in the _punctuation list above, i.e. ordinary punctuation. Corrected 2026-08.
     sub_utterance_separator = '|'
     first_end_of_utt = text_to_syn.find(sub_utterance_separator)
     if first_end_of_utt > 1:
