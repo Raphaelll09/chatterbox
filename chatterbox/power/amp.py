@@ -5,7 +5,7 @@
 `watchdog_should_force_off` is a pure function (tested directly, no GPIO needed).  `Amp` wraps
 gpiozero's DigitalOutputDevice with the lgpio backend (Pi 5 native -- NOT RPi.GPIO, which doesn't
 support the Pi 5's RP1 I/O chip); `gpiozero` is imported lazily inside __init__ (try/except
-ImportError, same pattern as tools/monitoring/profiling/sampler.py's smbus2 handling) so this
+ImportError, same pattern as research/profiling/sampler.py's smbus2 handling) so this
 module still imports on a PC dev checkout with gpiozero absent -- Amp just becomes a no-op in that
 case instead of raising, consistent with every other hardware module in this package.
 """

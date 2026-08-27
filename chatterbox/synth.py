@@ -10,7 +10,7 @@ play_audio()) and any UI/console reporting, using the returned AudioResult.
 
 This is a logic *move*, not a rewrite -- the file I/O below (np.memmap/np.fromfile on the mel/.AU
 files HiFi-GAN/FastSpeech2 write to disk) is unchanged from the pre-refactor syn_audio(); see
-tools/measurement/... 's tests and the manual real-weights smoke test in docs/gui/GUI.md for how
+research/... 's tests and the manual real-weights smoke test in docs/gui/GUI.md for how
 this was verified against real models.
 """
 import os

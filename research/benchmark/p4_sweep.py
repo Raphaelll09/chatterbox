@@ -15,7 +15,7 @@ Usage (via do_tts.py):
 
 Re-fit an existing sweep's summary without re-running any hardware (e.g.
 after hand-correcting a totaliser entry in sweep_summary.csv):
-    python -m tools.measurement.benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
+    python -m research.benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
 """
 import argparse
 import csv
@@ -26,9 +26,9 @@ import time
 import numpy as np
 
 import chatterbox.cli as cli
-import tools.monitoring.profiling as profiling
-from tools.monitoring.profiling.join import run_join, join_full_session
-from tools.measurement.benchmark.runner import load_sentences, DEFAULT_SENTENCES_PATH
+import research.profiling as profiling
+from research.profiling.join import run_join, join_full_session
+from research.benchmark.runner import load_sentences, DEFAULT_SENTENCES_PATH
 
 SUMMARY_COLUMNS = [
     "cadence_requested", "cadence_achieved", "duration_s", "n_utterances",
@@ -337,7 +337,7 @@ def _write_paste_xlsx(sweep_root, rows):
         import openpyxl
     except ImportError:
         print("[p4_sweep] openpyxl not installed - run `pip install openpyxl` and re-run "
-              "`python -m tools.measurement.benchmark.p4_sweep --refit {}` to produce sweep_paste.xlsx. "
+              "`python -m research.benchmark.p4_sweep --refit {}` to produce sweep_paste.xlsx. "
               "sweep_summary.csv is unaffected.".format(sweep_root))
         return None
 
@@ -384,7 +384,7 @@ def _join_cadence_point(cadence, cadence_dir):
     is never created -- Recorder only writes it from finalize(), never called
     with zero utterances. run_join()'s load_sentences() treats a missing
     per_sentence.jsonl as a hard error (SystemExit) by design, for the
-    standalone `python -m tools.monitoring.profiling.join` case where that really does mean
+    standalone `python -m research.profiling.join` case where that really does mean
     "nothing was profiled". Here it's the expected, correct state of the idle
     point, so skip the (sentence-only) join for it -- join_full_session()
     (called separately) doesn't touch per_sentence.jsonl at all, so the

@@ -1364,7 +1364,7 @@ state before starting new work.
 - What: the single-run version of `compare_runs.py` (previous entry) produced two contradictory
   conclusions in a row — one single FS2 run measured ~2x slower than siwis, a different single
   FS2 run measured roughly tied with it. Root cause, confirmed via `meta.json`'s `governor` field
-  (`tools/monitoring/profiling/__init__.py`'s `_read_governor()`, already recorded on every run,
+  (`research/profiling/__init__.py`'s `_read_governor()`, already recorded on every run,
   just never surfaced): the Pi's CPU frequency governor is `"ondemand"`, not `"performance"` —
   known source of run-to-run noise on this hardware. A user-run `--repeats 3` benchmark (33
   sentences per backend, not 11) resolved it: FS2's RTF held steady at 0.30-0.40 and siwis's at
@@ -1390,7 +1390,7 @@ state before starting new work.
     use the mode across all sentences instead. The original unit test for this used only 2
     sentences (a 1-vs-1 tie that doesn't reproduce the bug); fixed to use 4, matching the real
     benchmark's lopsided REF-is-the-only-outlier shape.
-- Files: `tools/measurement/benchmark/compare_runs.py`, `tests/test_compare_runs.py` (rewritten
+- Files: `research/benchmark/compare_runs.py`, `tests/test_compare_runs.py` (rewritten
   for the new aggregation shape, +3 tests: governor reporting, repeat-averaging, the n_repeats fix).
 - Why: asked directly, after being shown a `--repeats 3` comparison result and a live GUI
   observation (FS2 at ~39% of audio length, siwis at ~14%) that contradicted this tool's own
@@ -1411,7 +1411,7 @@ state before starting new work.
 
 ## 2026-07-23 — Add compare_runs.py for side-by-side FS2 vs. Piper benchmark comparison
 
-- What: new `tools/measurement/benchmark/compare_runs.py` — takes 2+ already-joined
+- What: new `research/benchmark/compare_runs.py` — takes 2+ already-joined
   `profile/run_.../` directories (`do_tts.py --default_tts <idx> --benchmark --join`) and prints a
   per-sentence side-by-side comparison (`total_synth_ms`, `audio_duration_s`, `rtf`, `energy_wh`,
   `peak_temp`, with a ratio column when comparing exactly 2 runs) plus an overall summary
@@ -1423,7 +1423,7 @@ state before starting new work.
   compared by row *position*, not by joining on `sentence_id` — the fixed benchmark set repeats
   "REF" as both the first and last sentence, so `sentence_id` alone isn't a unique key; mismatched
   row counts or `sentence_id`s between runs print a warning rather than silently misaligning rows.
-- Files: `tools/measurement/benchmark/compare_runs.py` (new), `tests/test_compare_runs.py` (new,
+- Files: `research/benchmark/compare_runs.py` (new), `tests/test_compare_runs.py` (new,
   5 tests against fake CSVs — no real profile run needed).
 - Why: asked directly, after the Piper integration/fixes above were done — "is there an efficient
   way to run the benchmark to compare the performances of FS2 and Piper?" No dedicated comparison
@@ -1597,7 +1597,7 @@ state before starting new work.
        actually expects instead of mirroring the backend's own (previously wrong) output.
   - **A 4th real bug, found by inspecting the actual `per_stage_results.csv` from the fixed
     Piper run above, not by reading code**: `PiperBackend.tts()`'s `profiling_rec.stage("synth")`
-    call was silently getting dropped from every joined CSV. `tools/monitoring/profiling/
+    call was silently getting dropped from every joined CSV. `research/profiling/
     recorder.py`'s `Recorder.stage(name)` *does* accumulate any name generically into
     `self.durations`/`self.timestamps` — but `Recorder.finalize()` only ever read back 4
     **hardcoded** names (`front_end`/`acoustic`/`vocoder`/`write`) into the JSON record it writes;
@@ -1611,13 +1611,13 @@ state before starting new work.
     - `Recorder.finalize()` now also writes a generic, order-preserving `"stages"` list
       (`[{"name", "t_end", "duration_ms"}, ...]`) alongside the 4 fixed fields, which stay
       byte-identical for backward compatibility.
-    - `tools/monitoring/profiling/join.py`'s `build_per_stage_results()` now derives each
+    - `research/profiling/join.py`'s `build_per_stage_results()` now derives each
       sentence's stage rows from that generic list via a new `_stage_windows()` (chaining each
       stage's start from the previous stage's end, first stage from `t_synth_start`) — falling
       back to the old fixed 4-stage chain only for a record with no `"stages"` field at all
       (re-joining a `per_sentence.jsonl` written before this change existed, a use case the
       module's own docstring already documents).
-    - `tools/measurement/benchmark/export_to_xlsx.py` was deliberately **not** generalized — its
+    - `research/benchmark/export_to_xlsx.py` was deliberately **not** generalized — its
       whole layout (`STAGES`, `PASS_SIZE * len(STAGES)` block-splitting, the `front_ms`/`acou_ms`/
       `voco_ms`/`write_ms` columns) is bound to a specific external spreadsheet template
       (`Chatterbox_Power_Measurements_final.xlsx`'s `P2P3_Synthesis` sheet, per this module's own
@@ -1644,8 +1644,8 @@ state before starting new work.
     `chatterbox/gui/i18n.py` (2 new label keys), `chatterbox/config/config_tts.yaml` (3 new
     `tts_models` entries: siwis/upmc/tom, each with `supports_subtitles: false`), `.gitignore`
     (Piper voice files, matching every other vendored model's "weights not in git" pattern),
-    `tools/monitoring/profiling/recorder.py` (generic `"stages"` field), `tools/monitoring/
-    profiling/join.py` (`_stage_windows()`), `tools/measurement/benchmark/export_to_xlsx.py`
+    `research/profiling/recorder.py` (generic `"stages"` field), `research/
+    profiling/join.py` (`_stage_windows()`), `research/benchmark/export_to_xlsx.py`
     (`_check_stage_shape()` guard), `tests/{test_profiling.py,test_export_xlsx.py}` (new coverage
     for all three), `chatterbox/synthesis/backends/piper/backend.py` (the `location_mel_file` fix).
 - Why: `cc_prompt_piper_backend.md`'s explicit purpose — prove or disprove the interchangeable-
@@ -2737,7 +2737,7 @@ state before starting new work.
     bundled into this cleanup.
   - Also fixed a second stale `.gitignore` entry found while touching this file:
     `profiling/__pycache__/` (from before Phase 2 moved `profiling/` to
-    `tools/monitoring/profiling/`) → `tools/monitoring/profiling/__pycache__/`.
+    `research/profiling/`) → `research/profiling/__pycache__/`.
 - Files: `.gitignore`, `CLAUDE.md`, `INSTALL.md`, `README.md`, `requirements-dev.txt`,
   `docs/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
   `minimal_requirements.txt`.
@@ -2846,7 +2846,7 @@ state before starting new work.
       into `chatterbox/config/` (two levels deeper) — caught immediately after the `git mv`, before
       it could break anything downstream, and fixed: `ROOT = Path(__file__).resolve().parents[2]`.
     - Phase 2 left six stale `-m benchmark.*` / `import audio_utils` references in
-      `tools/measurement/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings/comments/error
+      `research/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings/comments/error
       messages, plus a stale monkeypatch target (`runner.audio_utils`) in `tests/test_benchmark.py`
       — missed because Phase 2's cleanup checked for `-m profiling.*` patterns but not
       `-m benchmark.*`. Found via a repo-wide grep sweep done specifically because this session was
@@ -2857,7 +2857,7 @@ state before starting new work.
   config/{paths,config_tts.yaml}.py, synthesis/backends/fastspeech2_hifigan/rules/*.csv); removed
   `loading_modules.py`, `synthesis_modules.py`, `audio_utils.py`, `gui_utils.py`, `keyboards.py`,
   `tts_utils.py`, `audio_postprocess.py`, `do_normalize_txt.pl`; `do_tts.py` reduced to a 3-line
-  shim; `tools/measurement/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
+  shim; `research/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
   `tests/{test_benchmark,test_audio_postprocess,conftest}.py` updated for the new import paths.
 - Why: `docs/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
   GUI) — the interface boundaries §5 called for, plus closing out the config-reopening leaks found
@@ -2895,23 +2895,23 @@ state before starting new work.
      only cover the Pi provisioning path, not a manual install following the same README
      instructions.
   2. Phase 2 of `docs/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
-     tools/measurement/benchmark/`, `git mv profiling/ tools/monitoring/profiling/`, `git mv
-     pmic_calibrate.py tools/measurement/`. Added `tools/__init__.py`,
-     `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`. Updated every
+     research/benchmark/`, `git mv profiling/ research/profiling/`, `git mv
+     pmic_calibrate.py research/`. Added `tools/__init__.py`,
+     `research/__init__.py`, `research/__init__.py`. Updated every
      `import`/`from` reference to the new dotted paths across `do_tts.py`, `audio_utils.py`,
      `synthesis_modules.py`, the moved packages' own cross-imports, and all four
      `tests/test_*.py` files that import them (existing aliases like `as profiling`/`as p4` kept,
      so only import lines changed).
   3. Found and fixed a second gap of the exact same class as Phase 1's (a directory-depth
      assumption baked into a path constant, broken by nesting the directory deeper):
-     `tools/monitoring/profiling/__init__.py`'s `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(
+     `research/profiling/__init__.py`'s `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(
      os.path.abspath(__file__)))` assumed `profiling/` sat exactly one level under the repo root.
      Nesting it three levels deep silently broke the `subprocess.Popen(cwd=_PACKAGE_ROOT, ...)`
      call that launches the background sampler. Fixed: `_PACKAGE_ROOT = str(paths.ROOT)`.
 - Files: `loading_modules.py`; `do_tts.py`, `audio_utils.py`, `synthesis_modules.py`; the `git mv`
-  of `benchmark/` → `tools/measurement/benchmark/` and `profiling/` → `tools/monitoring/profiling/`
-  and `pmic_calibrate.py` → `tools/measurement/pmic_calibrate.py`; new `tools/__init__.py`,
-  `tools/measurement/__init__.py`, `tools/monitoring/__init__.py`; the moved packages' own
+  of `benchmark/` → `research/benchmark/` and `profiling/` → `research/profiling/`
+  and `pmic_calibrate.py` → `research/calibration/pmic_calibrate.py`; new `tools/__init__.py`,
+  `research/__init__.py`, `research/__init__.py`; the moved packages' own
   cross-imports and self-referential usage strings; `tests/test_benchmark.py`,
   `tests/test_p4_sweep.py`, `tests/test_export_xlsx.py`, `tests/test_profiling.py`;
   `docs/REORG_PROPOSAL.md`.
@@ -2920,7 +2920,7 @@ state before starting new work.
 - Verify: `pytest tests/` — 130 passed. Re-verified the config-path fix by reverting the local
   YAMLs to their original stale, as-downloaded content and re-running a synthesis — confirmed the
   in-memory remap (not a lingering hand-edit) does the work. Exercised every Phase 2 code path
-  directly: plain synthesis, `--profile` (a real `tools.monitoring.profiling` run directory was
+  directly: plain synthesis, `--profile` (a real `research.profiling` run directory was
   written with correct `per_sentence.jsonl`), `--benchmark --repeats 1` (all 11 sentences),
   `--join`, and `--export-xlsx` (the trickiest cross-import, `profiling.join` →
   `benchmark.export_to_xlsx`) — all succeeded. Deleted the test-generated `profile/run_*`

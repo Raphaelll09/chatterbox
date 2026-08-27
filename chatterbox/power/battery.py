@@ -8,7 +8,7 @@ same fuel-gauge chip): register 0x02 = VCELL (word, byte-swapped, *1.25/1000/16 
 register 0x04 = SOC (word, byte-swapped, /256 -> percent).
 
 smbus2 is imported lazily inside read_battery(), guarded by try/except ImportError -- same pattern
-as tools/monitoring/profiling/sampler.py's INA226 handling and chatterbox/power/amp.py's gpiozero
+as research/profiling/sampler.py's INA226 handling and chatterbox/power/amp.py's gpiozero
 import. A PC dev checkout without smbus2/the hardware still imports this module cleanly;
 read_battery() just returns None (never raises) so callers can treat "no battery info" as the
 normal case for any checkout that doesn't have this HAT.

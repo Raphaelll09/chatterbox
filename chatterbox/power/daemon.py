@@ -5,7 +5,7 @@
 Run with `python3 -m chatterbox.power.daemon` (matches the spec's own Sec8 systemd unit --
 ExecStart already invokes it this way; this repo has no setup.py/pyproject.toml to hang a
 `chatterbox-powerd` console_scripts entry point off of, and every other subsystem here
-(tools/monitoring/profiling/sampler.py, etc.) is already `python -m package.module`-invoked, so
+(research/profiling/sampler.py, etc.) is already `python -m package.module`-invoked, so
 that's the convention this follows too).
 
 Single-threaded asyncio: socket server, evdev read loops, and the 1 Hz tick task all share one

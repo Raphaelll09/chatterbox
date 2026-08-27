@@ -6,9 +6,9 @@ This module exists so that the runtime package (L1 -- everything needed to make
 the demonstrator speak) never imports the research package (L3 --
 ``research/``: profiling, benchmarking, power measurement). Before it existed,
 ``chatterbox/synth.py``, ``chatterbox/cli.py`` and both backends imported
-``tools.monitoring.profiling`` at module scope, which meant deleting the
-research tree did not merely disable profiling -- it made the runtime
-package *unimportable*. See ``docs/release/STRUCTURE_AUDIT.md`` Sec4.
+``tools.monitoring.profiling`` at module scope (the research package's name
+before the release reorganisation), which meant deleting the research tree did
+not merely disable profiling -- it made the runtime package *unimportable*. See ``docs/release/STRUCTURE_AUDIT.md`` Sec4.
 
 How it works
 ------------

@@ -10,8 +10,8 @@ import os
 
 import pytest
 
-import tools.monitoring.profiling.parsing as parsing
-from tools.monitoring.profiling.recorder import NullRecorder, Recorder
+import research.profiling.parsing as parsing
+from research.profiling.recorder import NullRecorder, Recorder
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ def test_recorder_stage_order_does_not_duplicate_repeated_stage_names(tmp_path):
 # join.py
 # ---------------------------------------------------------------------------
 
-import tools.monitoring.profiling.join as join
+import research.profiling.join as join
 
 
 def _sample(t_mono, pmic_power_w, cpu_total=50.0, temp_c=45.0, throttled=0, ina_power_w=None,
@@ -593,8 +593,8 @@ def test_resolve_default_profile_dir_follows_latest_txt_pointer(tmp_path):
     assert resolved == str(tmp_path / "run_20260716_120000")
 
 
-import tools.monitoring.profiling as profiling
-from tools.monitoring.profiling.sampler import Sampler
+import research.profiling as profiling
+from research.profiling.sampler import Sampler
 
 
 def test_new_run_dir_is_timestamped_and_isolated(tmp_path):

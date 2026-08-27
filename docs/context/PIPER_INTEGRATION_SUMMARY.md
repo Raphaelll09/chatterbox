@@ -71,7 +71,7 @@ the physical kiosk screen, or actually listening to/timing the output. In the or
    crashing every sentence. The unit test written for this at the time asserted the same wrong
    value and passed alongside the bug — only a real run through the unmodified `synth.py` caught
    it.
-4. **Profiling subsystem silently dropped Piper's stage data.** `tools/monitoring/profiling/
+4. **Profiling subsystem silently dropped Piper's stage data.** `research/profiling/
    recorder.py`'s `Recorder.finalize()` only ever serialized 4 hardcoded FS2 stage names; Piper's
    `"synth"` stage was computed correctly then discarded, no error — a *plausible-looking, silently
    wrong* result, not a crash, found only by opening the CSV directly. Generalized properly
@@ -100,7 +100,7 @@ the physical kiosk screen, or actually listening to/timing the output. In the or
 
 - **`scripts/fetch_piper_voices.sh`** — sha256-verified voice download, voice count now computed
   dynamically (won't go stale again if the voice list changes).
-- **`tools/measurement/benchmark/compare_runs.py`** — side-by-side comparison of two or more
+- **`research/benchmark/compare_runs.py`** — side-by-side comparison of two or more
   joined `profile/run_.../` directories. Went through its own real bug-finding cycle:
   - First version compared runs by raw row position — worked, but a **single benchmark pass
     turned out not to be reliable on this hardware at all**: one single-run FS2 measurement came
@@ -138,7 +138,7 @@ tighten the std values further without changing the relative ordering):
   not specific to one voice.
 
 Raw data: `profile/compare_fs2_siwis_upmc.csv` (gitignored, not committed — regenerate with
-`tools.measurement.benchmark.compare_runs` against fresh `--repeats 3` runs if needed later).
+`research.benchmark.compare_runs` against fresh `--repeats 3` runs if needed later).
 
 ## 7. Current state
 

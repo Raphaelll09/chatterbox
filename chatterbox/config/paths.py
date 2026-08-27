@@ -7,7 +7,7 @@ directory -- see docs/REORG_PROPOSAL.md, Phase 0. Lives at chatterbox/config/pat
 under the repo root) as of Phase 3 -- ROOT below accounts for that nesting explicitly. If this file
 moves again, update the parent count here first, before anything else: an off-by-one here breaks
 every path in this module silently (see Phase 2's _PACKAGE_ROOT bug in
-tools/monitoring/profiling/__init__.py for exactly this failure mode).
+research/profiling/__init__.py for exactly this failure mode).
 """
 from pathlib import Path
 

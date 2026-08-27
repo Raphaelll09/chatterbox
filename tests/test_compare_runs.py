@@ -1,4 +1,4 @@
-"""Tests for tools/measurement/benchmark/compare_runs.py's pure comparison logic. Writes fake
+"""Tests for research/benchmark/compare_runs.py's pure comparison logic. Writes fake
 per_sentence_results.csv (and meta.json, for governor tests) files to tmp_path -- no real
 profile/ run or synthesis needed.
 """
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-import tools.measurement.benchmark.compare_runs as compare_runs
+import research.benchmark.compare_runs as compare_runs
 
 _COLUMNS = ["sentence_id", "complexity_tag", "total_synth_ms", "audio_duration_s", "rtf",
             "energy_wh", "peak_temp"]

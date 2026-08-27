@@ -37,7 +37,7 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
     """CLI/benchmark entry point. Delegates the actual compute to chatterbox.synth.synthesize()
     (chatterbox_gui_spec_v0.1.md Sec2.3) and prints the duration report to the console.
 
-    `use_gui` is kept only for call-site compatibility with tools/measurement/benchmark/
+    `use_gui` is kept only for call-site compatibility with research/benchmark/
     {runner,p4_sweep}.py, the free-text loop below, and tests/test_benchmark.py's fake -- all of
     which already pass False positionally. It no longer branches on anything: the GUI stopped
     calling this function in the GUI refactor (chatterbox_gui_spec_v0.1.md) -- it calls
@@ -45,7 +45,7 @@ def syn_audio(use_gui, tts_config, txt_input="", gui_control=None,
     worker thread instead, so it can post UI updates back itself.
 
     sentence_id/complexity_tag label the profiling per-sentence record (used
-    by tools/measurement/benchmark/runner.py; free-text callers leave them None). play=False
+    by research/benchmark/runner.py; free-text callers leave them None). play=False
     skips playback (synthesise-only, used by the benchmark's default mode to
     isolate compute cost).
     """
@@ -188,7 +188,7 @@ def main():
         action="store_true",
         default=False,
         help="After --benchmark finishes, run the offline profiling join "
-             "(tools/monitoring/profiling/join.py) to produce per_sentence_results.csv / per_stage_results.csv.",
+             "(research/profiling/join.py) to produce per_sentence_results.csv / per_stage_results.csv.",
     )
     parser.add_argument(
         "--ina",
@@ -205,13 +205,13 @@ def main():
         default=False,
         help="After --benchmark finishes, export per_sentence_results.csv / "
              "per_stage_results.csv to a paste-ready profile/exports/chatterbox_paste.xlsx "
-             "(tools/measurement/benchmark/export_to_xlsx.py). Implies --join. Requires openpyxl.",
+             "(research/benchmark/export_to_xlsx.py). Implies --join. Requires openpyxl.",
     )
     parser.add_argument(
         "--p4-sweep",
         action="store_true",
         default=False,
-        help="Run the P4 cadence sweep (tools/measurement/benchmark/p4_sweep.py): a series of fixed-cadence "
+        help="Run the P4 cadence sweep (research/benchmark/p4_sweep.py): a series of fixed-cadence "
              "points (--cadences), profiling+playback on throughout, prompting to read an "
              "external power meter between points, fitting P_use(N) = P_idle + k*N at the "
              "end. Implies profiling; always plays back regardless of --play/--profile "
@@ -246,7 +246,7 @@ def main():
     # procedure shouldn't fail on a typo deep into it.
     p4_cadences = None
     if args.p4_sweep:
-        import tools.measurement.benchmark.p4_sweep as p4_sweep_module
+        import research.benchmark.p4_sweep as p4_sweep_module
         try:
             p4_cadences = p4_sweep_module.parse_cadences(args.cadences)
         except ValueError as exc:
@@ -345,7 +345,7 @@ def main():
 
     try:
         if args.benchmark:
-            import tools.measurement.benchmark.runner as benchmark_runner
+            import research.benchmark.runner as benchmark_runner
             load_models()
             benchmark_runner.run_benchmark(
                 tts_config,
@@ -399,7 +399,7 @@ def main():
         profiling.stop_session()
 
     if args.benchmark and (args.join or args.export_xlsx):
-        from tools.monitoring.profiling.join import run_join
+        from research.profiling.join import run_join
         # profiling.get_run_dir() is this session's profile/run_.../ (set by
         # start_session(), still valid after stop_session() -- see its
         # docstring). Falls back to the base output_dir only if profiling was
@@ -408,5 +408,5 @@ def main():
         run_join(run_dir)
 
     if args.benchmark and args.export_xlsx:
-        from tools.measurement.benchmark.export_to_xlsx import export as export_xlsx
+        from research.benchmark.export_to_xlsx import export as export_xlsx
         export_xlsx(run_dir)

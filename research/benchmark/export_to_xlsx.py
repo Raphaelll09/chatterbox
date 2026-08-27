@@ -15,12 +15,12 @@ sheet (P2P3_Synthesis, P2P3_Synthesis_pass2, ...), all with the same A2:U12
 layout so any of them can be pasted individually.
 
 Usage:
-    python -m tools.measurement.benchmark.export_to_xlsx                        # profile/latest
-    python -m tools.measurement.benchmark.export_to_xlsx --profile-dir profile/run_20260716_120000
-    python -m tools.measurement.benchmark.export_to_xlsx --out-dir SOMEWHERE
+    python -m research.benchmark.export_to_xlsx                        # profile/latest
+    python -m research.benchmark.export_to_xlsx --profile-dir profile/run_20260716_120000
+    python -m research.benchmark.export_to_xlsx --out-dir SOMEWHERE
 
 With no --profile-dir, this defaults to profile/latest (the most recently
-completed profiled run - see tools/monitoring/profiling/__init__.py's start_session()); if
+completed profiled run - see research/profiling/__init__.py's start_session()); if
 that pointer is missing or stale (no per_sentence_results.csv there yet),
 it lists the available profile/run_.../ directories and asks which one to
 use, rather than failing outright.
@@ -62,7 +62,7 @@ def load_per_sentence_rows(profile_dir):
     if not os.path.exists(path):
         raise SystemExit(
             "[export_to_xlsx] {} not found. Run `python3 do_tts.py --benchmark --profile "
-            "--join` first, or `python -m tools.monitoring.profiling.join --profile-dir {}` if that run "
+            "--join` first, or `python -m research.profiling.join --profile-dir {}` if that run "
             "already has per_sample.csv/per_sentence.jsonl but was never joined.".format(
                 path, profile_dir,
             )
@@ -86,7 +86,7 @@ def _check_stage_shape(stage_rows):
     acou_ms/voco_ms/write_ms columns) is bound to a specific external spreadsheet template
     (Chatterbox_Power_Measurements_final.xlsx's P2P3_Synthesis sheet, this module's own
     docstring) built around exactly FS2's 4 fixed stage names. join.py's per_stage_results.csv is
-    now genuinely backend-agnostic (tools/monitoring/profiling/join.py's _stage_windows(),
+    now genuinely backend-agnostic (research/profiling/join.py's _stage_windows(),
     Piper integration -- docs/context/CHANGELOG.md) and can contain a different stage count/names
     for a different backend (e.g. Piper's "synth"+"write") -- silently slicing those rows into
     fixed len(STAGES)-sized blocks here would misalign every downstream block, corrupting the
@@ -200,7 +200,7 @@ def write_workbook(sentence_passes, stage_passes, out_path):
         import openpyxl
     except ImportError:
         print("[export_to_xlsx] openpyxl not installed - run `pip install openpyxl` and "
-              "re-run `python -m tools.measurement.benchmark.export_to_xlsx` to produce the paste-ready sheet. "
+              "re-run `python -m research.benchmark.export_to_xlsx` to produce the paste-ready sheet. "
               "per_sentence_results.csv / per_stage_results.csv are unaffected.")
         return None
 
@@ -283,13 +283,13 @@ def _resolve_profile_dir(base_dir, explicit):
     if run_id and _run_has_results(base_dir, run_id):
         return os.path.join(base_dir, run_id)
 
-    import tools.monitoring.profiling as profiling
+    import research.profiling as profiling
     candidates = [r for r in profiling.list_run_dirs(base_dir) if _run_has_results(base_dir, r)]
     if not candidates:
         raise SystemExit(
             "[export_to_xlsx] no run under {}/ has a per_sentence_results.csv yet - run "
             "`python3 do_tts.py --benchmark --profile --join` first, or `python -m "
-            "tools.monitoring.profiling.join --profile-dir <run>` on an existing run.".format(base_dir)
+            "research.profiling.join --profile-dir <run>` on an existing run.".format(base_dir)
         )
 
     print("[export_to_xlsx] profile/latest isn't usable (missing, or that run was never "

@@ -22,7 +22,7 @@ python3 -m chatterbox.power.daemon
 ```
 
 There is no `chatterbox-powerd` console script — this repo has no `setup.py`/`pyproject.toml`, so
-every subsystem here (`tools/monitoring/profiling/sampler.py`, etc.) is `python -m package.module`-
+every subsystem here (`research/profiling/sampler.py`, etc.) is `python -m package.module`-
 invoked; the systemd unit's `ExecStart` already does this.
 
 Reload config without restarting: `sudo systemctl reload chatterbox-powerd` (or `kill -HUP <pid>`,

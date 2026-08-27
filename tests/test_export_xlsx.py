@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-import tools.measurement.benchmark.export_to_xlsx as export_to_xlsx
+import research.benchmark.export_to_xlsx as export_to_xlsx
 
 openpyxl = pytest.importorskip("openpyxl", reason="openpyxl not installed (optional dependency)")
 

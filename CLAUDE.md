@@ -272,7 +272,7 @@ documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither requir
   (`--postprocess`, `--target-crest-db`, `--analyze`, `--report-wav`) and the profiling flag
   (`--profile`, or `CHATTERBOX_PROFILE=1` — see below).
 - **Benchmark**: `python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FILE]`
-  — runs the fixed 10-sentence set in `tools/measurement/benchmark/sentences_fr.jsonl` through the
+  — runs the fixed 10-sentence set in `research/benchmark/sentences_fr.jsonl` through the
   same `chatterbox.cli.syn_audio()` call as free-text mode, with profiling forced on. See
   `docs/context/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
 - **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
@@ -306,13 +306,13 @@ separate manual real-weights smoke tests that *do* need loaded models (not part 
 
 - Keep dependencies minimal — this targets an embedded Pi 5, not a dev workstation.
 - The synthesis function is shared, not duplicated — the benchmark mode
-  (`tools/measurement/benchmark/runner.py`) calls the same `chatterbox.cli.syn_audio()` /
+  (`research/benchmark/runner.py`) calls the same `chatterbox.cli.syn_audio()` /
   `FastSpeech2HifiGanBackend.tts()` path as free-text mode, not a parallel copy. Any future batch
   mode must do the same. Underneath, `cli.syn_audio()` and the GUI's worker thread both call the
   same Tk-free `chatterbox.synth.synthesize()` — don't reintroduce a second compute path for one
   or the other.
 - Profiling/instrumentation is opt-in and off by default (mirrors the `postprocess.enabled` pattern
-  in `config_tts.yaml`) — see the `tools/monitoring/profiling/` package.
+  in `config_tts.yaml`) — see the `research/profiling/` package.
 
 ## Maintenance rules (IMPORTANT)
 

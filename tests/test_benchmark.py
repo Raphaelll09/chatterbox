@@ -1,4 +1,4 @@
-"""Pytest tests for tools/measurement/benchmark/runner.py's pure logic (sentence loading and
+"""Pytest tests for research/benchmark/runner.py's pure logic (sentence loading and
 call ordering). Does not exercise real synthesis - chatterbox.cli.syn_audio is
 monkeypatched, since that needs loaded TTS/vocoder models.
 """
@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-import tools.measurement.benchmark.runner as runner
+import research.benchmark.runner as runner
 
 
 def test_default_sentence_file_has_ten_entries_ref_first():

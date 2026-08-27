@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Benchmark routine: runs the fixed sentence set (tools/measurement/benchmark/sentences_fr.jsonl)
+"""Benchmark routine: runs the fixed sentence set (research/benchmark/sentences_fr.jsonl)
 through the exact same synthesis call as free-text mode
 (chatterbox.cli.syn_audio()), with each sentence's id/tag labelling its
 profiling record. See README.md "Benchmark" for the sentence-set design.

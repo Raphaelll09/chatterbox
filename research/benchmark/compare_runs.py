@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Side-by-side comparison of two or more already-joined benchmark runs (profile/run_.../
-per_sentence_results.csv, written by tools/monitoring/profiling/join.py's run_join()) -- e.g. FS2
+per_sentence_results.csv, written by research/profiling/join.py's run_join()) -- e.g. FS2
 vs. a Piper voice, or two Piper voices against each other.
 
 WHAT "total_synth_ms"/"rtf" ACTUALLY MEASURE (real-world user question, worth stating up front):
-these are wall-clock, start-to-finished-audio numbers -- tools/monitoring/profiling/recorder.py's
+these are wall-clock, start-to-finished-audio numbers -- research/profiling/recorder.py's
 Recorder.finalize() times from before the FIRST stage starts to after the LAST one finishes, so
 for FS2 that's front_end (FlauBERT, only if a <STYLE_TAG=...> tag is present -- otherwise a no-op)
 + acoustic (FastSpeech2) + vocoder (HiFi-GAN) + write (denoise), and for Piper it's synth (Piper's
@@ -32,10 +32,10 @@ assume FS2's fixed 4-stage shape. If you want a per-stage breakdown, read a sing
 per_stage_results.csv directly.
 
 Usage:
-    python -m tools.measurement.benchmark.compare_runs \\
+    python -m research.benchmark.compare_runs \\
         profile/run_20260723_120506 profile/run_20260723_121730 \\
         --labels FS2,siwis
-    python -m tools.measurement.benchmark.compare_runs FS2_RUN SIWIS_RUN UPMC_RUN --out compare.csv
+    python -m research.benchmark.compare_runs FS2_RUN SIWIS_RUN UPMC_RUN --out compare.csv
 """
 import argparse
 import csv
@@ -90,7 +90,7 @@ def load_run(profile_dir):
 
 def load_governor(profile_dir):
     """The CPU frequency governor recorded in this run's meta.json
-    (tools/monitoring/profiling/__init__.py's _read_governor(), read once at session start from
+    (research/profiling/__init__.py's _read_governor(), read once at session start from
     /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor). None if meta.json is missing or
     predates this field. "ondemand" (Raspberry Pi OS's default) is the confirmed, empirical cause
     of the run-to-run variance that motivated this whole rewrite -- see module docstring."""
@@ -172,7 +172,7 @@ def compare(profile_dirs, labels=None):
         by_id = {a["sentence_id"]: a for a in agg}
         present = [by_id[sid] for sid in canonical_order if sid in by_id]
         # The mode of "n" across sentences, not present[0]["n"]: "REF" is deliberately placed at
-        # both the start AND end of every --repeats pass (tools/measurement/benchmark/runner.py's
+        # both the start AND end of every --repeats pass (research/benchmark/runner.py's
         # anchor/drift-check design), so it has *double* the occurrence count of every other
         # sentence (e.g. 6 vs 3 for --repeats 3) -- picking whichever sentence happens to be first
         # in file order (almost always REF) silently over-reported the repeat count (confirmed

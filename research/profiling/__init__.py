@@ -10,12 +10,12 @@ procedure.
 
 Three components share one clock:
 - start_session()/stop_session(): background PMIC/CPU/thermal sampler
-  (tools/monitoring/profiling/sampler.py), run as its own OS process, writing
+  (research/profiling/sampler.py), run as its own OS process, writing
   profile/per_sample.csv.
 - begin_sentence()/set_current()/current(): per-sentence timing recorder
-  (tools/monitoring/profiling/recorder.py) used from audio_utils.py and synthesis_modules.py,
+  (research/profiling/recorder.py) used from audio_utils.py and synthesis_modules.py,
   appending to profile/per_sentence.jsonl.
-- tools/monitoring/profiling/join.py: offline script joining the two into
+- research/profiling/join.py: offline script joining the two into
   profile/per_sentence_results.csv and profile/per_stage_results.csv.
 """
 import atexit
@@ -142,7 +142,7 @@ def _launch_sampler(run_dir, sample_hz, pmic_hz, core, niceness, ina):
 
     proc = subprocess.Popen(
         [
-            sys.executable, "-m", "tools.monitoring.profiling.sampler",
+            sys.executable, "-m", "research.profiling.sampler",
             "--out", out_path,
             "--sample-hz", str(sample_hz),
             "--pmic-hz", str(pmic_hz),

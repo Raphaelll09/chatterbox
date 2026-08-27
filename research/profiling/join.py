@@ -5,18 +5,18 @@ per-stage energy/CPU results. Not time-critical - run this after a batch of
 synthesis, not during it.
 
 Each profiled run writes into its own profile/run_YYYYMMDD_HHMMSS/ directory
-(see tools/monitoring/profiling/__init__.py's start_session()); profile/latest
+(see research/profiling/__init__.py's start_session()); profile/latest
 points at the most recent one.
 
 Usage:
-    python3 -m tools.monitoring.profiling.join                       # profile/latest
-    python3 -m tools.monitoring.profiling.join --profile-dir DIR      # a specific run dir
-    python3 -m tools.monitoring.profiling.join --export-xlsx          # also export to xlsx
+    python3 -m research.profiling.join                       # profile/latest
+    python3 -m research.profiling.join --profile-dir DIR      # a specific run dir
+    python3 -m research.profiling.join --export-xlsx          # also export to xlsx
 
 Writes <profile-dir>/per_sentence_results.csv and per_stage_results.csv.
 Applies a PMIC->external-meter calibration (scale, offset) from
 profile/calibration.json (the base dir, shared across runs) if present
-(identity otherwise) - see tools/monitoring/profiling/calibrate.py and the README "Profiling"
+(identity otherwise) - see research/calibration/pmic_calibrate.py and the README "Profiling"
 section.
 """
 import argparse
@@ -188,7 +188,7 @@ def _stage_windows(record):
     first-seen order, each stage's start chained from the previous stage's end (first stage starts
     at t_synth_start) -- generalizes the fixed STAGES/_stage_window() pair above beyond FS2's own
     4-name pipeline shape (Piper integration, docs/context/CHANGELOG.md; Recorder.finalize()'s
-    "stages" field, tools/monitoring/profiling/recorder.py).
+    "stages" field, research/profiling/recorder.py).
 
     Falls back to the old fixed 4-stage chain for a record with no "stages" field at all --
     re-joining a per_sentence.jsonl written before this field existed (this module's own
@@ -387,7 +387,7 @@ def main():
     profile_dir = args.profile_dir or _resolve_default_profile_dir("profile")
     run_join(profile_dir)
     if args.export_xlsx:
-        from tools.measurement.benchmark.export_to_xlsx import export as export_xlsx
+        from research.benchmark.export_to_xlsx import export as export_xlsx
         export_xlsx(profile_dir)
 
 

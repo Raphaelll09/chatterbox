@@ -396,7 +396,7 @@ looked completely correct (`TTS`/`Denoise` lines, sensible durations, `"Wrote 11
 stage rows"`), and it was only inspecting `per_stage_results.csv` directly that showed something
 wrong: every stage column read `front_end_ms: 0.0, acoustic_ms: 0.0, vocoder_ms: 0.0, write_ms:
 74.4` — FS2's own 4 stage names, despite Piper never running any of them, with no `synth` column
-anywhere. `tools/monitoring/profiling/recorder.py`'s `Recorder.stage(name)` genuinely accumulates
+anywhere. `research/profiling/recorder.py`'s `Recorder.stage(name)` genuinely accumulates
 any name into `self.durations`/`self.timestamps` — but `Recorder.finalize()` only ever read back
 4 **hardcoded** names into the JSON record it writes; a `"synth"` stage was computed correctly,
 then silently discarded at serialization. Pre-existing profiling-subsystem behavior — Piper was
@@ -412,12 +412,12 @@ a one-line rename), spanning three files with three different scopes:
 - `recorder.py`: `Recorder.finalize()` now also writes a generic, order-preserving `"stages"`
   list (`[{"name", "t_end", "duration_ms"}, ...]`) covering every stage actually recorded — the 4
   fixed fields stay byte-identical alongside it, for backward compatibility.
-- `tools/monitoring/profiling/join.py`: `build_per_stage_results()` now derives each sentence's
+- `research/profiling/join.py`: `build_per_stage_results()` now derives each sentence's
   stage rows from that generic list (a new `_stage_windows()`, chaining each stage's start from
   the previous stage's end), falling back to the old fixed 4-stage chain only for historical
   records with no `"stages"` field — re-joining old data (this module's own documented use case)
   still works unchanged.
-- `tools/measurement/benchmark/export_to_xlsx.py` was **deliberately left un-generalized** — its
+- `research/benchmark/export_to_xlsx.py` was **deliberately left un-generalized** — its
   entire layout is bound to a specific external spreadsheet template
   (`Chatterbox_Power_Measurements_final.xlsx`), not something to redesign as a side effect of a
   backend integration. Instead it gained a loud guard (`_check_stage_shape()`): a stage name

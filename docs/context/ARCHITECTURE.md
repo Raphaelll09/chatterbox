@@ -213,29 +213,29 @@ reorg's move to `assets/models/`. `backend.py`'s `_repoint_legacy_fastspeech2_co
 remaps these in memory at load time, so a fresh download (from the unchanged archive) still works
 without hand-editing — see `docs/REORG_PROPOSAL.md` §6 for the full story.
 
-## Profiling subsystem (tools/monitoring/profiling/)
+## Profiling subsystem (research/profiling/)
 
-Added 2026-07-08; moved from `profiling/` to `tools/monitoring/profiling/` in the 2026-07-20 reorg
+Added 2026-07-08; moved from `profiling/` to `research/profiling/` in the 2026-07-20 reorg
 (Phase 2 — Goal 4, monitoring isolated as maintenance-only). Optional, off by default
 (`CHATTERBOX_PROFILE=1` env var, `do_tts.py --profile`, or `profiling.enabled: true` in
 `config_tts.yaml`) — zero files written and near-no-op marks when disabled. Three components share
 one `time.monotonic()` clock:
 
-- `tools/monitoring/profiling/sampler.py` — background 10 Hz CPU/PMIC/thermal sampler, run as its
-  own OS subprocess (`python -m tools.monitoring.profiling.sampler`) via `profiling.start_session()`/
+- `research/profiling/sampler.py` — background 10 Hz CPU/PMIC/thermal sampler, run as its
+  own OS subprocess (`python -m research.profiling.sampler`) via `profiling.start_session()`/
   `stop_session()` (called from `chatterbox/cli.py`), pinned to one core (`os.sched_setaffinity`)
   and de-prioritised (`os.nice`). Reads `/proc/stat`, `/sys/.../scaling_cur_freq`,
   `/sys/class/thermal/thermal_zone0/temp`, `/proc/meminfo`, and `vcgencmd
   pmic_read_adc`/`get_throttled`. Writes `profile/per_sample.csv`. Linux-only; on other platforms
   (e.g. this Windows dev checkout) it no-ops with a warning while per-sentence marks still work.
   Pure-text parsing (`/proc/stat`, PMIC output, throttled bitmask) lives in
-  `tools/monitoring/profiling/parsing.py`, unit-tested without needing real hardware.
+  `research/profiling/parsing.py`, unit-tested without needing real hardware.
   - **Per-rail PMIC power** (added 2026-07-10): `pmic_read_adc` exposes a current *and* voltage
     channel per internally-metered rail, but `EXT5V_V`/`BATT_V` are voltage-only (no current) — so
     there is no single "input power" reading; `pmic_power_w` sums V×I over an *explicit* rail list
     (`parsing.PMIC_RAILS`), which is Pi-internal power (excludes regulator losses and anything
     drawn off the 5V GPIO pins — the external USB-C meter remains ground truth for total power).
-    `tools.monitoring.profiling.parsing.parse_pmic_rails()` parses one `vcgencmd` call into a
+    `research.profiling.parsing.parse_pmic_rails()` parses one `vcgencmd` call into a
     `{rail: {A, V}}` dict; `rails_total_power_w()`/`rails_cpu_power_w()` (`VDD_CORE`)/
     `rails_mem_power_w()` (`DDR_VDD2`+`DDR_VDDQ`+`1V1_SYS`)/`rails_ext5v_v()` all derive from that
     single parse, so one `vcgencmd pmic_read_adc` call per tick yields all four
@@ -249,12 +249,12 @@ one `time.monotonic()` clock:
     `Sampler.run()` startup (`_init_ina226()`); absent sensor or a failed read never raises, it just
     leaves `ina_bus_v`/`ina_current_a`/`ina_power_w` empty for that row. One 6-byte I2C block read
     per tick (registers `0x02`–`0x04` are contiguous: bus voltage, power, current), decoded by pure
-    functions in `tools/monitoring/profiling/parsing.py` (`decode_ina226_*`, unit-tested without
+    functions in `research/profiling/parsing.py` (`decode_ina226_*`, unit-tested without
     hardware). Gated by `profiling.ina226` in `config_tts.yaml` / `--ina`/`--no-ina` on `do_tts.py`
-    and `tools/monitoring/profiling/sampler.py`, threaded through `profiling.start_session(ina=...)`.
+    and `research/profiling/sampler.py`, threaded through `profiling.start_session(ina=...)`.
     Requires `smbus2` (Pi-only dependency, `requirements-pi.txt`; imported lazily inside
     `sampler.py` so a PC dev checkout without it is unaffected).
-- `tools/monitoring/profiling/recorder.py` — `Recorder`/`NullRecorder`, holding one `Recorder` per
+- `research/profiling/recorder.py` — `Recorder`/`NullRecorder`, holding one `Recorder` per
   top-level input line. `chatterbox.cli.syn_audio()` creates it (`profiling.begin_sentence()`) and
   publishes it via `profiling.set_current()` (a `contextvars.ContextVar`) so
   `FastSpeech2HifiGanBackend.syn_fastspeech2()` can reach it with `profiling.current()` without
@@ -264,11 +264,11 @@ one `time.monotonic()` clock:
   *accumulate* across repeated calls so the "§" sub-utterance loop in `syn_audio()` (which calls
   `registry.BACKEND.tts()` once per sub-utterance) still yields one correct per-sentence record.
   Appends one JSON line per sentence to `profile/per_sentence.jsonl`.
-- `tools/monitoring/profiling/join.py` — offline, not time-critical. Joins `per_sample.csv` +
+- `research/profiling/join.py` — offline, not time-critical. Joins `per_sample.csv` +
   `per_sentence.jsonl` into `profile/per_sentence_results.csv` and `profile/per_stage_results.csv`
   (trapezoidal energy integration per sentence/stage window, mean/peak CPU, peak temp,
   throttled-any), applying a PMIC→external-meter linear calibration from `profile/calibration.json`
-  if present (identity otherwise, produced by `tools/monitoring/profiling/calibrate.py` — see
+  if present (identity otherwise, produced by `research/calibration/pmic_calibrate.py` — see
   README "Profilage"). `_integrate_energy_j()` takes a `power_key` parameter (default
   `pmic_power_w`) so the same trapezoidal integration is reused for the INA226 amp-branch reading:
   each row also gets `amp_energy_j`/`amp_energy_wh` (integrated `ina_power_w`, no calibration
@@ -281,9 +281,9 @@ one `time.monotonic()` clock:
 Tests: `tests/test_profiling.py` covers `parsing.py`, `recorder.py`, and `join.py`'s pure functions
 (not `sampler.py`'s actual sysfs/vcgencmd/I2C reads, which need a real Pi).
 
-## Excel export (tools/measurement/benchmark/export_to_xlsx.py)
+## Excel export (research/benchmark/export_to_xlsx.py)
 
-Added 2026-07-10; moved from `benchmark/` to `tools/measurement/benchmark/` in the 2026-07-20
+Added 2026-07-10; moved from `benchmark/` to `research/benchmark/` in the 2026-07-20
 reorg. Reads the join's own output (`per_sentence_results.csv`/`per_stage_results.csv`) — no
 synthesis/profiling logic of its own — and writes `profile/exports/chatterbox_paste.xlsx`
 (dedicated output subfolder, gitignored like the rest of `profile/`'s generated files), formatted
@@ -311,13 +311,13 @@ Tests: `tests/test_export_xlsx.py` covers the pure row-mapping/pass-splitting/RE
 plus one `openpyxl` round-trip (`pytest.importorskip`'d — skips cleanly if `openpyxl` isn't
 installed, since it's an optional dependency).
 
-## Benchmark mode (tools/measurement/benchmark/)
+## Benchmark mode (research/benchmark/)
 
 Added 2026-07-08, on top of the profiling subsystem above; moved from `benchmark/` to
-`tools/measurement/benchmark/` in the 2026-07-20 reorg. `do_tts.py --benchmark` runs a fixed
-10-sentence French set (`tools/measurement/benchmark/sentences_fr.jsonl`, one JSON object per
+`research/benchmark/` in the 2026-07-20 reorg. `do_tts.py --benchmark` runs a fixed
+10-sentence French set (`research/benchmark/sentences_fr.jsonl`, one JSON object per
 line: `id`, `text`, `tag`, `word_count`) through the exact same synthesis call as free-text mode —
-`chatterbox.cli.syn_audio()` — via `tools/measurement/benchmark/runner.py:run_benchmark()`. No
+`chatterbox.cli.syn_audio()` — via `research/benchmark/runner.py:run_benchmark()`. No
 parallel synthesis path; `chatterbox.cli.main()` just loads models once (factored into a local
 `load_models()` closure shared with the free-text branch) then calls `run_benchmark()` instead of
 the `input()` loop.

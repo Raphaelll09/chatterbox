@@ -58,7 +58,7 @@ complexity_tag=None) -> AudioResult | None` is the extracted compute path (text 
 FastSpeech2 → HiFi-GAN → denoise/postprocess → subtitles → `playback.AUDIO_EXAMPLE` set), with no
 Tk import and no playback call. Both `chatterbox.cli.syn_audio()` (CLI/benchmark path) and the
 GUI's worker call it directly. `chatterbox/cli.py:syn_audio()` keeps its exact old signature
-(every other caller — `tools/measurement/benchmark/{runner,p4_sweep}.py`, the free-text loop,
+(every other caller — `research/benchmark/{runner,p4_sweep}.py`, the free-text loop,
 `tests/test_benchmark.py`'s fake — already passed `use_gui=False`) but no longer branches on
 `use_gui` internally; the GUI stopped calling it.
 
