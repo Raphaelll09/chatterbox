@@ -129,7 +129,7 @@ _STAGE_DISPLAY_NAMES = {"tts": "TTS", "vocoder": "Vocodeur", "denoiser": "Denois
 _audio_info_active_stage_count = 0
 
 # Set by gui_generic_controls() only if the active backend's describe_controls()["speaker_list"]
-# is non-empty -- stays None for a backend with only one voice (base.py's describe_controls()
+# is non-empty -- stays None for a backend with only one voice (describe_controls()
 # docstring), in which case get_gui_controls() simply omits "speaker" from its result.
 speaker_selection = None
 
@@ -1976,7 +1976,7 @@ def _build_chip_grid_control(frame_options, control, sub_row_index, landscape):
 
     # Emotion icon bar (landscape-refactor plan, confirmed with the user: Unicode emoji): a
     # control opts in by declaring "icons" (option text -> emoji glyph) in its describe_controls()
-    # entry -- see chatterbox/synthesis/base.py's docstring. An option missing from that mapping
+    # entry -- see chatterbox/synthesis/README.md. An option missing from that mapping
     # (or the control not declaring one at all) falls back to its plain option text, so this stays
     # generic rather than assuming every chip_grid has icons.
     icons = control.get("icons") or {}

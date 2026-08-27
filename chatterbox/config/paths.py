@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 FASTSPEECH2_DIR = ROOT / "assets" / "models" / "FastSpeech2"
 HIFIGAN_DIR = ROOT / "assets" / "models" / "hifi-gan-master"
-WAVEGLOW_DIR = ROOT / "assets" / "models" / "Waveglow"
 FLAUBERT_DIR = ROOT / "assets" / "models" / "flaubert" / "flaubert_large_cased"
 
 _RULES_DIR = ROOT / "chatterbox" / "synthesis" / "backends" / "fastspeech2_hifigan" / "rules"

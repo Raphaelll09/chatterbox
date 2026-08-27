@@ -28,11 +28,6 @@ assets/models/FastSpeech2/*.mat
 assets/models/hifi-gan-master/__pycache__/
 assets/models/hifi-gan-master/FR_V2/
 
-# Ignore models in Waveglow
-assets/models/Waveglow/__pycache__/
-assets/models/Waveglow/waveglow_NEB.pt
-assets/models/Waveglow/*.txt
-
 # Ignore models in FlauBERT. The whole directory is untracked: it used to be recorded as a
 # gitlink (mode 160000) with no .gitmodules entry, so every fresh clone got an empty folder
 # and `git submodule` errored out. It is now treated exactly like the FastSpeech2/HiFi-GAN

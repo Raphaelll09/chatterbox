@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""FastSpeech2 + HiFi-GAN (+ optional Waveglow) backend.
+"""FastSpeech2 + HiFi-GAN backend.
 
-Converted from loading_modules.py + synthesis_modules.py's model-loading/model-calling functions
-in Phase 3 (docs/REORG_PROPOSAL.md). Owns loaded model state as instance attributes instead of
-module-level globals (loading_modules.py's pre-Phase-3 design, documented in
-docs/context/ARCHITECTURE.md "Global-state loading pattern") -- see
-chatterbox/synthesis/base.py's docstring for why this class doesn't literally subclass
-Synthesizer/VocoderBackend. Keeps its pre-Phase-3 method names (load_fastspeech2/load_hifigan/
-load_waveglow/tts/vocoder/syn_fastspeech2/syn_hifigan/syn_waveglow) so config_tts.yaml's
-load_script/syn_script string-based dispatch (getattr(registry.BACKEND, name)) needs zero changes.
+Implements the backend contract documented in chatterbox/synthesis/README.md -- the two-stage
+(acoustic model -> vocoder) shape, declared by needs_vocoder: true on its config_tts.yaml entry.
+
+Owns loaded model state as instance attributes rather than module-level globals (the pre-Phase-3
+loading_modules.py design). Method names are the pre-Phase-3 ones (load_fastspeech2/load_hifigan/
+tts/vocoder/syn_fastspeech2/syn_hifigan) because config_tts.yaml dispatches to them by name:
+load_script/syn_script are resolved with getattr(registry.BACKEND, name).
+
+Waveglow support was removed in the release reorganisation (docs/release/REORG_PLAN.md). Its
+vocoder_models entry had been commented out in config_tts.yaml for a long time, so load_waveglow()/
+syn_waveglow() were unreachable -- but the module-level `from inference import main` below made the
+vendored assets/models/Waveglow/ tree a hard import-time dependency anyway. Both the methods and
+the vendored tree are gone. Note that "audio_file.WAVEGLOW" survives as a FILE FORMAT name: it is
+the mel container FastSpeech2 writes and HiFi-GAN reads, unrelated to the Waveglow vocoder.
 """
 import os
 import sys
@@ -34,10 +40,6 @@ sys.path.insert(1, str(paths.HIFIGAN_DIR))
 from env import AttrDict
 from models import Generator
 from inference_e2e import inference
-
-sys.path.insert(1, str(paths.WAVEGLOW_DIR))
-sys.path.insert(1, str(paths.WAVEGLOW_DIR / "tacotron2"))
-from inference import main as inference_main
 
 AUDIO_FILE_NAME = "audio_file"
 
@@ -152,16 +154,6 @@ class FastSpeech2HifiGanBackend:
         self.generator.load_state_dict(self.vocoder_model['generator'])
         self.generator.eval()
         self.generator.remove_weight_norm()
-        print("Vocoder {}/{} loaded".format(model_folder, model_ckpt))
-
-    def load_waveglow(self, vocoder_model, device):
-        model_folder = vocoder_model["folder"]
-        model_ckpt = vocoder_model["checkpoint_file"]
-
-        self.vocoder_path = os.path.join(model_folder, model_ckpt)
-        self.vocoder_model = torch.load(self.vocoder_path, map_location=device, weights_only=False)['model']
-        self.vocoder_model = self.vocoder_model.remove_weightnorm(self.vocoder_model)
-        self.vocoder_model.eval()
         print("Vocoder {}/{} loaded".format(model_folder, model_ckpt))
 
     # ---- Synthesis (was synthesis_modules.py) ----------------------------
@@ -374,32 +366,6 @@ class FastSpeech2HifiGanBackend:
 
         return os.path.join(output_location, AUDIO_FILE_NAME)
 
-    def syn_waveglow(self, vocoder_config, loaded_vocoder_model, location_mel_file):
-        # Read Waveglow Config
-        vocoder_folder = vocoder_config["folder"]
-        output_location = vocoder_config["output_location"]
-        default_args = vocoder_config["default_args"]
-        filelist_path = default_args["filelist_path"]
-
-        # Write .txt to generate Wav files
-        cmd = "ls {}/*.WAVEGLOW > {}/{}".format(location_mel_file, vocoder_folder, filelist_path)
-        os.system(cmd)
-
-        inference_main(
-            os.path.join(vocoder_folder, filelist_path),
-            loaded_vocoder_model,
-            default_args["sigma"],
-            vocoder_config["output_location"],
-            default_args["sampling_rate"],
-            default_args["is_fp16"],
-            default_args["denoiser_strengh"],
-            default_args["speed_factor"],
-            default_args["gain"],
-            default_args["negative_gain"],
-        )
-
-        return os.path.join(output_location, AUDIO_FILE_NAME)
-
     # ---- GUI support (new in Phase 3) ------------------------------------
 
     def describe_controls(self):
@@ -408,7 +374,7 @@ class FastSpeech2HifiGanBackend:
         get this (docs/REORG_PROPOSAL.md Sec5).
 
         The "controls" list (interchangeable-backend GUI refactor -- see chatterbox/synthesis/
-        base.py's describe_controls() docstring for the general shape) mirrors exactly what
+        chatterbox/synthesis/README.md for the general shape) mirrors exactly what
         gui_fastspeech2() used to hand-build directly from config_tts.yaml: a style chip grid
         (with the unnamed TOKEN13-16 placeholders hidden behind an "advanced" toggle), a style-
         intensity slider, pitch/energy/speed sliders, 5 "bias" sliders grouped behind the same

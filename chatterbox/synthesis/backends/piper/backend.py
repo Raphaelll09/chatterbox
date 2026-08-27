@@ -201,7 +201,7 @@ class PiperBackend:
     # ---- GUI model-options panel ------------------------------------------------------
 
     def describe_controls(self):
-        """base.py's describe_controls() shape (chatterbox/synthesis/base.py:64-102), rendered
+        """describe_controls() shape (chatterbox/synthesis/README.md), rendered
         generically by gui/app.py's gui_generic_controls() -- config_tts.yaml's Piper entries all
         declare gui_script: "gui_generic_controls" (the same shared function FS2 uses), not a
         bespoke per-backend GUI function. No "style"/"style_intensity" controls -- Piper has no
@@ -237,7 +237,7 @@ class PiperBackend:
         # back to the legacy per-voice speaker_id_map (confirmed live on the Pi against
         # fr_FR-upmc-medium.onnx.json: {"jessica": 0, "pierre": 1}; empty {} for a single-speaker
         # voice) for a model with no speakers: list (e.g. English lessac) -- empty/no speaker_list
-        # in that case matches base.py's docstring default and FastSpeech2HifiGanBackend's own
+        # in that case matches README.md's documented default and FastSpeech2HifiGanBackend's own
         # dict-shaped (not list-shaped) speaker_list (Finding #2 in the Phase B plan).
         speakers = model_config.get("speakers")
         if speakers:

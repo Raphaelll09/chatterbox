@@ -82,7 +82,7 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     text_to_syn = text
 
     # Static per-model capability flag (config_tts.yaml, decidable before any model is loaded --
-    # see chatterbox/synthesis/base.py's describe_controls() docstring): a monolithic backend
+    # see chatterbox/synthesis/README.md "Capability flags"): a monolithic backend
     # produces a finished wav directly during the "tts" call below and has no separate mel->wav
     # stage to run.
     needs_vocoder = tts_config['tts_models'][tts_idx].get('needs_vocoder', True)
@@ -227,8 +227,8 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
 
         wavfile.write(wav_path, rate, data)
 
-        # Visual/facial-animation params are backend-specific and optional (SynthesisResult.au_path
-        # docstring, chatterbox/synthesis/base.py) -- a backend that doesn't produce an .AU file
+        # Visual/facial-animation params are backend-specific and optional (chatterbox/synthesis/
+        # README.md "Output file conventions") -- a backend that doesn't produce an .AU file
         # (e.g. a monolithic model with no visual output) just skips this block instead of crashing.
         path_au_for_smoothing = os.path.join(location_mel_file, 'audio_file.AU')
         if tts_config["visual_smoothing"]["activate"] and os.path.exists(path_au_for_smoothing):

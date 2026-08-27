@@ -198,10 +198,14 @@ i2cdetect -y 1
 La puissance lue via `vcgencmd pmic_read_adc` inclut la consommation du profileur lui-même. Pour la recaler sur un wattmètre USB-C externe :
 
 ```
-python -m tools.monitoring.profiling.calibrate --seconds 30
+python3 tools/measurement/pmic_calibrate.py
 ```
 
-À exécuter à quelques états stables (repos, charge moyenne), en notant la moyenne affichée en face de la lecture du wattmètre externe au même instant. Ajuster une droite `puissance_wattmètre = scale * pmic_power_w + offset` et enregistrer le résultat dans `profile/calibration.json` (`{"scale": ..., "offset": ...}`), appliqué automatiquement par `tools/monitoring/profiling/join.py`. Il est aussi recommandé de mesurer une fois la consommation à vide du profileur (échantillonneur lancé seul, synthèse à l'arrêt) pour connaître son propre surcoût sur la mesure PMIC.
+Assistant guidé : il maintient plusieurs états de charge CPU, moyenne la somme PMIC à chaque palier, vous demande la lecture du wattmètre au même instant, ajuste la droite `puissance_wattmètre = scale * P_pmic + offset` et **écrit lui-même `profile/calibration.json`** (`{"scale": ..., "offset": ...}`), appliqué automatiquement par `tools/monitoring/profiling/join.py`.
+
+**Important** : le terme `offset` absorbe la consommation de l'écran, de l'ampli et des puces non mesurées. Il n'est constant que si cet état matériel l'est. Calibrez donc écran allumé, à la luminosité utilisée en profilage, ampli alimenté, assemblage complet connecté — en ne faisant varier que la charge CPU (le script s'en charge). N'incluez pas de point « écran éteint » : cela change l'offset et corrompt l'ajustement. La calibration obtenue n'est valable que pour cette configuration.
+
+Il est aussi recommandé de mesurer une fois la consommation à vide du profileur (échantillonneur lancé seul, synthèse à l'arrêt) pour connaître son propre surcoût sur la mesure PMIC.
 
 # Benchmark
 

@@ -1,7 +1,7 @@
 """Tests for PiperBackend.describe_controls() -- mirrors tests/test_backend_describe_controls.py's
 pattern (no real model load, no pretrained weights): _active_voice/_active_model_config are set
 directly on a fresh instance. Covers Finding #2 from the Phase B plan (speaker_list is a dict
-{name: id}, matching FastSpeech2HifiGanBackend's own real shape, not base.py's list-of-str
+{name: id}, matching FastSpeech2HifiGanBackend's own real shape, not the list-of-str
 docstring) and the no-style-control invariant Finding #4 depends on.
 """
 from chatterbox.synthesis.backends.piper.backend import PiperBackend

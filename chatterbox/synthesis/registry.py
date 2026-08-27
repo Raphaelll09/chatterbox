@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 """Config-driven backend registry.
 
-config_tts.yaml's `load_script`/`syn_script`/`gui_script` string values are still resolved via
-getattr(), exactly as before Phase 3 -- the only change is what they're resolved *against*: a
-Synthesizer/VocoderBackend instance instead of the flat `loading_modules` module. See
-docs/REORG_PROPOSAL.md Sec5.
+config_tts.yaml's `load_script`/`syn_script` string values are resolved via getattr() against a
+backend instance. See chatterbox/synthesis/README.md for the full backend contract.
+
+Note that `gui_script` is NOT resolved here despite being the same kind of string: gui/app.py looks
+it up in its own module globals() instead, so a backend cannot ship its own GUI function. That
+asymmetry is documented in README.md's "Known gaps".
 
 Two backends exist as of the Piper integration (docs/context/CHANGELOG.md, Phase B): FastSpeech2+
 HiFi-GAN and Piper. `BACKEND` used to be a bare singleton instance -- fine for one backend, but

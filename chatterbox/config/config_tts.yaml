@@ -133,7 +133,7 @@ tts_models:
     gui_style_control: True
     gui_styleTag_control: False
     # Static per-model capability flags (decidable before the model is loaded, unlike
-    # describe_controls() -- see chatterbox/synthesis/base.py). needs_vocoder: whether a separate
+    # describe_controls() -- see chatterbox/synthesis/README.md). needs_vocoder: whether a separate
     # vocoder_models entry must be selected/loaded for this TTS model (False for a monolithic
     # end-to-end model with no separate mel->wav stage -- gui/app.py's Settings->Advanced hides the
     # Vocodeur picker when False). accepts_phoneme_input: whether this model understands the
@@ -280,19 +280,3 @@ vocoder_models:
     checkpoint_file: "FR_V2/g_00570000"
     config_path: "FR_V2/config.json"
     output_location: "./"
-
-  # - label: "Waveglow NEB"
-  #   load_script: "load_waveglow"
-  #   syn_script: "syn_waveglow"
-  #   folder: "assets/models/Waveglow"
-  #   checkpoint_file: "waveglow_NEB.pt"
-  #   output_location: "./"
-  #   default_args:
-  #     filelist_path: "fastspeech2.txt"
-  #     sigma: 0.6
-  #     sampling_rate: 22050
-  #     is_fp16: False
-  #     denoiser_strengh: 0.0
-  #     speed_factor: 1.0
-  #     gain: 0.0
-  #     negative_gain: 0.0
