@@ -33,8 +33,11 @@ assets/models/Waveglow/__pycache__/
 assets/models/Waveglow/waveglow_NEB.pt
 assets/models/Waveglow/*.txt
 
-# Ignore models in FlauBERT
-assets/models/flaubert/flaubert_large_cased/pytorch_model.bin
+# Ignore models in FlauBERT. The whole directory is untracked: it used to be recorded as a
+# gitlink (mode 160000) with no .gitmodules entry, so every fresh clone got an empty folder
+# and `git submodule` errored out. It is now treated exactly like the FastSpeech2/HiFi-GAN
+# weights -- a documented manual download (see INSTALL.md / README.md).
+assets/models/flaubert/flaubert_large_cased/
 
 # Ignore Piper voices (fetched by scripts/fetch_piper_voices.sh -- see
 # chatterbox/synthesis/backends/piper/README.md for provenance/sha256)
