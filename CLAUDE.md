@@ -1,120 +1,79 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-## Project
+This file used to duplicate the repository's structure and architecture. It no longer does — that
+material drifted out of date twice, which is exactly the failure this split avoids. **Structure now
+lives in one place**, and this file holds only what an agent needs *in addition* to it.
 
-This repo is a fork of `embedded_tts`, the TTS engine for **Chatterbox**: an embedded neural TTS
-demonstrator for AAC (augmentative and alternative communication) users, targeting a **Raspberry
-Pi 5 (16 GB)**. It's a French text-to-speech pipeline: FlauBERT-large (optional free-text style
-conditioning) + FastSpeech 2 (acoustic model, custom GST/StyleTag fork) + HiFi-GAN (vocoder),
-running fully on CPU.
+## Read these first
 
-## Tech stack
+| Read | For |
+|---|---|
+| **[`docs/CODEMAP.md`](docs/CODEMAP.md)** | **Start here.** Where the code for X lives, which language governs which aspect, the invented syntaxes, the invariants, the "I want to change X" index, the key-symbol table |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How a subsystem works internally |
+| [`chatterbox/synthesis/README.md`](chatterbox/synthesis/README.md) | The backend contract — required before touching any backend |
+| [`README.md`](README.md) | Install, run modes, CLI flags, the GUI, maintenance |
+| [`docs/research/CHANGELOG.md`](docs/research/CHANGELOG.md) | Why something is the way it is. Grep it; do not read it front to back |
 
-Python 3 (tested on 3.8/3.10, repo has a 3.11 `.venv`), PyTorch, PyYAML config, Tkinter GUI
-(optional). No GPU required or targeted — inference runs on CPU by design, for the Pi 5 target.
+`docs/CODEMAP.md` is verified by `tests/test_codemap.py` — its paths and symbol names are checked
+against the code, so trust it over any recollection.
 
-## Repo map
+## The one rule that must not break
 
-This file lives at the repo root, alongside the code below — run all commands below from here.
-
-- `do_tts.py` — entry point; loads a TTS + vocoder pair from `config_tts.yaml` and runs the
-  synthesis loop (CLI or `--gui`).
-- `synthesis_modules.py` — per-utterance text parsing/normalization + calls into the acoustic model
-  and vocoder.
-- `loading_modules.py` — model loaders; stashes loaded models as module-level globals.
-- `audio_utils.py` — top-level orchestration of one synthesis call (TTS → vocoder → denoise →
-  post-process → playback).
-- `audio_postprocess.py` — standalone loudness analysis + peak-normalize/soft-limit (no other repo
-  dependencies; has its own pytest suite).
-- `gui_utils.py`, `keyboards.py` — Tkinter GUI and on-screen phonetic keyboard.
-- `tts_utils.py` — tiny globals for which TTS/vocoder index is currently selected.
-- `config_tts.yaml` — the model registry + GUI + post-processing + profiling config; see
-  `docs/context/ARCHITECTURE.md` for its structure.
-- `profiling/` — optional profiling subsystem (background PMIC/CPU/thermal sampler, per-sentence
-  timing recorder, offline join/calibration scripts); off by default. See
-  `docs/context/ARCHITECTURE.md` "Profiling subsystem" and README "Profilage".
-- `benchmark/` — fixed 10-sentence French benchmark set (`sentences_fr.jsonl`) + runner
-  (`runner.py`) reusing `audio_utils.syn_audio()`; see `docs/context/ARCHITECTURE.md` "Benchmark
-  mode" and README "Benchmark".
-- `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/` — vendored model repos (weights not
-  in git — see Install below).
-- `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`.
-- `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
-  vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
-
-## The synthesis pipeline (4 stages)
-
-1. **FlauBERT front-end** (optional, per-utterance) — `synthesis_modules.preprocess_styleTag()`,
-   only invoked when a `<STYLE_TAG=...>` free-text tag is present in the input text.
-2. **FastSpeech2 acoustic** — `synthesis_modules.syn_fastspeech2()` → `FastSpeech2/synthesize.py`.
-   Text → mel-spectrogram + `.AU` (visual/facial animation params).
-3. **HiFi-GAN vocoder** — `synthesis_modules.syn_hifigan()` → `hifi-gan-master/inference_e2e.py`.
-   Mel → waveform.
-4. **Audio write** — `audio_utils.syn_audio()`: denoise, optional post-process
-   (`audio_postprocess.py`), visual smoothing, subtitle write, playback.
-
-Full detail (globals pattern, control-tag mini-language, config-driven model registry, weights
-locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, don't assume it's loaded here.
-
-## Install gotchas
-
-- Use **`requirements-dev.txt`** (PC) or **`requirements-pi.txt`** + **`apt-packages-pi.txt`**
-  (Raspberry Pi 5) — see `INSTALL.md`. The legacy `requirements.txt` / `minimal_requirements.txt`
-  are deprecated but kept for reference (deprecation note at the top of each): `requirements.txt`
-  is the one that pulls FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`,
-  `librosa` transitively, `tensor2tensor`, ...) and pins `apex==0.9.10dev`, which resolves to the
-  wrong PyPI package — despite an earlier version of this doc saying the opposite,
-  `minimal_requirements.txt` is actually the lean, working set (now `requirements-dev.txt`).
-- Pretrained weights are **not in git** — download manually from the Google Drive links in
-  `README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
-  `FR_V2/g_00570000`. `scripts/setup_pi.sh` automates this on a fresh Pi 5.
-- Linux GUI needs `apt-get install python-tk` / `pip3 install python3-tk` in addition to the
-  runtime requirements (already in `apt-packages-pi.txt` for the Pi).
-
-## Run modes
-
-- **Free-text (default)**: `python3 do_tts.py [--gui]` — prompts for text on stdin (or via GUI) and
-  synthesizes/plays it. See `do_tts.py --help` for post-processing/analysis flags
-  (`--postprocess`, `--target-crest-db`, `--analyze`, `--report-wav`) and the profiling flag
-  (`--profile`, or `CHATTERBOX_PROFILE=1` — see below).
-- **Benchmark**: `python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FILE]`
-  — runs the fixed 10-sentence set in `benchmark/sentences_fr.jsonl` through the same
-  `audio_utils.syn_audio()` call as free-text mode, with profiling forced on. See
-  `docs/context/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
-- **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
-  per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/context/ARCHITECTURE.md`
-  "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
-
-## Testing
-
-```bash
-.venv/Scripts/python.exe -m pytest tests/            # all tests
-.venv/Scripts/python.exe -m pytest tests/test_audio_postprocess.py -k test_no_clipping  # single test
+```
+chatterbox/  (L1 RUN)    must NEVER import research/  (L3 STUDY)
+research/                may import chatterbox/ freely
 ```
 
-On this checkout, bare `python`/`python3` resolve to the Windows Store stub, not the project
-venv — invoke via `.venv/Scripts/python.exe` (Windows) or activate the venv first. Tests need no
-pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profiling.py`/
-`test_benchmark.py` cover pure-parsing/call-ordering logic with synthesis monkeypatched.
+Deleting `research/` and `tests/` must leave a working demonstrator. The only bridge is
+`chatterbox/instrumentation.py`, an inert seam that `research.profiling` installs itself into.
 
-## Conventions
+Enforced by `scripts/check_layers.py` and `tests/test_layer_boundary.py`. If you need profiling
+from L1, add a passthrough to `instrumentation.py` — never an `import research.*` in `chatterbox/`.
 
-- Keep dependencies minimal — this targets an embedded Pi 5, not a dev workstation.
-- The synthesis function is shared, not duplicated — the benchmark mode (`benchmark/runner.py`)
-  calls the same `audio_utils.syn_audio()` / `synthesis_modules.tts()` path as free-text mode, not a
-  parallel copy. Any future batch mode must do the same.
-- Profiling/instrumentation is opt-in and off by default (mirrors the `postprocess.enabled` pattern
-  in `config_tts.yaml`) — see the `profiling/` package.
+## Working here
 
-## Maintenance rules (IMPORTANT)
+- **Run commands from the repository root.** Model paths in `config_tts.yaml` are relative to the
+  working directory.
+- **Python invocation:** bare `python`/`python3` resolve to the Windows Store stub on this checkout.
+  Use `.venv/Scripts/python.exe` (Windows) or activate the venv.
+- **Before committing:** `python3 -m pytest tests/` and `python3 scripts/check_layers.py`.
+- **Green tests do not mean the device speaks.** Synthesis is mocked throughout; `chatterbox/synth.py`
+  has no test executing it past the empty-input guard. Changes to the synthesis path need real
+  hardware verification. See [`tests/README.md`](tests/README.md).
+- **Do not add a second compute path.** CLI and GUI both call `chatterbox.synth.synthesize()`.
+- **Keep dependencies minimal** — this targets an embedded Pi 5, not a workstation.
+- **Instrumentation is opt-in and off by default**, mirroring the `postprocess.enabled` pattern.
 
-- At the start of a task, read `docs/context/ARCHITECTURE.md` and the top entry of
-  `docs/context/CHANGELOG.md` for the current state and recent history.
-- After completing any change, append a `docs/context/CHANGELOG.md` entry (template at the top of
-  that file), and update `docs/context/ARCHITECTURE.md` / this file if the structure or run commands
-  changed.
+## Documentation ownership
+
+One fact, one place. When something changes, update the owning document only:
+
+| Owns | Document |
+|---|---|
+| Where code lives, key symbols, tasks | `docs/CODEMAP.md` |
+| How subsystems work | `docs/ARCHITECTURE.md` |
+| The backend contract | `chatterbox/synthesis/README.md` |
+| Install / run / GUI / maintenance | `README.md` (English), `README.fr.md` (French reference) |
+| Per-directory orientation | that directory's `README.md` |
+| History and rationale | `docs/research/CHANGELOG.md` |
+| The pre-release audit and its follow-ups | `docs/release/` — **dated records, do not update** |
+
+## After completing a change
+
+1. Append a `docs/research/CHANGELOG.md` entry (template at the top of that file).
+2. Update `docs/CODEMAP.md` if you added, moved or renamed a key symbol — `tests/test_codemap.py`
+   will fail if you don't.
+3. Update the owning document from the table above if behaviour changed.
+
+## Accuracy
+
+Treat existing documentation as evidence, not proof, and verify claims against the code. Two
+documented "facts" turned out to be false: `chatterbox/synthesis/base.py` was described as the
+operative backend contract while nothing imported, subclassed or constructed it, and `§` was
+documented as the sub-utterance separator while the code split on `|`. Both had stood for months.
+Where a document and the code disagree, the code wins — then fix the document.
 
 ## graphify
 

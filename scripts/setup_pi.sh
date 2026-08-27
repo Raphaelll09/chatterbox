@@ -33,6 +33,9 @@ STEP_PIP_OK=0
 STEP_WEIGHTS_OK=0
 STEP_SMOKE_TORCH_OK=0
 STEP_SMOKE_SYNTH_OK=0
+STEP_POWERD_OK=0
+STEP_XORG_KIOSK_OK=0
+STEP_ASOUND_OK=0
 
 echo "== Chatterbox Pi5 provisioning =="
 echo "Working root: $WORKING_ROOT"
@@ -42,7 +45,7 @@ echo
 # ---------------------------------------------------------------------------
 # 1. System (apt) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [1/7] Installing apt packages from apt-packages-pi.txt"
+echo "-- [1/10] Installing apt packages from apt-packages-pi.txt"
 APT_LIST_FILE="$WORKING_ROOT/apt-packages-pi.txt"
 if [[ ! -f "$APT_LIST_FILE" ]]; then
     echo "ERROR: $APT_LIST_FILE not found." >&2
@@ -58,7 +61,7 @@ echo
 # ---------------------------------------------------------------------------
 # 2. Python venv.
 # ---------------------------------------------------------------------------
-echo "-- [2/7] Creating/reusing venv at $VENV_DIR"
+echo "-- [2/10] Creating/reusing venv at $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"
 if [[ -f "$VENV_DIR/bin/activate" ]]; then
     echo "   venv already exists, reusing it."
@@ -73,7 +76,7 @@ echo
 # ---------------------------------------------------------------------------
 # 3. Python (pip) dependencies.
 # ---------------------------------------------------------------------------
-echo "-- [3/7] Installing requirements-pi.txt"
+echo "-- [3/10] Installing requirements-pi.txt"
 pip install --upgrade pip
 pip install -r "$WORKING_ROOT/requirements-pi.txt"
 STEP_PIP_OK=1
@@ -88,21 +91,35 @@ echo
 # demo. Link left below as a comment for anyone who wants it manually.
 #   Waveglow: https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing
 # ---------------------------------------------------------------------------
-echo "-- [4/7] Downloading pretrained weights"
+echo "-- [4/10] Downloading pretrained weights"
 pip install --quiet gdown
 
-# fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file>
+# fetch_and_unzip <drive-folder-url> <extract-target-dir> <sentinel-file> [sentinel-file ...]
 # Downloads every file in the Drive folder into a temp dir, unzips any archives found into
 # <extract-target-dir>, then flattens a one-level self-named nested directory if the archive's
 # top-level folder duplicates the target dir name (observed with these exact archives on the dev
 # checkout this script's paths were verified against — e.g. hifi-gan-master/FR_V2/FR_V2/...).
+#
+# Accepts one or more sentinels (not just one) because a `gdown --folder` download can succeed
+# for *some* of a Drive folder's files/archives and silently miss others — e.g. FastSpeech2's
+# Drive folder bundles output/ckpt/, config/, and preprocessed_data/ separately, and a partial
+# download that got the (large) checkpoint but not the (small) config/preprocessed_data files
+# used to still pass this check and report PASS, only to fail much later as a confusing
+# FileNotFoundError deep inside do_tts.py's backend.load_fastspeech2(). ALL given sentinels must
+# exist, both to skip a re-download and to consider a fresh download successful.
 fetch_and_unzip() {
     local drive_url="$1"
     local target_dir="$2"
-    local sentinel="$3"
+    shift 2
+    local sentinels=("$@")
 
-    if [[ -f "$sentinel" ]]; then
-        echo "   [skip] $sentinel already present."
+    local all_present=1
+    local s
+    for s in "${sentinels[@]}"; do
+        [[ -f "$s" ]] || all_present=0
+    done
+    if [[ "$all_present" -eq 1 ]]; then
+        echo "   [skip] all sentinels already present for $(basename "$target_dir")."
         return 0
     fi
 
@@ -137,30 +154,37 @@ fetch_and_unzip() {
         rm -rf "$self_nested"
     fi
 
-    if [[ -f "$sentinel" ]]; then
-        echo "   OK: $sentinel"
-        return 0
-    else
-        echo "   WARNING: expected $sentinel after extraction but did not find it — check $target_dir manually." >&2
-        return 1
-    fi
+    local missing=0
+    for s in "${sentinels[@]}"; do
+        if [[ -f "$s" ]]; then
+            echo "   OK: $s"
+        else
+            echo "   WARNING: expected $s after extraction but did not find it — check $target_dir manually, or delete $target_dir and re-run to retry the whole download." >&2
+            missing=1
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
 }
 
 WEIGHTS_OK=1
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing" \
-    "$WORKING_ROOT/FastSpeech2" \
-    "$WORKING_ROOT/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/FastSpeech2" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/output/ckpt/ALL_corpus/390000.pth.tar" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/model.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/config/ALL_corpus/train.yaml" \
+    "$WORKING_ROOT/assets/models/FastSpeech2/preprocessed_data/ALL_corpus/speakers.json" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased" \
-    "$WORKING_ROOT/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased" \
+    "$WORKING_ROOT/assets/models/flaubert/flaubert_large_cased/pytorch_model.bin" || WEIGHTS_OK=0
 
 fetch_and_unzip \
     "https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing" \
-    "$WORKING_ROOT/hifi-gan-master" \
-    "$WORKING_ROOT/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
+    "$WORKING_ROOT/assets/models/hifi-gan-master" \
+    "$WORKING_ROOT/assets/models/hifi-gan-master/FR_V2/g_00570000" || WEIGHTS_OK=0
 
 STEP_WEIGHTS_OK=$WEIGHTS_OK
 echo
@@ -168,7 +192,7 @@ echo
 # ---------------------------------------------------------------------------
 # 5. Smoke test: torch CPU sanity.
 # ---------------------------------------------------------------------------
-echo "-- [5/7] Smoke test: torch CPU tensor ops"
+echo "-- [5/10] Smoke test: torch CPU tensor ops"
 if python3 - <<'PYEOF'
 import torch
 a = torch.randn(4, 4)
@@ -188,7 +212,7 @@ echo
 # ---------------------------------------------------------------------------
 # 6. Smoke test: end-to-end synthesis (best-effort — only if weights are present).
 # ---------------------------------------------------------------------------
-echo "-- [6/7] Smoke test: end-to-end synthesis (best-effort)"
+echo "-- [6/10] Smoke test: end-to-end synthesis (best-effort)"
 if [[ "$STEP_WEIGHTS_OK" -eq 1 ]]; then
     (
         cd "$WORKING_ROOT"
@@ -210,12 +234,153 @@ echo
 # ---------------------------------------------------------------------------
 # 7. Lock file.
 # ---------------------------------------------------------------------------
-echo "-- [7/7] Writing lock file"
+echo "-- [7/10] Writing lock file"
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 ]]; then
     pip freeze > "$LOCK_FILE"
     echo "   Wrote $LOCK_FILE"
 else
     echo "   [skip] earlier required step failed, not writing lock file." >&2
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 8. chatterbox-powerd systemd unit (chatterbox-powerd_spec_v0.1.md Sec8/Sec9.5).
+#
+# Non-fatal if any part of this fails (matches the weights/synth-smoke-test steps above) --
+# powerd is an optional appliance-mode feature, not required for `do_tts.py` itself to work.
+# Deliberately does NOT touch EEPROM/config.txt (POWER_OFF_ON_HALT, dtoverlay=disable-wifi/-bt,
+# arm_freq_min) -- those are boot-config edits with a brick-on-mistake risk this script avoids
+# elsewhere too; see INSTALL.md "chatterbox-powerd" for the manual steps.
+#
+# chatterbox-gui.service (cage/Wayland) is deliberately NOT installed/enabled here anymore -- see
+# step 9 below and deploy/xorg-kiosk/README.md for why the GUI now starts via a real console
+# autologin + startx instead of a systemd unit. The unit file itself is untouched in the repo
+# (deploy/systemd/) for anyone reverting once/if a fixed libwlroots package lands.
+# ---------------------------------------------------------------------------
+echo "-- [8/10] Installing chatterbox-powerd systemd unit"
+UNIT_SRC_DIR="$WORKING_ROOT/deploy/systemd"
+POWERD_GROUP="chatterbox"
+INSTALL_USER="${SUDO_USER:-$USER}"
+
+if [[ -f "$UNIT_SRC_DIR/chatterbox-powerd.service" ]]; then
+    if sudo cp "$UNIT_SRC_DIR/chatterbox-powerd.service" /etc/systemd/system/ \
+        && sudo groupadd -f "$POWERD_GROUP" \
+        && sudo usermod -aG "$POWERD_GROUP" "$INSTALL_USER" \
+        && sudo systemctl daemon-reload \
+        && sudo systemctl enable chatterbox-powerd.service
+    then
+        echo "   Installed and enabled chatterbox-powerd.service (not started)."
+        echo "   Added '$INSTALL_USER' to the '$POWERD_GROUP' group (log out/in, or reboot, for it to take effect)."
+        echo "   NOTE: the unit references /home/chatterbox/chatterbox by default -- edit"
+        echo "         /etc/systemd/system/chatterbox-powerd.service if your user/clone path differs,"
+        echo "         then \`sudo systemctl daemon-reload\`."
+        echo "   NOT done automatically (see INSTALL.md \"chatterbox-powerd\" for the manual steps):"
+        echo "     - EEPROM/config.txt: keep POWER_OFF_ON_HALT=0; consider dtoverlay=disable-wifi,"
+        echo "       dtoverlay=disable-bt, arm_freq_min=500."
+        echo "     - Confirm amp SD-pin polarity and the backlight sysfs node against real hardware"
+        echo "       (chatterbox/config/user_prefs.yaml: amp.sd_pin / amp.enable_active_high / display.backlight)."
+        echo "     - Start it when ready: sudo systemctl start chatterbox-powerd"
+        STEP_POWERD_OK=1
+    else
+        echo "   WARNING: systemd unit install failed partway through -- see errors above." >&2
+    fi
+else
+    echo "   WARNING: $UNIT_SRC_DIR/chatterbox-powerd.service not found -- skipping (repo checkout out of sync?)." >&2
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 9. Plain-Xorg kiosk autostart (deploy/xorg-kiosk/, docs/KIOSK.md).
+#
+# Non-fatal if any part of this fails, matching the powerd step above -- a failure here just
+# means falling back to running `do_tts.py --gui` by hand at the console. See
+# deploy/xorg-kiosk/README.md for the full rationale (a real, reproducible libwlroots SIGSEGV on
+# real Pi5 hardware ruled out cage/Wayland, the originally finalized compositor choice).
+# ---------------------------------------------------------------------------
+echo "-- [9/10] Installing plain-Xorg kiosk autostart"
+XORG_KIOSK_SRC_DIR="$WORKING_ROOT/deploy/xorg-kiosk"
+KIOSK_USER="${SUDO_USER:-$USER}"
+KIOSK_HOME="$(getent passwd "$KIOSK_USER" | cut -d: -f6)"
+
+if [[ -d "$XORG_KIOSK_SRC_DIR" && -n "$KIOSK_HOME" ]]; then
+    XORG_KIOSK_OK=1
+
+    sudo mkdir -p /etc/systemd/system/getty@tty1.service.d \
+        && sudo cp "$XORG_KIOSK_SRC_DIR/getty-tty1-autologin.conf" \
+            /etc/systemd/system/getty@tty1.service.d/override.conf \
+        || XORG_KIOSK_OK=0
+
+    cp "$XORG_KIOSK_SRC_DIR/xinitrc" "$KIOSK_HOME/.xinitrc" \
+        && chmod +x "$KIOSK_HOME/.xinitrc" \
+        || XORG_KIOSK_OK=0
+
+    # Idempotent append -- grep -qF check first so re-running this script doesn't duplicate the
+    # block in .bash_profile.
+    if ! grep -qF "plain-Xorg fallback" "$KIOSK_HOME/.bash_profile" 2>/dev/null; then
+        cat "$XORG_KIOSK_SRC_DIR/bash_profile_snippet.sh" >> "$KIOSK_HOME/.bash_profile" \
+            || XORG_KIOSK_OK=0
+    fi
+
+    # allowed_users=console (Debian's default) requires Xorg's wrapper to recognize the session
+    # as a genuine console login -- relaxed to "anybody" for this single-purpose embedded kiosk
+    # device (not a shared multi-user system). Idempotent: a no-op sed match if already "anybody".
+    if [[ -f /etc/X11/Xwrapper.config ]]; then
+        sudo sed -i 's/allowed_users=console/allowed_users=anybody/' /etc/X11/Xwrapper.config \
+            || XORG_KIOSK_OK=0
+    else
+        echo "   WARNING: /etc/X11/Xwrapper.config not found -- is xserver-xorg-legacy installed?" >&2
+        XORG_KIOSK_OK=0
+    fi
+
+    sudo systemctl daemon-reload && sudo systemctl enable getty@tty1 || XORG_KIOSK_OK=0
+
+    if [[ "$XORG_KIOSK_OK" -eq 1 ]]; then
+        echo "   Installed getty@tty1 autologin override, ~/.xinitrc, .bash_profile startx trigger,"
+        echo "   and relaxed /etc/X11/Xwrapper.config's allowed_users to 'anybody'."
+        echo "   NOTE: paths above assume user 'chatterbox' -- if your deployment uses a different"
+        echo "         user, edit /etc/systemd/system/getty@tty1.service.d/override.conf and"
+        echo "         ~/.xinitrc's hardcoded paths to match."
+        echo "   Reboot (or: sudo systemctl restart getty@tty1) for the GUI to autostart on tty1."
+        STEP_XORG_KIOSK_OK=1
+    else
+        echo "   WARNING: plain-Xorg kiosk autostart install failed partway through -- see errors above." >&2
+    fi
+else
+    echo "   WARNING: $XORG_KIOSK_SRC_DIR not found or could not resolve \$KIOSK_USER's home -- skipping." >&2
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 10. ALSA default output -> the IQaudio DAC HAT (deploy/audio/asound.conf).
+#
+# Non-fatal if it fails, same convention as the powerd/Xorg-kiosk steps above. Real-hardware bug
+# report: "the speaker is connected but when I run a synthesis, it only makes noise louder" --
+# with no default-device override anywhere on the system, ALSA's bare 'default' device (what
+# chatterbox's own ffplay-based playback uses, chatterbox/audio/playback.py) resolved to whichever
+# card the kernel enumerated first -- the onboard vc4-hdmi outputs on the affected hardware, not
+# the DAC actually wired to the amp/speaker. See deploy/audio/asound.conf's own comment for the
+# full diagnosis (confirmed live via ssh: silence before this file existed, a known-good ALSA test
+# WAV clearly audible after, played through chatterbox's own playback path both times).
+# ---------------------------------------------------------------------------
+echo "-- [10/10] Pinning ALSA default output to the IQaudio DAC"
+ASOUND_SRC="$WORKING_ROOT/deploy/audio/asound.conf"
+if [[ -f "$ASOUND_SRC" ]]; then
+    if aplay -l 2>/dev/null | grep -qi "IQaudIODAC"; then
+        if sudo cp "$ASOUND_SRC" /etc/asound.conf; then
+            echo "   Installed /etc/asound.conf (ALSA default -> hw:IQaudIODAC,0)."
+            STEP_ASOUND_OK=1
+        else
+            echo "   WARNING: failed to copy $ASOUND_SRC to /etc/asound.conf -- see errors above." >&2
+        fi
+    else
+        echo "   WARNING: no 'IQaudIODAC' card found in 'aplay -l' output -- skipping, since"
+        echo "            deploy/audio/asound.conf hardcodes that exact card name. If this"
+        echo "            deployment uses a different DAC/sound card, edit deploy/audio/asound.conf's"
+        echo "            'hw:IQaudIODAC,0' to match \`aplay -l\`'s actual card id, then re-run, or"
+        echo "            copy it to /etc/asound.conf by hand." >&2
+    fi
+else
+    echo "   WARNING: $ASOUND_SRC not found -- skipping (repo checkout out of sync?)." >&2
 fi
 echo
 
@@ -229,6 +394,9 @@ printf '%-45s %s\n' "pip install -r requirements-pi.txt:" "$([[ $STEP_PIP_OK -eq
 printf '%-45s %s\n' "pretrained weights present:"     "$([[ $STEP_WEIGHTS_OK -eq 1 ]] && echo PASS || echo "FAIL (see warnings above)")"
 printf '%-45s %s\n' "torch CPU smoke test:"            "$([[ $STEP_SMOKE_TORCH_OK -eq 1 ]] && echo PASS || echo FAIL)"
 printf '%-45s %s\n' "end-to-end synthesis smoke test:" "$([[ $STEP_SMOKE_SYNTH_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal)")"
+printf '%-45s %s\n' "chatterbox-powerd systemd unit:"  "$([[ $STEP_POWERD_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
+printf '%-45s %s\n' "plain-Xorg kiosk autostart:"      "$([[ $STEP_XORG_KIOSK_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
+printf '%-45s %s\n' "ALSA default -> IQaudio DAC:"      "$([[ $STEP_ASOUND_OK -eq 1 ]] && echo PASS || echo "SKIPPED/FAIL (non-fatal, optional)")"
 
 if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "$STEP_SMOKE_TORCH_OK" -eq 1 ]]; then
     echo
@@ -236,6 +404,12 @@ if [[ "$STEP_APT_OK" -eq 1 && "$STEP_VENV_OK" -eq 1 && "$STEP_PIP_OK" -eq 1 && "
     echo "Lock file: $LOCK_FILE"
     [[ "$STEP_WEIGHTS_OK" -eq 1 && "$STEP_SMOKE_SYNTH_OK" -eq 1 ]] || \
         echo "NOTE: weights and/or end-to-end synthesis need manual follow-up — see warnings above."
+    [[ "$STEP_POWERD_OK" -eq 1 ]] || \
+        echo "NOTE: chatterbox-powerd systemd unit was not installed — see warnings above (optional feature)."
+    [[ "$STEP_XORG_KIOSK_OK" -eq 1 ]] || \
+        echo "NOTE: plain-Xorg kiosk autostart was not installed — see warnings above (optional feature)."
+    [[ "$STEP_ASOUND_OK" -eq 1 ]] || \
+        echo "NOTE: ALSA default was not pinned to the IQaudio DAC — see warnings above (optional feature; if you hear no sound out of a real speaker, check this first)."
     exit 0
 else
     echo

@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-import benchmark.export_to_xlsx as export_to_xlsx
+import research.benchmark.export_to_xlsx as export_to_xlsx
 
 openpyxl = pytest.importorskip("openpyxl", reason="openpyxl not installed (optional dependency)")
 
@@ -96,6 +96,24 @@ def test_split_into_passes_two_full_passes():
     assert len(passes) == 2
     assert passes[0] == list(range(11))
     assert passes[1] == list(range(11, 22))
+
+
+def test_check_stage_shape_accepts_fs2_stage_names():
+    rows = [{"stage": s} for s in export_to_xlsx.STAGES]
+    export_to_xlsx._check_stage_shape(rows)  # must not raise
+
+
+def test_check_stage_shape_rejects_non_fs2_stage_names():
+    # A Piper-shaped per_stage_results.csv (this tool's fixed layout is bound to FS2's 4 stages
+    # and an external paste template -- see _check_stage_shape's docstring) must fail loudly
+    # instead of silently mis-slicing rows into wrong blocks.
+    rows = [{"stage": "synth"}, {"stage": "write"}]
+    with pytest.raises(SystemExit, match="synth"):
+        export_to_xlsx._check_stage_shape(rows)
+
+
+def test_check_stage_shape_accepts_empty():
+    export_to_xlsx._check_stage_shape([])  # must not raise
 
 
 def test_write_workbook_creates_one_sheet_per_pass(tmp_path):

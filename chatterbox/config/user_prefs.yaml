@@ -1,0 +1,22 @@
+power:
+  t_dim_s: 30
+  t_dark_s: 180
+  t_deep_s: 1200
+  deep_manual_only: false
+display:
+  backlight: auto
+  brightness_active: 255
+  brightness_dim: 60
+amp:
+  sd_pin: 23
+  enable_active_high: true
+  on_watchdog_s: 30
+  settle_ms: 80
+  preroll_ms: 50
+  tail_ms: 50
+switches: []
+evdev:
+  devices: auto
+socket:
+  path: /run/chatterbox/powerd.sock
+  group: chatterbox

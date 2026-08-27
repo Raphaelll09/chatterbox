@@ -1,0 +1,6 @@
+#!/bin/sh
+# Installed by scripts/setup_pi.sh to ~/.xinitrc (the chatterbox account's home directory) -- see
+# deploy/xorg-kiosk/README.md for why both the explicit cd and python3 -u/redirect below exist
+# (found the hard way on real hardware, not defensive guessing).
+cd /home/chatterbox/chatterbox
+exec /home/chatterbox/chatterbox/venv/bin/python3 -u /home/chatterbox/chatterbox/do_tts.py --gui > /home/chatterbox/gui_output.log 2>&1

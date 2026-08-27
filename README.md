@@ -1,298 +1,520 @@
-# Interface TTS en temps réel sur CPU (démo)
+# Chatterbox
 
-Cette interface permet de générer des synthèses en temps réel en combinant un TTS et un vocodeur à l'état de l'art. Par défaut, cette interface combine un FastSpeech2 avec Hifi-GAN.
+**An embedded neural text-to-speech demonstrator for AAC**, running entirely on CPU on a
+Raspberry Pi 5.
 
-# Installation
+Chatterbox is a speaking aid for people with augmentative and alternative communication (AAC)
+needs: you type — with a physical keyboard, an on-screen letter keyboard, or a phonetic keyboard —
+and the device speaks, expressively, in French or English. It is designed to run as a self-contained
+kiosk appliance on battery, with no network connection and no GPU.
 
-L'installation a été testée dans les environnements python 3.8 et 3.10. Le document compressé contient déjà les modèles pré-entrainés. Le fichier de configuration est adapté à ces modèles.
+> 🇫🇷 **Documentation en français :** [README.fr.md](README.fr.md) contains the original French
+> guide, with the fullest reference on the control-tag mini-language, the benchmark and the
+> profiling procedure.
 
-## Créer un environnement virtuel
+---
 
-Créer l'environnement
+## Table of contents
 
-```
-python.exe -m venv python3.11.1_embedded_tts
-```
+1. [What it does](#1-what-it-does)
+2. [Repository structure](#2-repository-structure)
+3. [Installation](#3-installation)
+4. [The TTS models](#4-the-tts-models)
+5. [Running it](#5-running-it)
+6. [The GUI](#6-the-gui)
+7. [Writing for the synthesiser: control tags](#7-writing-for-the-synthesiser-control-tags)
+8. [Power management on the Pi](#8-power-management-on-the-pi)
+9. [Maintenance and monitoring](#9-maintenance-and-monitoring)
+10. [Development](#10-development)
+11. [Known limitations](#11-known-limitations)
+12. [Licensing status](#12-licensing-status)
 
-Activer l'environnement
-```
-python3.11.1_embedded_tts\Scripts\activate
-```
+---
 
-Mettre à jour pip et les dépendances de base
-```
-python.exe -m pip install --upgrade pip
-pip install --upgrade setuptools
-```
+## 1. What it does
 
-## Dependencies
-Le fichier requirements.txt permet d'installer les packages nécessaires.
-```
-pip3 install -r requirements.txt
-```
-Il est possible qu'une commande supplémentaire soit nécessaire pour installer les dépendances de l'interfaces graphique.
-```
-apt-get install python-tk
-pip3 install python3-tk
-```
-
-## Modèles pré-entrainés et configuration
-Pour utiliser les modèles pré-entrainés FastSpeech2, FlauBERT, HiFi-GAN et Waveglow, téléchargez les depuis les liens Google Drive suivants :
-- [FastSpeech2](https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing) : Téléchargez et dézippez les trois archives (config, output et preprocessed_data) dans le dossier FastSpeech2
-- [FlauBERT](https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing) : Téléchargez et dézipper le modèle et les fichiers de configuration dans flaubert/flaubert_large_case
-- [HiFi-GAN](https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing) : Téléchargez et dézippez l'archive FR_V2 dans hifi-gan-master
-- [Waveglow](https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing) : Téléchargez le modèle et placez le dans Waveglow
-
-
-# Quickstart
-
-Le fichier de configuration est pré-rempli avec les paramètres recommandés.
-
-## Sans interface graphique
+The default pipeline has four stages, all on CPU:
 
 ```
+text ──► [FlauBERT]  ──► [FastSpeech 2] ──► [HiFi-GAN] ──► [post-process] ──► audio
+          optional,        acoustic model     vocoder        denoise, normalise,
+          style tags       text → mel         mel → wav      subtitles
+          only
+```
+
+A second backend, **Piper**, is monolithic: text goes straight to a waveform, with no separate
+vocoder. Which pipeline runs is decided per model by configuration, not by code — see
+[The TTS models](#4-the-tts-models).
+
+Alongside speech, the FastSpeech 2 backend emits `.AU` facial-animation parameters and WebVTT
+subtitles with per-symbol timing, for driving a virtual avatar.
+
+**Target hardware:** Raspberry Pi 5 (16 GB), IQaudio DAC, amplifier and speaker, touchscreen,
+DFRobot FIT0992 UPS HAT, optional physical accessibility switches. It also runs fine on a
+Windows or Linux desktop for development.
+
+---
+
+## 2. Repository structure
+
+The repository is split into two layers, and **the split is mechanically enforced**:
+
+| Layer | Directories | Contents |
+|---|---|---|
+| **RUN** | `chatterbox/`, `assets/`, `deploy/`, `scripts/` | Everything strictly required to make the device speak. |
+| **STUDY** | `research/`, `tests/`, `docs/research/` | Everything that exists because this is research: profiling, benchmarks, power measurement, the development log. |
+
+> **`chatterbox/` must never import `research/`. `research/` may import `chatterbox/` freely.**
+> Deleting `research/` and `tests/` leaves a fully working demonstrator.
+
+This is checked by `scripts/check_layers.py` and `tests/test_layer_boundary.py`, not merely
+documented. The single point of contact — profiling timestamps on the synthesis hot path — goes
+through `chatterbox/instrumentation.py`, a seam whose functions are inert no-ops until
+`research.profiling` installs itself into them at import time.
+
+```
+chatterbox/          the application package            → chatterbox/README.md
+  cli.py               argument parsing, mode dispatch
+  synth.py             the compute path (Tk-free, shared by CLI and GUI)
+  instrumentation.py   the RUN/STUDY seam
+  synthesis/           backends + the backend contract  → chatterbox/synthesis/README.md
+  gui/                 Tkinter interface, keyboards, i18n, settings
+  power/               chatterbox-powerd (Pi only, optional)
+  config/              config_tts.yaml, user_prefs.yaml, paths.py
+assets/              vendored model code + keyboard audio → assets/README.md
+deploy/              systemd units + Xorg kiosk autostart → deploy/README.md
+scripts/             Pi provisioning, voice download, layer check → scripts/README.md
+research/            profiling, benchmarks, archived data → research/README.md
+tests/               pytest suite                        → tests/README.md
+docs/                documentation index                 → docs/README.md
+```
+
+Every top-level directory has its own `README.md` explaining what it is and what to know before
+touching it.
+
+---
+
+## 3. Installation
+
+Pretrained weights are **not in this repository**. Every install path downloads them separately.
+
+### 3.1 Raspberry Pi 5 (deployment)
+
+```bash
+# 1. Flash Raspberry Pi OS 64-bit, enable SSH, boot, then:
+git clone https://github.com/Raphaelll09/chatterbox.git ~/chatterbox
+cd ~/chatterbox
+./scripts/setup_pi.sh
+```
+
+That is the whole first-run path: `setup_pi.sh` installs the apt packages, creates a venv at
+`~/chatterbox/venv`, installs the Python requirements, downloads the weights, smoke-tests the
+install, and sets up the kiosk autostart and the powerd unit. It is idempotent — safe to re-run
+if a step fails — and prints a PASS/FAIL summary.
+
+> **Building a device rather than trying it out?** [`INSTALL.md`](INSTALL.md) is the deployment
+> guide: what each step does, the manual hardware steps `setup_pi.sh` deliberately leaves to you
+> (amplifier pin polarity, backlight node, unit paths), the bring-up protocol that gates
+> unattended boot, and how to mass-produce units from a golden image.
+
+### 3.2 Windows or Linux desktop (development)
+
+```bash
+python -m venv .venv
+# Windows:  .venv\Scripts\activate
+# Linux:    source .venv/bin/activate
+python -m pip install --upgrade pip setuptools
+pip install -r requirements-dev.txt
+```
+
+Or install as a package, which gives you the `chatterbox` console script:
+
+```bash
+pip install -e '.[dev]'          # runtime + tests + research tooling
+pip install .                    # runtime only
+```
+
+Extras: `[pi]` (GPIO, I2C, evdev), `[research]` (profiling, spreadsheet export), `[dev]`
+(pytest + research).
+
+**Linux GUI** also needs Tk: `sudo apt-get install python3-tk` (already in
+`apt-packages-pi.txt`).
+
+**Audio playback** goes through `pydub`, which shells out to `ffplay` — install `ffmpeg` if
+playback is silent.
+
+### 3.3 Pretrained weights (all platforms)
+
+Download from the Google Drive links in [README.fr.md](README.fr.md#modèles-pré-entrainés-et-configuration)
+and unpack into:
+
+| Model | Destination |
+|---|---|
+| FastSpeech 2 (`config`, `output`, `preprocessed_data`; checkpoint `390000`) | `assets/models/FastSpeech2/` |
+| FlauBERT large cased | `assets/models/flaubert/flaubert_large_cased/` |
+| HiFi-GAN (`FR_V2`, `g_00570000`) | `assets/models/hifi-gan-master/` |
+
+### 3.4 Optional: the Piper backend
+
+Piper is a separate, optional backend under **GPL-3.0-or-later**. It is deliberately not vendored
+and not in any requirements file, so this project's own licensing is unaffected — skip this section
+entirely if you only want FastSpeech 2 + HiFi-GAN.
+
+```bash
+pip install piper-tts==1.5.0
+./scripts/fetch_piper_voices.sh      # downloads 3 voices, verifies sha256
+```
+
+A single prebuilt wheel, no source build, no separate `espeak-ng` system dependency.
+
+---
+
+## 4. The TTS models
+
+Configured in `chatterbox/config/config_tts.yaml`. Three selectable models today:
+
+| # | Model | Backend | Language | Voices | Vocoder | Styles |
+|---|---|---|---|---|---|---|
+| 0 | **Multi Speaker/Style** | FastSpeech 2 + HiFi-GAN | fr | NEB, AD, IZ, RO (female), DG (male) | HiFi-GAN | 12 named + 4 unnamed |
+| 1 | **Piper-tts (Français)** | Piper | fr | Siwis, Jessica, Pierre | none | — |
+| 2 | **Piper en_US (lessac, medium)** | Piper | en | lessac | none | — |
+
+**FastSpeech 2** is the expressive one: 12 named GST styles (`NEUTRE`, `ENTHOUSIASTE`, `COLERE`,
+`PENSIF`, `ETONNE`, `INCREDULE`, `EVIDENCE`, `RECONFORTANT`, `DESOLE`, `DETERMINE`, `ESPIEGLE`,
+`SUPPLIANT`) with adjustable intensity, plus pitch/energy/speed controls and free-text style
+conditioning via FlauBERT. It is the only backend that accepts phonetic input and produces
+subtitles and facial-animation data. `AD` is recommended for audio-visual synthesis.
+
+**Piper** is faster and lighter but has no style dimension, no phoneme input, and no subtitles. Its
+two entries share a `menu_group`, so the GUI shows *one* "Piper-tts" entry and resolves French vs
+English from the active interface language.
+
+Vocoder: **HiFi-GAN V2 FR 570000** (only used by model 0).
+
+Each model declares three capability flags read before it loads — `needs_vocoder`,
+`accepts_phoneme_input`, `supports_subtitles` — which is how the GUI adapts without knowing
+anything about the backend. Adding a backend is documented in
+[`chatterbox/synthesis/README.md`](chatterbox/synthesis/README.md).
+
+---
+
+## 5. Running it
+
+> **Run from the repository root.** Model paths in `config_tts.yaml` are relative to the working
+> directory. See [Known limitations](#11-known-limitations).
+
+### Interactive free text
+
+```bash
 python3 do_tts.py
 ```
 
-Le script charge automatiquement les modèles par défaut FastSpeech2 (voix AD) et Hifi-GAN V2 (Entrainé sur du Français puis fine-tuné sur des spectres multi-locuteurs générés avec FastSpeech2). Lorsque les modèles sont chargés, un champ texte permet de saisir la phrase à synthétiser. Les arguments optionnels --default_tts et --default_vocoder permettent de sélectionner les modèles à pré-charger.
+Prompts on stdin, synthesises, plays. `Ctrl+C` to exit.
 
-Le modèle accepte des entrées orthographiques et/ou phonétiques. Le signe # ajouté autour d'un mot permet d'ajouter de l'emphase sur celui-ci.
-exemple : Bonjour, je suis un avatar #virtuel#.
+### Graphical interface
 
-Attention : pour préciser une entrée phonétique, la segmentation par mot doit être respectée et chaque mot doit être encapsulé dans des accolades.
-exemple : Bonjour, je m'appelle {s y z i}.
-
-L'alphabet phonétique utilisé est précisé dans ce [lien](https://zenodo.org/record/4580406#.YuPwJnhByV4).
-
-Note : pour créer un continuité entre les phrases, les modèles sont entrainés avec une ponctuation initiale (exemple : .Bonjour, je m'appelle {s y z i}.). Cependant, pour faciliter la saisie, une ponctuation initiale par défaut est automatiquement ajoutée avant la synthèse. Il n'est donc plus nécessaire de commencer les phrases par une ponctuation. De même, pour faciliter la saisie en conservant une qualité de synthèse optimale, une ponctuation finale est automatiquement ajoutée si la phrase n'en contient pas.
-
-## Avec interface graphique
-
-```
+```bash
 python3 do_tts.py --gui
 ```
 
-L'argument --gui permet d'utiliser l'interface graphique.
+### Choosing a model at startup
 
-![](./tts_gui.png)
-
-Un TTS et un vocodeur par défaut se chargent à l'ouverture de l'interface (surlignés en jaune). Pour sélectionner un autre TTS ou un autre vocodeur, cliquez sur le bouton correspondant. Le modèle précédente est dé-chargé avant de charger le nouveau (ce processus peut prendre quelques secondes en fonction de la taille des modèles).
-
-En fonction du modèle, des champs supplémentaires apparaissent pour fournir quelques options de contrôle. Plusieurs choix de locuteurs sont disponibles. Des sliders permettent de modifier le pitch, l'énergie ou la vitesse d'élocution du modèle. Pour les modèles expressifs, des boutons radio permettent de choisir le style à appliquer.
-
-Le champ texte permet de saisir le texte à synthétiser. De même, il est possible de combiner entrées orthographiques et/ou phonétiques. Cliquer sur le bouton "Synthèse" ou appuyer sur la touche "Entrée" lance la synthèse de la phrase par le TTS puis le vocodeur. La synthèse est automatiquement jouée quand elle est terminée, et peut être rejouée avec le bouton "Play".
-
-Les durées d'inférence sont affichées automatiquement après la synthèse. 
-
-# Utilisation des balises
-
-Certaines caractères sont automatiquement reconnues pour paramètrer la synthèse.
-
-## Balise de Locuteur : <SPEAKER=*>
-
-La balise \<SPEAKER=* \> permet de spécifier le locuteur avec lequel générer le texte. Cette balise peut être ajoutée à n'importe quel emplacement dans la phrase. Si le locuteur précisé par cette balise existe dans le modèle choisi, celui-ci remplacera le locuteur par défaut. Si ce locuteur n'existe pas, la balise n'aura pas d'effet, et le locuteur par défaut sera utilisé. Veuillez à respecter la typographie \<SPEAKER=* \>, sans espace entre < et SPEAKER ni entre SPEAKER et =, et SPEAKER en majuscules.
-
-## Balise de Style : <STYLE=*>
-
-La balise \<STYLE=* \> permet de spécifier le style à employer pour générer le texte. Cette balise peut être ajoutée à n'importe quel emplacement dans la phrase. Cette balise n'a d'effet que pour les modèles expressifs. Si le style précisé par cette balise existe dans le modèle choisi, celui-ci remplacera le style par défaut. Si ce style n'existe pas, la balise n'aura pas d'effet, et le style par défaut sera utilisé. Veuillez à respecter la typographie \<STYLE=* \>, sans espace entre < et STYLE ni entre STYLE et =, et STYLE en majuscules.
-
-Le style doit être écrit en majuscules et sans accents. La liste des styles possibles et la suivante :
-
-- COLERE
-- DESOLE
-- DETERMINE
-- ENTHOUSIASTE
-- ESPIEGLE
-- ETONNE
-- EVIDENCE
-- INCREDULE
-- PENSIF
-- RECONFORTANT
-- SUPPLIANT
-- NARRATION
-
-## Balise de d'Intensité de Style : <STYLE_INTENSITY=*>
-
-La balise \<STYLE_INTENSITY=* \> permet de spécifier l'intensité du style employé. Cette balise peut être ajoutée à n'importe quel emplacement dans la phrase. Cette balise n'a d'effet que pour les modèles expressifs. L'intensité du style peut varier entre 0 (pas expressif = style NARRATION) et 1 (très expressif). Les valeurs décimales doivent être écrites avec un point et non une virgule. Exemple :
-
-    <STYLE_INTENSITY=0.6>
-
-Si cette balise est utilisée, elle remplace l'intensité par défaut du style sélectionné. Les valeurs par défauts des styles sont choisies empiriquement pour produire des styles moins caricaturaux mais toujours facile à identifier :
-
-- COLERE : 1.0
-- DESOLE : 0.7
-- DETERMINE : 0.8
-- ENTHOUSIASTE : 0.7
-- ESPIEGLE : 1.0
-- ETONNE : 0.75
-- EVIDENCE : 0.8
-- INCREDULE : 1.0
-- PENSIF : 0.7
-- RECONFORTANT : 0.7
-- SUPPLIANT : 0.8
-
-Si la balise est utilisée avec le style "NARRATION", elle n'a pas d'effet. Veuillez à respecter la typographie \<STYLE_INTENSITY=* \>, sans espace entre < et STYLE_INTENSITY ni entre STYLE_INTENSITY et =, et STYLE_INTENSITY en majuscules. 
-
-## Balise fin d'énoncé : §
-
-La balise § fait la séparation entre les sous-énoncés, écrits dans une même entrée textuelle. Quand cette balise est utilisée, le modèle génère séparement les énoncés de part et d'autre de cette balise. Les synthèses (audio et visuelles) sont ensuite concaténées. L'utilisation de cette balise assure un silence d'environ 260ms dans la synthèse.
-
-Il est possible d'utiliser les balises \<SPEAKER=* \>,  \<STYLE=* \> et \<STYLE_INTENSITY=* \> dans chaque sous-énoncé. Si une balise est utilisée dans un sous-énoncé, son effet est limité à ce sous-énoncé, et les paramètres par défaut seront appliqués dans les autres sous-énoncés.
-
-L'exemple suivant génère un style différent pour chaque sous-énoncé, avec le locuteur par défaut :
-
-    <STYLE=NARRATION>Bonjour, je suis Suzy, un avatar virtuel expressif.§<STYLE=NARRATION>Vous entendez actuellement ma voix neutre que j'utilise en #narration#.§<STYLE=ENTHOUSIASTE><STYLE_INTENSITY=0.6>Je peux aussi être {t r e z} #enthousiaste#, pour exprimer des félicitations.§<STYLE=PENSIF>Ou prendre un air #pensif#~§<STYLE=ETONNE>Je suis parfois #étonné# par ce que l'on me dit?§<STYLE=INCREDULE>Et si je doute~? je serai #incrédule#.§<STYLE=INCREDULE>Oui vraiment?§<STYLE=EVIDENCE>J'exprime parfois l'#évidence# de cette façon.§<STYLE=COLERE><STYLE_INTENSITY=0.9>Pour les reproches, je simulerai la #colère#.§<STYLE=ESPIEGLE>Je sais aussi détendre l'atmosphère, avec mon air #espiègle#.§<STYLE=RECONFORTANT>Pour remonter le moral, j'utiliserai un ton #réconfortant#.§<STYLE=DESOLE>Vous êtes triste?, j'en serai #désolé#.§<STYLE=DETERMINE>Je sais aussi être #déterminé#, je vous l'affirme.§<STYLE=SUPPLIANT>Ou #suppliant#, pour demander certaines choses.§
-
-# Post-Traitements
-
-Les paramètres "use_denoiser" et "visual_smoothing" dans le fichier "config_tts.yaml" permettent de spécifier l'utilisation d'un post-traitement pour les paramètres audio et visuels respectivement. Ce post-traitement permet de réduire le bruit audio produit par le vocodeur, ainsi que les tressautements de l'avatar. Le paramètre "cutoff" du "visual_smoothing" permet de régler le lissage. Une valeur plus faible (minimun 1) permet de lisser d'avantage au détriment de l'expressivité des mouvements de tête. Une valeur plus grande (maximum 5) laisse passer plus de mouvements. La valeur optimale est 3.
-
-# Profilage
-
-Un sous-système de profilage **optionnel** permet de mesurer le coût CPU/énergie de la synthèse, par phrase et par étage du pipeline (front-end FlauBERT, acoustique FastSpeech2, vocodeur Hifi-GAN, écriture audio). Il est désactivé par défaut (aucun fichier écrit, aucun surcoût) et se déclenche avec l'option `--profile`, la variable d'environnement `CHATTERBOX_PROFILE=1`, ou `profiling.enabled: true` dans `config_tts.yaml` :
-
-```
-python3 do_tts.py --profile
+```bash
+python3 do_tts.py --default_tts 1        # Piper French
+python3 do_tts.py --default_tts 2 --gui  # Piper English, in the GUI
 ```
 
-## Design : une seule horloge partagée
+### Useful flags
 
-Trois composants, tous basés sur `time.monotonic()` pour rester synchronisables :
+| Flag | Effect |
+|---|---|
+| `--config FILE` | Alternative config (default `chatterbox/config/config_tts.yaml`) |
+| `--default_tts N` / `--default_vocoder N` | Preselect model by index |
+| `--postprocess` / `--no-postprocess` | Peak normalisation + soft limiter |
+| `--target-crest-db DB` / `--target-peak-dbfs DBFS` | Post-processing targets (14.0 / −1.0) |
+| `--analyze` | Write a crest/loudness report per synthesis |
+| `--report-wav PATH` | Analyse an existing wav and exit |
+| `--profile` | Enable profiling (same as `CHATTERBOX_PROFILE=1`) |
+| `--benchmark` | Run the fixed 10-sentence set instead of free text |
+| `--p4-sweep` | Run the power/cadence sweep |
 
-- **Échantillonneur en tâche de fond** (`profiling/sampler.py`) : tourne dans son propre processus (épinglé à un cœur CPU via `os.sched_setaffinity`, priorité abaissée via `os.nice`), et journalise à 10 Hz dans `profile/per_sample.csv` : utilisation CPU par cœur (`/proc/stat`), fréquence ARM (`scaling_cur_freq`), température (`thermal_zone0`), mémoire utilisée (`/proc/meminfo`), puissance PMIC (`vcgencmd pmic_read_adc` — la puissance **interne** totale, plus le détail par rail : voir "Puissance par rail PMIC" ci-dessous), l'état de throttling (`vcgencmd get_throttled`, échantillonné à 1 Hz seulement), et — si présent — la télémétrie du capteur **INA226** (voir ci-dessous). Nécessite un Raspberry Pi (Linux + sysfs + vcgencmd) ; sur un autre OS il est ignoré avec un avertissement, mais les marqueurs par phrase restent actifs.
-- **Marqueurs dans le pipeline** (`profiling/recorder.py`, insérés dans `audio_utils.py` et `synthesis_modules.py`) : n'enregistrent que des horodatages `time.monotonic()` et quelques métadonnées légères, sans thread ni calcul lourd. Un enregistrement JSON par phrase est ajouté à `profile/per_sentence.jsonl` (id, texte, nombre de caractères/mots/phonèmes, horodatages de chaque étage, durées dérivées, durée audio, RTF).
-- **Script de jointure hors-ligne** (`profiling/join.py`, non critique en temps) : combine `per_sample.csv` et `per_sentence.jsonl` pour produire `profile/per_sentence_results.csv` (énergie intégrée par trapèzes sur la fenêtre de chaque phrase, CPU moyen/pic, température pic, throttling, **et** énergie ampli/CPU/mémoire — voir ci-dessous) et `profile/per_stage_results.csv` (la même intégration sur chaque sous-fenêtre d'étage). Se lance avec :
+`--gui`, `--benchmark` and `--p4-sweep` are mutually exclusive; combining them prints a warning and
+runs the non-GUI one.
 
-```
-python profiling/join.py
-```
+---
 
-## Puissance par rail PMIC
+## 6. The GUI
 
-`vcgencmd pmic_read_adc` expose un canal courant **et** un canal tension pour chaque rail interne mesuré (`3V7_WL_SW`, `3V3_SYS`, `1V8_SYS`, `DDR_VDD2`, `DDR_VDDQ`, `1V1_SYS`, `0V8_SW`, `VDD_CORE`, `0V8_AON`, `3V3_DAC`, `3V3_ADC`, `HDMI`), mais l'entrée 5V externe (`EXT5V_V`, ~5.12V) et le rail batterie (`BATT_V`) n'ont **que** la tension, pas de courant — il n'existe donc pas de lecture "puissance d'entrée" unique dans le PMIC : `pmic_power_w` (déjà journalisé) est la somme V×I sur les rails **explicitement listés** ci-dessus (`profiling.parsing.PMIC_RAILS`), c'est-à-dire la puissance **interne** du Pi (elle exclut les pertes de conversion des régulateurs et tout ce qui est tiré sur les broches GPIO 5V par des HAT externes). Le wattmètre USB-C externe (M1) reste donc la référence de puissance totale ; l'INA226 (M2) mesure l'amplificateur séparément.
+Launch with `python3 do_tts.py --gui`. It is designed for touch, reflows between portrait and
+landscape, and runs synthesis on a worker thread so the interface never freezes.
 
-- `cpu_power_w` : rail `VDD_CORE` (cœur CPU/GPU) seul.
-- `mem_power_w` : somme `DDR_VDD2` + `DDR_VDDQ` + `1V1_SYS` (sous-système mémoire).
-- `ext5v_v` : tension `EXT5V_V`, journalisée pour référence (pas de courant disponible sur ce rail).
+### Layout
 
-Ces quatre colonnes (`pmic_power_w`, `cpu_power_w`, `mem_power_w`, `ext5v_v`) sont dérivées d'un **seul** appel `vcgencmd pmic_read_adc` par tick — le texte est parsé une fois (`profiling.parsing.parse_pmic_rails()`), puis chaque colonne en est extraite. `profiling/join.py` ajoute `cpu_energy_wh`/`cpu_mean_w` et `mem_energy_wh`/`mem_mean_w` à `per_sentence_results.csv` / `per_stage_results.csv`, à côté des colonnes système (`energy_j`/`energy_wh`, ...) et ampli (`amp_*`) existantes — utile pour voir, par étage du pipeline, si le coût est plutôt CPU ou plutôt mémoire.
+- **App bar** — model, language, theme, tools and settings menus, status light, battery percentage,
+  and a "put away" button that sends the device to sleep.
+- **Text area** — what will be spoken. Can be hidden via *Tools → Show input area* for users who
+  only use the keyboard.
+- **Keyboard area** — a segmented control switches between:
+  - **Texte** — an on-screen letter keyboard, layout switchable between simplified AZERTY (default)
+    and QWERTY, independently of the TTS language;
+  - **Phonèmes** — the "Emmanuelle" phonetic keyboard, for precise pronunciation control. Only
+    FastSpeech 2 understands it; with a Piper model selected the GUI falls back per
+    `GUI_config.phoneme_fallback` (`translate_labels` by default — keys insert their plain-French
+    label instead of the raw phone code).
+  - The **▶ button** on the keyboard triggers synthesis and playback (and replay).
+- **Emotion bar** — for FastSpeech 2, the 12 named styles as emoji chips; four unnamed tokens hide
+  behind an "advanced" toggle. Absent for Piper, which has no styles.
+- **Sliders** — *Tools → Synthesis sliders* opens speed, pitch, energy and the bias controls. Which
+  sliders exist is declared by the active backend, not hardcoded.
 
-## Capteur INA226 : puissance de la branche ampli
+### Menus
 
-En complément du PMIC (qui mesure la consommation **système** globale du Pi), un capteur de courant/puissance **INA226** peut être câblé sur le bus I2C du Pi (`i2c-1`), à l'adresse **`0x40`**, avec un shunt de **2 mΩ**, sur la branche **5V qui alimente le breadboard de l'amplificateur**. Comme il est sur le bus I2C propre du Pi, l'échantillonneur le lit directement, dans la même boucle à 10 Hz, sur la même horloge partagée `time.monotonic()` — un seul run `--benchmark --play` mesure donc **simultanément** le coût de calcul (PMIC) et le coût de l'amplificateur (INA226).
+| Menu | Contents |
+|---|---|
+| **Modèle TTS** | Pick the model. Grouped entries (both Pipers) collapse to one item. |
+| **Langue** | Switches interface language **and** loads the matching model. Restarts the window. |
+| **Thème** | Light/dark. Currently a stub — only one theme table exists. |
+| **Outils** | Show/hide the input area; open the synthesis sliders. |
+| **Réglages** | Power timers, brightness, and an *Avancé* section with the TTS/vocoder pickers, the letter-keyboard layout, screen orientation, and a separate **interface language** setting — so you can run the English voice with a French interface. |
 
-- **Détection** : automatique au démarrage de l'échantillonneur (sondage I2C à `0x40`). Si le capteur est absent ou une lecture échoue, les colonnes restent vides (`NaN`/chaîne vide) — la synthèse et le reste du profilage ne sont jamais perturbés. Peut être désactivé explicitement avec `--no-ina` (`profiling/sampler.py`) ou `profiling.ina226: false` dans `config_tts.yaml` / `--no-ina` sur `do_tts.py`.
-- **Câblage / vérification** : avant de lancer une session, vérifier qu'aucune collision d'adresse I2C n'existe avec le DAC IQaudio (`0x4c`) :
+Model changes in *Réglages → Avancé* apply immediately; power settings need **Enregistrer**.
 
-```
-i2cdetect -y 1
-```
+Both language controls persist to `gui.language` in `user_prefs.yaml`; whichever was used last wins
+at next launch.
 
-  L'INA226 doit apparaître à `0x40`, le DAC IQaudio à `0x4c` — deux adresses distinctes sur le même bus `i2c-1`.
+---
 
-- **Colonnes ajoutées à `profile/per_sample.csv`** : `ina_bus_v` (tension bus, V), `ina_current_a` (courant, A), `ina_power_w` (puissance, W). Vides si le capteur n'est pas présent.
-- **Colonnes ajoutées par `profiling/join.py`** à `per_sentence_results.csv` / `per_stage_results.csv` : `amp_energy_j` / `amp_energy_wh` (énergie ampli intégrée sur la fenêtre, par trapèzes, comme pour le PMIC) et `amp_mean_w` / `amp_peak_w` (puissance ampli moyenne/pic). Ces colonnes sont **à côté** des colonnes système existantes (`energy_j`, `energy_wh`, ...) dérivées du PMIC — chaque phrase rapporte donc l'énergie **système** et l'énergie **ampli** côte à côte, sans que l'une modifie l'autre. Aucune calibration n'est appliquée à la lecture INA226 (contrairement au PMIC) : c'est une lecture de courant/tension directe, pas un proxy à recaler sur un wattmètre externe.
+## 7. Writing for the synthesiser: control tags
 
-## Calibration PMIC
+These work in the text field and on stdin. Full reference (in French) in
+[README.fr.md](README.fr.md).
 
-La puissance lue via `vcgencmd pmic_read_adc` inclut la consommation du profileur lui-même. Pour la recaler sur un wattmètre USB-C externe :
+| Tag | Meaning | Backend |
+|---|---|---|
+| `<SPEAKER=AD>` | Choose the voice | both |
+| `<STYLE=ENTHOUSIASTE>` | Choose the style | FastSpeech 2 |
+| `<STYLE_INTENSITY=0.6>` | Style strength, 0–1 (decimal point, not comma) | FastSpeech 2 |
+| `<STYLE_TAG=...>` | Free-text style description, routed through FlauBERT | FastSpeech 2 |
+| `{s y z i}` | Phonetic pronunciation | FastSpeech 2 |
+| `#word#` | Emphasis | FastSpeech 2 |
+| `\|` | Sub-utterance separator: synthesise separately, concatenate, ~260 ms silence | FastSpeech 2 only |
 
-```
-python -m profiling.calibrate --seconds 30
-```
+Tags must have no spaces around `<`, the keyword or `=`, and the keyword must be uppercase. An
+unknown speaker or style is ignored rather than erroring.
 
-À exécuter à quelques états stables (repos, charge moyenne), en notant la moyenne affichée en face de la lecture du wattmètre externe au même instant. Ajuster une droite `puissance_wattmètre = scale * pmic_power_w + offset` et enregistrer le résultat dans `profile/calibration.json` (`{"scale": ..., "offset": ...}`), appliqué automatiquement par `join.py`. Il est aussi recommandé de mesurer une fois la consommation à vide du profileur (échantillonneur lancé seul, synthèse à l'arrêt) pour connaître son propre surcoût sur la mesure PMIC.
+Initial and final punctuation are added automatically, so you do not need to type them.
 
-# Benchmark
+> ⚠ **The separator is `|` (pipe), not `§`.** [README.fr.md](README.fr.md) and a comment in
+> `chatterbox/synth.py` both say `§`; the code splits on `|`. `§` is treated as ordinary
+> punctuation. Also note this feature is FastSpeech 2 only — using `|` with a Piper model raises
+> `FileNotFoundError`.
 
-Un mode routine permet de synthétiser automatiquement un jeu fixe de 10 phrases françaises (`benchmark/sentences_fr.jsonl`), avec le profilage activé, pour comparer la puissance et le RTF selon la longueur et la complexité des phrases. Il réutilise exactement le même appel de synthèse que le mode texte libre (`audio_utils.syn_audio()`) — aucune synthèse dupliquée.
-
-```
-python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--export-xlsx] [--sentences FICHIER]
-```
-
-- Sans `--benchmark`, le comportement est **inchangé** : mode texte libre interactif.
-- `--benchmark` déroule REF → A1 → A2 → A3 → B1 → B2 → B3 → B4 → C1 → C2 → REF (REF encadre le jeu au début et à la fin, pour détecter une dérive d'une exécution à l'autre), avec une pause silencieuse fixe de 2 s entre chaque synthèse (pour garder des paliers de repos nets dans `profile/per_sample.csv`, utiles pour découper le signal de puissance et soustraire une ligne de base par phrase). `--benchmark` active automatiquement le profilage (équivalent à `--profile`).
-- `--play` : joue aussi l'audio après chaque synthèse (nécessaire pour une mesure acoustique/ampli). Par défaut, synthèse seule (isole le coût de calcul).
-- `--repeats N` : répète l'ensemble ordonné N fois (statistiques).
-- `--sentences FICHIER` : remplace le jeu de phrases par défaut par un autre fichier JSONL (même format).
-- `--join` : une fois le benchmark terminé et le profileur arrêté, lance `profiling/join.py` pour produire `profile/per_sentence_results.csv` et `profile/per_stage_results.csv`.
-- `--export-xlsx` : en plus du join (implicite), exporte vers une feuille Excel prête à coller — voir "Export Excel" ci-dessous.
-
-## Export Excel
-
-`benchmark/export_to_xlsx.py` (nécessite `pip install openpyxl`, dépendance optionnelle chargée à la demande) lit `profile/per_sentence_results.csv` / `profile/per_stage_results.csv` et écrit **`profile/exports/chatterbox_paste.xlsx`** — un dossier dédié aux exports, distinct des CSV bruts.
-
-```
-python3 do_tts.py --benchmark --play --export-xlsx
-# ou, après un --join déjà fait :
-python -m benchmark.export_to_xlsx [--profile-dir profile] [--out-dir profile/exports]
-```
-
-- Une feuille `P2P3_Synthesis` par passage complet de 11 phrases (`REF_start, A1, A2, A3, B1, B2, B3, B4, C1, C2, REF_end`), colonnes A-U dans l'ordre exact attendu par le classeur maître `Chatterbox_Power_Measurements_final.xlsx` (feuille `P2P3_Synthesis`, collage en `A12`) : `id, tag, words, phon, audio_s, synth_ms, RTF, front_ms, acou_ms, voco_ms, write_ms, pmicE_Wh, synthP_W, E/s_Wh, ampE_Wh, ampMean_mW, ampPk_mW, peak_C, throttled, cpuE_Wh, cpuP_W`. En-têtes en ligne 1, données en lignes 2 à 12 — copier `A2:U12` et coller dans le classeur maître.
-- **Avec `--repeats N`** (plusieurs passages), chaque passage complet obtient sa **propre feuille** : le premier reste nommé `P2P3_Synthesis` (collage direct possible), les suivants `P2P3_Synthesis_pass2`, `P2P3_Synthesis_pass3`, ... (même disposition `A2:U12`). Un passage incomplet (exécution interrompue) est ignoré avec un avertissement plutôt que d'écrire une feuille partielle.
-- Toutes les valeurs sont des nombres **littéraux**, pas des formules — la feuille collée est autonome. Les colonnes dérivées (`RTF`, `synthP_W`, `E/s_Wh`, `cpuP_W`) sont recalculées par le script à partir des colonnes du join, pas recopiées telles quelles.
-- Une feuille `per_stage` supplémentaire (référence, pas destinée au collage) liste, par phrase et par étage, la durée (ms) et l'énergie totale/CPU/mémoire (Wh).
-- Sans capteur INA226 ou sans certains rails PMIC, les colonnes correspondantes restent simplement vides — l'export ne plante jamais pour une donnée manquante.
-- Si `openpyxl` n'est pas installé, l'export imprime `pip install openpyxl` et s'arrête proprement (les CSV du join restent intacts).
-
-## Format de `benchmark/sentences_fr.jsonl`
-
-Un objet JSON par ligne : `id` (identifiant court), `text` (phrase à synthétiser), `tag` (étiquette de complexité, reportée dans l'enregistrement de profilage par phrase), `word_count` (nombre de mots, métadonnée descriptive).
-
-Le jeu est construit pour isoler un facteur à la fois :
-- **A1–A3** font varier la longueur à faible complexité (`short_plain`/`medium_plain`/`long_plain`) ;
-- **B1–B4** font varier un seul facteur de stress à la fois : liaisons (B1), nombres en toutes lettres (B2), prosodie/ponctuation (B3), nom propre + acronyme (B4) ;
-- **C1–C2** cumulent plusieurs facteurs (nombres empilés ; homographes hétérophones nécessitant une bonne conversion grapheme-to-phoneme) ;
-- **REF** ancre le jeu en début et fin d'exécution pour détecter une dérive (échauffement CPU, throttling, ...).
-
-# P4 : balayage de cadence
-
-Le dernier volet des expériences de puissance : mesure comment la puissance système moyenne `P_use` varie avec le débit conversationnel (énoncés/minute), pour produire une formule `P_use(N) = P_idle + k·N` convertissant n'importe quel modèle d'usage en budget d'énergie journalier. Réutilise exactement le même appel de synthèse+lecture que `--benchmark` (`audio_utils.syn_audio()`) et les mêmes `profiling`/`join` — aucune logique de synthèse dupliquée.
+Example:
 
 ```
+<STYLE=ENTHOUSIASTE><STYLE_INTENSITY=0.6>Je peux être {t r e z} #enthousiaste#.
+```
+
+---
+
+## 8. Power management on the Pi
+
+`chatterbox-powerd` is an optional, Pi-only daemon that makes the device behave like an appliance
+rather than a computer. It is a separate process from the GUI, and the GUI degrades silently to
+normal behaviour when it is not running.
+
+### States
+
+```
+ACTIVE ──30s──► DIM ──180s──► DARK ──1200s──► DEEP
+  full          backlight     backlight        halt
+  brightness    dimmed        off, amp off
+```
+
+Any touch, keypress or physical switch returns to ACTIVE. The "put away" button jumps straight to
+DEEP.
+
+### Running it
+
+```bash
+python3 -m chatterbox.power.daemon        # foreground, for testing
+sudo systemctl start chatterbox-powerd    # as a service
+sudo systemctl enable chatterbox-powerd   # at boot
+```
+
+### Configuration — `chatterbox/config/user_prefs.yaml`
+
+Reloaded on `SIGHUP`; the GUI's settings screen writes it atomically and signals the daemon.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `power.t_dim_s` / `t_dark_s` / `t_deep_s` | 30 / 180 / 1200 | Idle seconds before each state. `t_deep_s: 0` or `null` disables the halt backstop. |
+| `power.deep_manual_only` | `false` | If true, only "put away" reaches DEEP — never the timer. |
+| `display.backlight` | `auto` | sysfs node name, or auto-detect. |
+| `display.brightness_active` / `brightness_dim` | 255 / 60 | Clamped to `[1, max]` — never 0, which means "dimmest", not "off". |
+| `amp.sd_pin` | 23 | GPIO controlling the amplifier shutdown line. |
+| `amp.enable_active_high` | `true` | SD-line polarity. |
+| `amp.on_watchdog_s`, `settle_ms`, `preroll_ms`, `tail_ms` | 30, 80, 50, 50 | Amp timing — tune to eliminate switching pops. |
+| `switches` | `[]` | Physical accessibility switches. |
+| `socket.path` / `group` | `/run/chatterbox/powerd.sock`, `chatterbox` | IPC socket. |
+
+> ⚠ **`amp.sd_pin`, `amp.enable_active_high` and `display.backlight` fail silently if wrong.** The
+> daemon logs and disables that one control rather than crashing. Verify them on a new board before
+> trusting the amp or backlight.
+
+### Battery
+
+The GUI polls the DFRobot FIT0992 UPS HAT directly over I2C (`0x36` on `i2c-1`) every 30 s and shows
+a percentage. Absent hardware just hides the indicator.
+
+---
+
+## 9. Maintenance and monitoring
+
+### Kiosk mode
+
+Once a Pi has been verified working, `scripts/kiosk_finalize.sh` turns it into an appliance:
+disables `getty@tty1`, tunes `config.txt`/`cmdline.txt` (backed up, idempotent), enables and starts
+the units. It never writes EEPROM. **Opt-in — not part of `setup_pi.sh`.** See
+[docs/KIOSK.md](docs/KIOSK.md).
+
+The kiosk boots via console autologin → `~/.bash_profile` → `~/.xinitrc` → plain Xorg. A Wayland
+compositor (`cage`) was the original design but hit a reproducible `libwlroots` SIGSEGV on real Pi 5
+hardware; see [deploy/README.md](deploy/README.md).
+
+### Checking on a running device
+
+```bash
+systemctl status chatterbox-powerd
+journalctl -u chatterbox-powerd -f            # follow the daemon log
+journalctl -b -u chatterbox-powerd            # this boot only
+
+vcgencmd measure_temp                          # SoC temperature
+vcgencmd get_throttled                         # 0x0 = never throttled
+i2cdetect -y 1                                 # 0x36 UPS, 0x40 INA226, 0x4c DAC
+aplay -l                                       # sound cards
+```
+
+### Profiling a run
+
+Off by default, zero cost when off.
+
+```bash
+python3 do_tts.py --profile                    # instrument a free-text session
+python3 do_tts.py --benchmark --repeats 3 --join --export-xlsx
 python3 do_tts.py --p4-sweep --cadences 0,1,2,5,10,max --duration 600
 ```
 
-- `--cadences` : liste d'énoncés/minute séparés par des virgules. `0` = ancre idle pure (aucune synthèse). `max` = enchaînement sans pause (mesure la cadence réellement atteignable).
-- `--duration` : secondes par point de cadence (défaut 600).
-- `--p4-sweep` active automatiquement le profilage et joue systématiquement l'audio, quels que soient `--play`/`--profile` (acceptés sans effet, pour compatibilité avec les autres modes).
+Output lands in `profile/` (gitignored scratch):
 
-**Déroulement par point** : affichage de l'en-tête du point → invite « Reset the meter's mWh totaliser now, then press Enter to start... » → la boucle de synthèse tourne pendant `--duration` secondes à la cadence demandée (chaque cycle synthétise + joue une phrase du jeu `benchmark/sentences_fr.jsonl`, bloquant, puis patiente le temps restant du créneau ; `max` enchaîne sans pause) → arrêt du profileur, jointure → invite « Read the totaliser. Enter mWh (blank to skip): » → la ligne du point est **ajoutée immédiatement** à `sweep_summary.csv` (un balayage dure facilement une heure sans surveillance entre les points ; un Ctrl-C tardif ne doit pas faire perdre les points déjà terminés).
+| File | Contents |
+|---|---|
+| `per_sample.csv` | Background time series: PMIC power, CPU load/frequency, temperature, INA226 |
+| `per_sentence.jsonl` | Per-sentence stage timings, character/word counts, audio duration |
+| `per_sentence_results.csv` | The two joined: energy, mean/peak power, real-time factor |
+| `per_stage_results.csv` | Same, split by pipeline stage |
 
-**Sortie** :
-```
-profile/p4_sweep_YYYYMMDD_HHMMSS/
-    cadence_00/     (per_sample.csv, per_sentence.jsonl, *_results.csv, meta.json)
-    cadence_01/
-    ...
-    sweep_summary.csv
-    sweep_paste.xlsx
-```
+Standalone tools:
 
-`sweep_summary.csv` contient une ligne par point (cadence demandée/atteinte, temps de synthèse/lecture, taux d'occupation, énergie/puissance calculées par le profileur **sur toute la fenêtre du point** — pas seulement les fenêtres de synthèse actives, pour englober correctement le point `cadence=0` qui n'a aucune phrase — et la lecture du wattmètre externe). En fin de balayage, un ajustement linéaire `P_use = P_idle + k·N` est imprimé et sauvegardé, calculé séparément pour la série profileur et la série wattmètre (contre `cadence_achieved`, pas `cadence_requested`), avec un signal si `R² < 0,95` ou si l'ordonnée à l'origine ajustée diffère de plus de 5 % du point `cadence=0` mesuré directement.
-
-`sweep_paste.xlsx` produit un bloc prêt à coller (`A2:P<n+1>`, valeurs littérales) dans la feuille `P4_Conversational` du classeur maître, avec exactement les 16 colonnes de son en-tête (`A:P`) : `cadence_req | cad_achiev | dur_h | n_utt | totalis_Wh | P_use_met_W | P_use_prof_W | discrep_% | duty_synth | duty_play | duty_active | amp_mean_W | cpu_mean_W | mem_mean_W | peak_C | throttled`. `P_use_met_W` et `P_use_prof_W` sont deux colonnes séparées (pas de repli implicite) : si la lecture du wattmètre a été passée pour un point, `P_use_met_W` reste vide pour ce point plutôt que d'être silencieusement remplacée par la valeur du profileur.
-
-**Re-calculer sans relancer une mesure** (par ex. après correction manuelle d'une lecture de wattmètre dans `sweep_summary.csv`) :
-```
-python -m benchmark.p4_sweep --refit profile/p4_sweep_20260716_120000
+```bash
+python3 -m research.profiling.join --profile-dir profile/<run>
+python3 -m research.benchmark.export_to_xlsx
+python3 -m research.benchmark.compare_runs RUN_A RUN_B --out compare.csv
+python3 research/calibration/pmic_calibrate.py     # PMIC → wattmeter calibration
 ```
 
-**⚠️ Validité de la calibration** : la calibration PMIC→wattmètre (`profile/calibration.json`, voir "Calibration PMIC" ci-dessus) n'est valable que dans les conditions où elle a été établie — écran **allumé, à la luminosité de calibration**, amplificateur alimenté. Ces deux conditions doivent rester **fixes pendant tout le balayage** (le script invite une fois à noter la luminosité dans `meta.json`, à titre de rappel, mais ne peut pas la vérifier automatiquement) ; tout changement en cours de balayage invalide silencieusement `energy_wh_profiler`/`p_use_profiler_w` pour les points suivants — la lecture du wattmètre externe reste la référence dans ce cas.
+Archived historical runs and what each measured: [research/data/README.md](research/data/README.md).
 
-Note structurelle : le wattmètre est remis à zéro juste avant le lancement du profileur (et lu juste après son arrêt), donc sa fenêtre de mesure est toujours légèrement plus large que celle du profileur (premières/dernières millisecondes d'échantillonnage) — une source de `discrepancy_pct` de quelques pourcents, inhérente et non corrigeable sans modifier ce protocole humain-dans-la-boucle.
+> **Power figures need calibration.** PMIC readings are a proxy, recalibrated against an external
+> wattmeter. The calibration's offset absorbs screen, amplifier and unmetered draw, so it is valid
+> only for the exact hardware configuration it was captured in.
 
-# Performances
+### Updating a deployed Pi
 
-Avec les paramètres recommandés (FastSpeech2 + Hifi-GAN V2), la durée d'inférence est d'environ 20% de la durée d'audio sur CPU.
+```bash
+cd ~/chatterbox
+git pull
+find . -name __pycache__ -type d -exec rm -rf {} +    # avoid stale bytecode
+sudo systemctl restart chatterbox-powerd
+```
 
-Les différentes voix de FastSpeech ne modifient par le temps d'inférence. 4 voix de femmes sont disponibles : [NEB, AD, IZ, RO], ainsi qu'une voix d'homme : [DG].
+Then verify with a real synthesis, not just the test suite — see
+[Known limitations](#11-known-limitations).
 
-Pour une synthèse audio-visuelle, AD est recommandée.
+---
 
-# Sortie visuelle
+## 10. Development
 
-Pour le moment, la sortie audio est la seule gérée par l'interface. Cependant, un fichier .AU est généré avec les 37 paramètres visuels (échantillonnés à ~86Hz = 22050/256). Ce fichier garde le format utilisé jusqu'à maintenant (4 entiers 32 bits en entête pour préciser le nombre d'échantillons, le nombre de paramètres visuels, le numérateur de la fréquence d'échantillonnage et le dénominateur de la fréquence d'échantillonnage, suivis par la matrice des paramètres). Ce fichier peut être utilisé pour générer les mouvements de l'avatar.
+```bash
+python3 -m pytest tests/                 # full suite
+python3 scripts/check_layers.py          # RUN/STUDY boundary (exit 0 = intact)
+```
 
-Les fichiers .wav et .AU sont créés à la racine de ce dossier, avec les noms "audio_file.wav" et "audio_file.AU"
+On a Windows checkout, bare `python` may resolve to the Store stub — use
+`.venv/Scripts/python.exe`.
+
+Tests need no weights and no Tk instance. **They also do not tell you the device still speaks** —
+read [tests/README.md](tests/README.md) before treating a green run as reassurance.
+
+**Going to change code?** Start with [docs/CODEMAP.md](docs/CODEMAP.md) — which language governs
+which aspect of the program, where everything lives, the invariants that break things quietly, and
+an index from "I want to change X" to the files involved. It is written for humans and AI
+assistants alike, and `tests/test_codemap.py` verifies its paths and symbol names against the code
+so it cannot rot silently.
+
+Further reading: [docs/README.md](docs/README.md) is the documentation index;
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) the deep dive;
+[chatterbox/synthesis/README.md](chatterbox/synthesis/README.md) the backend contract;
+[docs/research/CHANGELOG.md](docs/research/CHANGELOG.md) the development log.
+
+---
+
+## 11. Known limitations
+
+Honest list. Details and follow-up numbering in
+[docs/release/REORG_PLAN.md](docs/release/REORG_PLAN.md) §8.
+
+- **Must be run from the repository root.** Model paths in `config_tts.yaml` are joined against the
+  current working directory. `chatterbox/config/paths.py` anchors imports but not model data.
+- **Synthesis writes into the working directory** — `audio_file.wav`, `.AU`, `.vtt` and the
+  duration-alignment JSON land at the repository root.
+- **`|` multi-utterance input is FastSpeech 2 only**, and the documentation says `§`
+  (see [§7](#7-writing-for-the-synthesiser-control-tags)).
+- **Tkinter is required even for headless modes** — `cli.py` imports the GUI module
+  unconditionally.
+- **Capability flags are user-editable YAML.** A backend cannot declare its own; setting one wrongly
+  crashes at synthesis time with no validation.
+- **The core compute path is barely tested.** No test executes `chatterbox/synth.py` past its
+  empty-input guard.
+- **Six specification documents referenced from the code and `INSTALL.md` are not in this
+  repository** — including the bring-up test protocol `INSTALL.md` points you at. See
+  [docs/README.md](docs/README.md#missing-documents).
+
+---
+
+## 12. Licensing status
+
+**This repository does not yet carry a licence, and the model weights' redistribution status is
+unresolved.** Treat it as "all rights reserved" until that is settled.
+
+| Component | Status |
+|---|---|
+| Chatterbox source | **No LICENSE file yet** |
+| FastSpeech 2 (vendored code) | MIT © 2020 Chung-Ming Chien |
+| HiFi-GAN (vendored code) | MIT © 2020 Jungil Kong |
+| FastSpeech 2 / HiFi-GAN **French weights** | **Unresolved** — no stated licence, corpus attribution or speaker consent |
+| Keyboard prompt audio, reference recordings | **Unresolved** — recordings of identifiable speakers |
+| Piper voices | Downloaded, not redistributed here; verify per voice |
+| `piper-tts` | GPL-3.0-or-later — **not vendored**, user-installed, so it does not constrain this project |
+
+Full inventory: [docs/release/STRUCTURE_AUDIT.md](docs/release/STRUCTURE_AUDIT.md) §9.
+
+---
+
+## Credits
+
+Developed at **Gipsa-lab**, Grenoble, as an AAC speech-synthesis demonstrator.
+Contributors: Evrard Raphaël, Martin Lenglet.
+
+The phonetic alphabet used by the Emmanuelle keyboard is documented at
+<https://zenodo.org/record/4580406>.

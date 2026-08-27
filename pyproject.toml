@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatterbox-tts"
+version = "0.1.0"
+description = "Embedded neural French text-to-speech demonstrator for AAC, running on CPU on a Raspberry Pi 5"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["tts", "speech-synthesis", "aac", "raspberry-pi", "french", "embedded"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: French",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# NOTE: no `license` field yet. The repository has no LICENSE file and the model weights'
+# redistribution status is unresolved -- see docs/release/STRUCTURE_AUDIT.md Sec9. Add both together;
+# declaring a licence here while LICENSE is missing would be worse than declaring nothing.
+
+# ---------------------------------------------------------------------------
+# L1 RUN only. This is the set needed to make the demonstrator speak.
+# Mirrors requirements-pi.txt, minus the Pi-only hardware extras (see [pi] below).
+#
+# Deliberately ABSENT:
+#   piper-tts  -- GPL-3.0-or-later (OHF-voice/piper1-gpl). Optional, user-installed, never
+#                 vendored, so this project's own licensing stays unaffected. Users who want the
+#                 Piper backend run `pip install piper-tts==1.5.0` themselves.
+#                 See chatterbox/synthesis/backends/piper/README.md.
+#   unicode    -- was pinned in requirements-pi.txt but nothing imports it (verified). It is an
+#                 abandoned PyPI package with unclear licensing; unidecode below is the one
+#                 actually used (assets/models/FastSpeech2/text/cleaners.py).
+# ---------------------------------------------------------------------------
+dependencies = [
+  "torch>=2.4.1",
+  "PyYAML>=6.0.2",
+  "numpy>=2.0.2",
+  "unidecode>=1.3.8",
+  "inflect>=7.4.0",
+  "regex>=2024.9.11",
+  "scipy>=1.14.1",
+  "matplotlib>=3.9.2",
+  "transformers>=4.45.1",
+  "noisereduce>=3.0.2",
+  # Hard direct dependency of assets/models/hifi-gan-master/meldataset.py (the active vocoder's
+  # mel-filter setup). Do not drop it on the assumption noisereduce pulls it in -- a noisereduce
+  # release once dropped its own librosa dependency and broke exactly that assumption.
+  "librosa>=0.10.2",
+  "pydub>=0.25.1",
+  "g2p_en>=2.1.0",
+  "pypinyin>=0.53.0",
+  "sacremoses>=0.1.1",
+]
+
+[project.optional-dependencies]
+# Raspberry Pi hardware control: chatterbox-powerd's amp/backlight/switches, the UPS HAT battery
+# gauge. Every one is imported lazily behind try/except, so a PC checkout without them still runs.
+pi = [
+  "smbus2>=0.4.3",
+  "gpiozero>=2.0.1",
+  "lgpio>=0.2.2.0",   # NOT RPi.GPIO -- that does not support the Pi 5's RP1 I/O chip
+  "evdev>=1.7.1",     # Linux only
+]
+
+# L3 STUDY: profiling, benchmarking, power measurement (research/).
+research = [
+  "openpyxl>=3.1.5",  # research/benchmark/export_to_xlsx.py
+  "smbus2>=0.4.3",    # INA226 amp-branch monitor in research/profiling/sampler.py
+]
+
+dev = [
+  "pytest>=8",
+  "chatterbox-tts[research]",
+]
+
+[project.urls]
+Documentation = "https://github.com/OWNER/REPO/blob/master/docs/ARCHITECTURE.md"
+
+[project.scripts]
+chatterbox = "chatterbox.cli:main"
+
+# ---------------------------------------------------------------------------
+# Packaging scope: the runtime package ONLY.
+#
+# research/ and tests/ are deliberately NOT packaged -- that is the L1/L3 boundary expressed in
+# the wheel. `pip install .` gives a working demonstrator and nothing else; the enforcement check
+# is scripts/check_layers.py + tests/test_layer_boundary.py.
+#
+# assets/ is also not package data: it is vendored model source whose weights are not in git
+# anyway (see INSTALL.md). Packaging it would inflate the wheel without making it usable.
+# ---------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+include = ["chatterbox*"]
+exclude = ["research*", "tests*", "docs*", "assets*", "deploy*", "scripts*"]
+
+[tool.setuptools.package-data]
+"chatterbox.config" = ["*.yaml"]
+"chatterbox.synthesis.backends.fastspeech2_hifigan" = ["rules/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

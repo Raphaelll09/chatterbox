@@ -1,0 +1,12 @@
+# Identity normalisation applied by the release history rewrite (2026-08-27).
+#
+# 1. Removes a lab-internal machine name that leaked into a commit author email
+#    (lengletm@laptop-295.gipsa-lab.grenoble-inp.fr), mapping it to the author's
+#    own address, which is already present elsewhere in this history.
+# 2. Collapses spelling variants so each person appears once in `git shortlog`.
+#
+# Attribution is preserved: both contributors remain credited and contactable.
+
+Martin Lenglet <martinlenglet@gmail.com>
+Martin Lenglet <martinlenglet@gmail.com> <lengletm@laptop-295.gipsa-lab.grenoble-inp.fr>
+Evrard Raphaël <Raphael.Evrard@grenoble-inp.org>

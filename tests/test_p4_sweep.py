@@ -8,7 +8,7 @@ import csv
 
 import pytest
 
-import benchmark.p4_sweep as p4
+import research.benchmark.p4_sweep as p4
 
 
 # ---------------------------------------------------------------------------

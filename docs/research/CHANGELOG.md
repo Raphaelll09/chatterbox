@@ -1,0 +1,4044 @@
+# Changelog
+
+Reverse-chronological log of modification sessions. One entry per session, using the template below.
+Read on demand (not loaded into every session's context) — check the top entry for the most recent
+state before starting new work.
+
+```
+## YYYY-MM-DD — <short title>
+- What: <what changed, 1-3 bullets>
+- Files: <files added / modified>
+- Why: <purpose / linked experiment>
+- Verify: <how to check it works>
+- Notes/gotchas: <anything future-me needs>
+```
+
+---
+
+## 2026-08-20 — Revert: Piper English priming+crop fix made the artifact worse, not better
+
+- What: live Pi5 test of the previous entry's priming+crop fix -- "there is still this word at
+  the beginning of each synthesis. With the sentence 'Have you written already' the synthesis
+  adds 'don't' at the beginning and with 'Have you eaten already?' the synthesis starts with
+  'Well don't'." The "Well don't" report was the key clue: "Well" is `_LEADING_CONTEXT_FILLER`
+  itself, audible -- meaning the crop wasn't just imperfect, it was failing to fire at all in at
+  least some runs. Investigated with real evidence this time rather than another guess:
+  1. Installed `openai-whisper` locally as a one-off diagnostic tool (not a project dependency,
+     removed again after) to get real ASR transcription as ground truth instead of eyeballing
+     waveform envelopes, which had already proven unable to distinguish these cases.
+  2. Reproduced the exact two reported sentences locally and ran each 8 times (VITS sampling is
+     stochastic, no fixed seed anywhere in this pipeline -- a single run tells you little) through
+     the primed+crop path, transcribing every output. Result: **0/16 runs produced "don't"**, but
+     **12/16 (75%) left "Well"/"Well," audible and un-cropped** -- confirming the crop detector
+     routinely fires on a false-early dip inside "Well," itself (its own attack/decay shape)
+     rather than the real pause after it, exactly the failure mode the user's report pointed at.
+  3. Ran the same 16 syntheses again with priming disabled entirely (`prepend_leading_pause:
+     false`, i.e. today's plain `synthesize_wav()` call, matching every French voice) as a
+     control. Result: **15/16 clean**, 1/16 an unrelated garble ("Happy Wheat and all ready"
+     instead of "eaten already", no "don't"). The original "first word always mispronounced"
+     report is real but **rare (~6%)**, not "always" -- likely a case of a genuine but
+     infrequent glitch feeling more common than it is after only 2-3 manual tries.
+  4. Conclusion: the priming+crop approach is not just unreliable, it's net-negative -- it turns
+     a rare (~6%) glitch into a near-constant (~75%) spurious extra word. The live-reported
+     "don't" is this checkpoint's own garbled rendering of the un-cropped "Well," (a real word
+     failing to render cleanly is itself unsurprising for a checkpoint that already mispronounces
+     ~6% of real first words) -- not the original bug re-appearing under a different name.
+  5. Reverted rather than attempting a fourth guess: `PiperBackend._prime_and_crop()`,
+     `_find_post_filler_crop_sample()`, and `_LEADING_CONTEXT_FILLER` removed entirely (not left
+     disabled-but-present -- proven actively harmful if re-enabled, not merely unused, so kept as
+     dead code would be a landmine for a future re-enable without re-deriving this investigation).
+     `config_tts.yaml`'s `prepend_leading_pause` removed from the English entry (defaults False,
+     matching French). `PiperBackend.tts()` is back to a single unconditional
+     `voice.synthesize_wav(clean_text, wav_file, syn_config=syn_config)` call -- byte-identical
+     code path for every Piper voice, English included, to what existed before either of today's
+     two fix attempts.
+- Files: `chatterbox/synthesis/backends/piper/backend.py` (removed the priming/crop mechanism,
+  restored the plain `tts()` body, dropped the now-unused `numpy` import),
+  `chatterbox/synthesis/backends/piper/text_frontend.py` (updated comment), `chatterbox/config/
+  config_tts.yaml` (removed `prepend_leading_pause` from the English entry), `tests/
+  test_piper_backend.py` (removed the 7 tests written for the now-reverted mechanism).
+- Why: asked directly -- "The issue is still here... Explore further the problem.", followed by
+  explicit authorization to commit/push directly this round.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 305 passed, 1 pre-existing skip
+  (Windows) -- back to the pre-priming-fix count (312 - 7 removed tests). The 48 real synthesis
+  runs (16 primed, 16 unprimed, 16 from the individual repro/batch steps) analyzed via Whisper
+  ASR are the actual verification for this entry, not just the test suite.
+- Notes/gotchas: **the original rare (~6%) English mispronunciation is still unfixed** -- this
+  entry only removes a fix that made it worse, it doesn't solve the underlying issue. Given the
+  low base rate, the most promising next avenues (neither attempted): (a) a different English
+  voice/checkpoint -- the instability shown here (both in the real first word ~6% of the time,
+  and in a synthetic "Well," filler ~75%+ of the time) looks like a property of this specific
+  `en_US-lessac-medium` ONNX export, not something fixable from the text/priming side at all;
+  (b) simply accepting a ~6% glitch rate as a known limitation, which may be the pragmatic answer
+  given how much effort three consecutive attempts (2026-07-29's no-op, today's two -- the no-op
+  audit and the priming+crop revert) have already cost without a working fix. If revisiting
+  priming again despite this, do NOT retune `_LEADING_CONTEXT_FILLER`/the crop threshold without
+  first confirming a different filler word actually renders *reliably* on this checkpoint --
+  today's investigation never established that any leading word does.
+
+---
+
+## 2026-08-20 — Fix: Piper English "first word mispronounced" — the previous fix was a no-op
+
+- What: user report -- "there is an artifact at the beginning of each synthesis which doesn't
+  appear in French" (English Piper only). Investigated from scratch rather than assuming the
+  existing `prepend_leading_pause` flag (2026-07-29, left "unverified by ear") was working:
+  1. **Confirmed the existing fix does nothing.** It prepends `". "` to the text
+     (`text_frontend.py`) hoping to give espeak-ng leading context. Direct test against the real
+     `piper-tts` phonemizer: `voice.phonemize(". Hello, this is a test.")` and
+     `voice.phonemize("Hello, this is a test.")` return byte-identical phonemes -- a bare leading
+     "." with nothing before it is silently discarded before synthesis ever starts. The flag has
+     been a no-op since it was added.
+  2. **Ruled out `chatterbox/synth.py`** as a cause: its denoise/postprocess pipeline has zero
+     language-conditional code, driven only by `needs_vocoder`/`use_denoiser` (identical for
+     every Piper voice) -- can't explain an English-only difference.
+  3. **Ruled out a raw audio-level glitch**: sample-by-sample inspection of several EN/FR
+     syntheses found no amplitude spike/discontinuity in the first 50ms of either language,
+     matching the 2026-07-29 entry's own RMS-envelope finding. Asked the user directly what the
+     artifact actually sounds like (rather than guess a third time) -- confirmed it's a genuine
+     first-word mispronunciation/garble, not a click or a cut-off attack, matching the original
+     report exactly.
+  4. **Investigated why a real fix is hard**: a real word-based lead-in (e.g. `"Well, hello..."`,
+     comma-joined so it stays one sentence/chunk) DOES survive phonemization and gives the VITS
+     decoder genuine preceding context (confirmed: produces a real leading phoneme block, not
+     silently dropped). But cropping it back off precisely requires knowing exactly how many
+     samples it produced -- `voice.synthesize(..., include_alignments=True)` (the API meant to
+     answer that) returned `None` for this checkpoint; the medium-quality lessac `.onnx` export
+     doesn't include the per-phoneme duration output alignments need. A fixed/guessed crop
+     duration was rejected as unsafe (VITS duration prediction is itself context/noise-dependent,
+     confirmed by measuring the filler's own rendered length across repeated calls -- it varies
+     run to run).
+  5. **Implemented instead**: `PiperBackend._prime_and_crop()` synthesizes
+     `_LEADING_CONTEXT_FILLER + " " + real_text` ("Well," + the real sentence) as one utterance,
+     then `_find_post_filler_crop_sample()` locates the actual pause after the filler by
+     measuring the audio's own 10ms-window RMS envelope (not a guessed duration) and crops there,
+     plus a 5ms fade-in to guard against any residual discontinuity at the new start of the file.
+     If no clear pause is found (sanity-bounded: must resolve within ~700ms and before 80% of the
+     chunk's own length), falls back to synthesizing the real text alone -- today's behavior,
+     never a half-applied or unsafely-guessed crop. Multi-sentence input's later sentences (each
+     their own independently-synthesized/normalized chunk) are untouched, appended as-is.
+     `prepend_leading_pause: false`/absent (every French voice today) takes the exact same code
+     path as before this change -- the new `voice.synthesize()`-based priming call is never even
+     reached.
+- Files: `chatterbox/synthesis/backends/piper/text_frontend.py` (removed the no-op prepend),
+  `chatterbox/synthesis/backends/piper/backend.py` (`_LEADING_CONTEXT_FILLER`,
+  `_find_post_filler_crop_sample()`, `PiperBackend._prime_and_crop()`, wired into `tts()`),
+  `chatterbox/config/config_tts.yaml` (updated comment), `tests/test_piper_backend.py` (+9 tests:
+  4 pure-DSP tests for the crop-point detector using synthetic tone/silence arrays, no real Piper
+  weights needed; 3 integration tests via a fake voice confirming crop-on-success,
+  fallback-on-no-pause-found, and -- the important regression guard -- that the flag being
+  off/absent never even calls the priming `synthesize()` path).
+- Why: asked directly -- "there is an artifact at the beginning of each synthesis which doesn't
+  appear in French. Find out why and fix the issue."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 312 passed, 1 pre-existing skip
+  (Windows). Ran the real end-to-end `PiperBackend.tts()` path (not just the fake-voice unit
+  tests) against 5 different English sentences with `prepend_leading_pause: true`: crop
+  succeeded on every one, each output's audio starts with either a clean sub-50ms fade-in
+  straight into real speech, or a short natural-sounding pre-speech pause -- no spikes,
+  discontinuities, or audible residue from the filler word in any of the raw sample dumps
+  inspected.
+- Notes/gotchas: **still unverified by ear** -- this session has no way to listen, same
+  limitation as 2026-07-29's attempt. Unlike that attempt, this one is now provably doing
+  something (a measurably different, shorter, cropped audio buffer, confirmed via direct
+  inspection) rather than silently doing nothing -- but whether the mispronunciation is actually
+  gone can only be confirmed by the user testing live on the Pi. If it doesn't help, the next
+  things worth trying (not attempted here): a different English voice/checkpoint (this may be a
+  property of the specific `en_US-lessac-medium` ONNX export rather than something a text-side
+  fix can address at all), or tuning `noise_w_scale` down for the primed call specifically (less
+  duration-prediction variance might make the model's rendering of the real first word more
+  consistent, independent of priming).
+
+---
+
+## 2026-08-20 — Fix: no audio out of the real speaker — ALSA default pointed at HDMI, not the DAC
+
+- What: live real-hardware debugging (same session/device as the geometry fix above): "the speaker
+  is connected but when I run a synthesis, it only makes noise louder. I don't know if it comes
+  from the speaker or from the program." Diagnosed by playing a known-good ALSA reference WAV
+  (`/usr/share/sounds/alsa/Front_Center.wav`, a standard file that audibly announces itself)
+  through chatterbox's OWN playback path (`chatterbox/audio/playback.py:play_audio()`, imported
+  and called directly, not reimplemented) instead of through TTS-generated audio — isolates
+  hardware/playback-chain problems from TTS-generation-specific ones. First run: **no sound at
+  all**. `aplay -l` showed the real culprit: the onboard `vc4-hdmi0`/`vc4-hdmi1` outputs enumerate
+  as cards 0/1, ahead of the actually-wired `IQaudIODAC` at card 2, with **no ALSA default-device
+  override anywhere on the system** (`/etc/asound.conf` didn't exist) — so `ffplay`'s bare default
+  device (what `_play_raw()` uses, no explicit device argument) silently went out via HDMI, not
+  the connected speaker. This also fully explains the ORIGINAL "noise that gets louder" report,
+  not just the diagnostic's later silence: `chatterbox-powerd`'s amp GPIO handshake
+  (`chatterbox/power/amp.py`) still enables the amplifier around every playback regardless of
+  where the audio signal actually goes (it has no way to know) — an enabled amp fed no real
+  signal is exactly the kind of symptom described, not a TTS audio-quality bug. Fixed by adding
+  `deploy/audio/asound.conf` (`pcm.!default`/`ctl.!default` pointed at `hw:IQaudIODAC,0`, `type
+  plug` so format/rate mismatches convert automatically, card referenced by NAME not numeric
+  index since indices can shift across reboots) as a new `scripts/setup_pi.sh` step 10 (checks
+  `aplay -l` for an `IQaudIODAC` card first, non-fatal/skips with a warning otherwise, same
+  convention as the powerd/Xorg-kiosk steps). Re-ran the same known-good-WAV-through-chatterbox's-
+  own-playback-path test after installing the file live — user confirmed "I heard it clearly."
+- Files: `deploy/audio/asound.conf` (new), `scripts/setup_pi.sh`, `apt-packages-pi.txt`
+  (`alsa-utils`, for `aplay -l` — usually already present on Raspberry Pi OS's base image but not
+  guaranteed, listed explicitly per this file's own convention), `INSTALL.md`.
+- Why: direct real-hardware bug report, diagnosed and fixed live against the actual production
+  kiosk device via SSH (not a follow-up commit for later deployment).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged — this is
+  ALSA/system config with no PC-testable equivalent, no new automated test added); `bash -n
+  scripts/setup_pi.sh` (syntax-checked, not run, on this Windows dev checkout — Linux-only script).
+  Verified live instead, twice: silence with the known-good WAV before `/etc/asound.conf` existed,
+  clearly audible ("I heard it clearly") after installing it and re-running the identical test.
+- Notes/gotchas: deployed `/etc/asound.conf` directly to the live device via `ssh`/`sudo tee`
+  before writing the `scripts/setup_pi.sh` step, then wrote the step afterward from that confirmed-
+  working content — the two should now match, but worth a diff if either is ever edited
+  independently. `deploy/audio/asound.conf` hardcodes the card name `IQaudIODAC` -- a different
+  DAC/HAT on a future deployment needs that name updated to match its own `aplay -l` output (the
+  new `setup_pi.sh` step's own warning message says this too, not just this changelog entry). Two
+  small diagnostic-only packages (`x11-utils`, `scrot`) were also installed live on this device
+  during this and the previous session's debugging, for `xwininfo`/screenshot verification -- left
+  installed (small, harmless) but deliberately NOT added to `apt-packages-pi.txt`, since neither is
+  something the app itself needs at runtime.
+
+---
+
+## 2026-08-20 — Fix: kiosk fullscreen geometry left a black gap top+bottom under bare Xorg
+
+- What: live real-hardware debugging (`ssh pi5`, actively running against the deployed kiosk
+  checkout at `/home/chatterbox/chatterbox`, the `chatterbox-gui` production user, not a dev
+  checkout): "the GUI is slightly off screen, a part of the bottom (keyboard and smileys) is
+  cropped." Root cause found via `xwininfo -root -tree` (a new read-only diagnostic dependency,
+  `x11-utils`, installed for this): the main "TTS" toplevel's real, X11-negotiated size was
+  `800x512` against the real `800x480` screen (confirmed separately via `fbset -i`/`xrandr`) --
+  32px of pure overflow, rendered entirely below the visible display since the window is anchored
+  at `(0, 0)`. `chatterbox/gui/app.py`'s window-geometry code (the previous entry's "always apply
+  explicit, screen-matching geometry" fix) runs and sets `window.geometry("800x480+0+0")` BEFORE
+  the app-bar menu (`window.config(menu=menubar)`) is even built, much later in the same function
+  -- on this Tk/X11 build, attaching a menu to an already-geometry'd toplevel grows its actual
+  rendered height by the menu's own height, on top of whatever was already requested, and neither
+  the earlier geometry() call nor anything downstream ever accounted for that. Two measurement
+  approaches were tried live and BOTH failed before landing on the actual fix: (a) `window.
+  winfo_height()` right after attaching the menu always reported back the ALREADY-explicitly-set
+  480 (Tk's own "what was I told to be" bookkeeping, not the true post-menu X11 size, so the
+  detected overflow was always zero); (b) `window.winfo_reqheight()`, measured again later, once
+  after `gui_script()` had built the real keyboard/emotion-bar content, reported 722 -- the
+  UNCOMPRESSED natural size of every `weight=1` grid row summed together, not the actual
+  menu-driven delta (those rows already compress fine into whatever height IS available; 722
+  isn't a usable "how much extra does the menu need" signal). Landed on a reserved, empirically-
+  measured constant instead (`_MENU_BAR_MARGIN_PX = 32`, same convention as the pre-existing
+  `_TITLE_BAR_MARGIN_PX` a few lines below it, for the unrelated WM-title-bar case) -- confirmed
+  reproducible identically across two separate live restarts before committing to it.
+- Files: `chatterbox/gui/app.py`.
+- Why: direct real-hardware bug report, fixed live against the actual production kiosk process
+  (not just a follow-up commit for later deployment) -- the user was mid-session on the device via
+  SSH, so the fix was iterated and verified on the real hardware before being written up here.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged -- this is
+  pure X11/Tk geometry behavior with no PC-testable equivalent, no new automated test added).
+  Verified live instead: `xwininfo -root -tree` showed the "TTS" toplevel at exactly `800x480+0+0`
+  after the fix (was `800x512+0+0` before), content area `800x448+0+32` correctly reduced to make
+  room for the `800x32` menu strip within that same 480px total; a `scrot` screenshot (also newly
+  installed for this) of the live display confirmed visually -- full menu bar, header row (Saisie/
+  Synthèse/status circle/put-away moon/battery), duration info, Texte/Phonèmes toggle, and all 5
+  keyboard rows fully on-screen, all 12 emotion icons visible top-to-bottom with no bottom crop --
+  and, as a bonus confirmation, the emotion icons are now rendering as real color emoji faces (the
+  `fonts-noto-color-emoji` install from an earlier session's follow-up).
+- Notes/gotchas: deployed directly to the live kiosk checkout (`/home/chatterbox/chatterbox`,
+  distinct from this repo's own Windows dev checkout and from an earlier session's separate
+  `/home/gerantos/chatterbox` checkout) via `scp` + killing the running GUI process -- the
+  `agetty --autologin` + `.bash_profile` + `.xinitrc` chain (`deploy/xorg-kiosk/`) self-healed and
+  relaunched the app automatically within seconds, confirming that chain's own resilience as a
+  side effect. That checkout already had uncommitted local edits matching commits `0afc6bf`/
+  `c8a0a2e` (inspected via `git diff` before overwriting anything, to confirm they were superseded-
+  not-novel content, not a risk of clobbering an undocumented live fix) -- left as uncommitted
+  working-tree state there, same as before this session touched it; this repo's own git history
+  (the authoritative source) has the real commit. `_MENU_BAR_MARGIN_PX` is a reserved constant,
+  not dynamically measured -- if a future theme/font change alters the app-bar menu's own height,
+  this number would need re-measuring the same way (`ssh` + `xwininfo -root -tree`), not assumed
+  to self-correct.
+
+---
+
+## 2026-07-31 — Pi5 Lite real hardware bring-up: cage/wlroots ruled out, plain-Xorg fallback built
+
+- What: first real Raspberry Pi OS Lite bring-up on the Pi5 (previous install was a full-desktop
+  image over WayVNC — this is the actual target OS for the first time). Two OS attempts (trixie,
+  then Bookworm to match the old Pi5 exactly) both hit the same crash, isolating it to a genuine
+  upstream bug rather than an OS-version regression:
+  1. **cage/wlroots ruled out.** Touching the screen (or even just Tab/Enter on a keyboard, no
+     touch involved) reliably segfaulted `cage` within seconds. `coredumpctl` + `gdb` backtrace
+     bottoms out in `wl_signal_emit_mutable` inside `libwlroots-0.18.so` (Raspberry Pi Foundation's
+     own `0.18.2-3+rpt4` build) — not chatterbox code, not `cage`'s own logic, and not the XWayland
+     version (reproduced identically on `22.1.9` and `24.1.6`, ruling out an XWayland-side fix).
+     No newer `libwlroots` package exists in either the Raspberry Pi or Debian repos. Full writeup:
+     `deploy/xorg-kiosk/README.md`.
+  2. **Plain Xorg fallback built and verified working end-to-end** (touch, Speak, audio through
+     the IQaudio DAC+, Piper voice switching, Settings dialog) — `deploy/xorg-kiosk/`'s 3 files
+     (`getty-tty1-autologin.conf`, `xinitrc`, `bash_profile_snippet.sh`) plus an
+     `/etc/X11/Xwrapper.config` relaxation, installed by `scripts/setup_pi.sh`'s new step 9.
+     `chatterbox-gui.service` (cage) is left in the repo, untouched, for reverting if a fixed
+     `libwlroots` package ever lands.
+  3. **Three real, independent bugs found and fixed along the way** (none of them the wlroots
+     crash — each had to be separated out from it, since more than one was live simultaneously):
+     - `chatterbox/gui/settings.py`'s Settings `Toplevel` called `grab_set()` with no preceding
+       `wait_visibility()` — harmless `TclError` on an ordinary desktop Xorg session, but crashed
+       this Pi's `cage`/XWayland stack outright. Fixed with `wait_visibility()` before `grab_set()`
+       (Tk/X11's own documented ordering requirement).
+     - `chatterbox/gui/app.py`'s fullscreen fallback assumed `-zoomed` raising `TclError` reliably
+       signals "no WM, use the explicit geometry fallback" — false under a **bare** Xorg session
+       with zero window manager: `-zoomed` "succeeds" from Tk's own point of view with nothing
+       there to enforce it, so the fallback never ran, leaving the window narrower than the real
+       800x480 screen. Fixed by always applying the explicit, screen-matching geometry as a
+       baseline, not only in the `except` branch.
+     - `chatterbox-powerd.service` was missing `Group=chatterbox` alongside `User=root` — systemd's
+       `RuntimeDirectory=chatterbox` fell back to root's own group for `/run/chatterbox`, so the
+       GUI client (running as user `chatterbox`) could never actually reach the powerd socket
+       despite `ipc.py` correctly `chown`-ing the socket *file* itself (the containing directory
+       is systemd's job, not the daemon code's). Found during Phase 1 hardware verification, before
+       the wlroots issue was even hit.
+  4. Smaller fixes discovered purely from doing a fresh install for the first time (not specific to
+     the cage/Xorg question): `setup_pi.sh`/`kiosk_finalize.sh`/`fetch_piper_voices.sh` were stored
+     non-executable (`100644`) in git (likely from being committed on Windows) — every fresh clone
+     hit `Permission denied` running them directly; `swig` + `liblgpio-dev` added to
+     `apt-packages-pi.txt` (gpiozero's `lgpio` backend has no prebuilt wheel for aarch64 on newer
+     Python builds, needing a from-source build); `i2c-dev` needed loading + persisting via
+     `/etc/modules-load.d/` for `/dev/i2c-1` to exist even after `dtparam=i2c_arm=on`; the
+     `gerantos`-placeholder username/paths in the two systemd units were switched to this
+     deployment's actual `chatterbox` account.
+- Files: `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`, `deploy/systemd/
+  chatterbox-powerd.service`, `deploy/systemd/chatterbox-gui.service` (legacy-marked, not
+  deleted), `deploy/xorg-kiosk/` (new: `README.md`, `getty-tty1-autologin.conf`, `xinitrc`,
+  `bash_profile_snippet.sh`), `scripts/setup_pi.sh`, `scripts/kiosk_finalize.sh`,
+  `apt-packages-pi.txt`, `INSTALL.md`, `docs/KIOSK.md`, `docs/ARCHITECTURE.md`,
+  `CLAUDE.md`.
+- Why: first real Pi OS Lite deployment — the whole point of the reorg's target platform.
+- Verify: manually, on real Pi5 hardware (no pretrained-weight-free automated test covers a
+  physical touchscreen/compositor) — full pipeline confirmed working via the plain-Xorg path:
+  touch input, Speak → synthesis → audio through the DAC+ HAT, Settings dialog open/close via its
+  own Annuler/Enregistrer buttons (no window-manager close button exists by design, chrome-less
+  kiosk), Piper voice install + selection. `wait_visibility()`/geometry fixes are plain code
+  changes, not yet covered by an automated regression test (no existing test harness drives a real
+  Toplevel grab or measures actual on-screen window geometry under a WM-less X session).
+- Notes/gotchas:
+  - The `Bring-up_Integration_Test_Protocol_v0.1.md`/`chatterbox-powerd_spec_v0.1.md`/
+    `README_power_gui_workstream.md` docs referenced throughout this repo (including by this very
+    session) do not actually exist in the git checkout — external planning docs never committed.
+    Phase 1 (powerd standalone) verification this session was reconstructed from
+    `docs/POWERD.md`'s own "needs real Pi 5 hardware" section instead.
+  - `torch>=2.4.1` (`requirements-pi.txt`) pulls in a full CUDA-bundled build
+    (`nvidia-cu13-*`/`cuda-toolkit`/`triton`, several hundred MB) on this aarch64 target that has
+    no GPU at all — reproduced on both trixie and Bookworm, so not an OS-version artifact. Flagged,
+    not fixed this session (didn't want to risk the already-working install chasing a
+    `--index-url`/CPU-wheel change without dedicated testing) — a real "keep dependencies minimal"
+    violation worth a focused follow-up.
+  - `deploy/xorg-kiosk/xinitrc` redirects the app's stdout/stderr to `~/gui_output.log` with no
+    rotation — fine for occasional crash debugging, but will grow unbounded over a long kiosk
+    uptime with frequent restarts. Not addressed this session.
+
+---
+
+## 2026-07-29 — Emotion bar: drop the "…" hidden-tokens toggle; kiosk fullscreen hardening
+
+- What: two more items, one a direct real-hardware request, one a forward-looking question about
+  the not-yet-deployed Pi OS Lite/cage target (no live device to test against yet):
+  1. "Maybe we could drop the 3 dots at the bottom of the emoticons. We don't really need
+     additional tokens on top of the already existing emoticons and it will leave more space to
+     the icons" -- `_build_emotion_bar_control()` (`chatterbox/gui/app.py`) no longer builds a
+     hidden-then-revealed chip for `hidden_pattern` matches (config_tts.yaml's unnamed TOKEN13-16
+     GST placeholders) at all -- they're skipped in the build loop entirely, and the "…" toggle
+     Checkbutton that used to reveal them is gone. Frees that row for the 12 real, always-visible
+     mood icons; `_build_chip_grid_control()` (a different function, for the Sliders window's own
+     generic chip grids) keeps its own "advanced" toggle unchanged -- not what the user was
+     looking at.
+  2. "Once the Pi5 will run on Pi OS Lite, the GUI will be in fullscreen, will it be able to adapt
+     to the full dimension of the screen?" -- the window-creation code already tries `-zoomed`
+     (X11/Tk "maximize") first, falling back to a manually-computed, config-capped size+position
+     only if that raises `TclError`. Two real gaps found reasoning through this (not yet testable
+     live -- the Pi5 currently runs a full desktop image over WayVNC, not Pi OS Lite + cage):
+     (a) `-zoomed` asks a window manager to maximize a *decorated* window -- a genuinely desktop-
+     WM concept that `cage` (a minimal, chrome-less kiosk compositor, `docs/KIOSK.md`) may
+     not implement/honor at all, and critically, an unsupported EWMH state doesn't necessarily
+     make Tk raise `TclError` the way an genuinely-unsupported *attribute* would -- the compositor
+     can simply ignore the hint, silently, with the fallback path never triggering either. Added
+     `window.attributes("-fullscreen", True)` (the more basic, far-more-universally-honored "give
+     this client the whole output" EWMH state) as an ADDITIONAL attempt alongside `-zoomed`, not
+     instead of it -- gated to non-Windows (this repo's PC dev/test platform; forcing every dev
+     machine test run fullscreen would be actively disruptive there and Windows was never the
+     fullscreen target anyway). (b) Independent of (a): `config_tts.yaml`'s `GUI_config.main_panel.
+     width`/`height` (the fallback path's own size ceiling) were still `440`/`800` -- stale,
+     portrait-shaped leftovers predating the whole landscape refactor (confirmed via `git log -p`
+     during an earlier session, never acted on since nothing had surfaced it as broken yet) --
+     which would have clamped the fallback window well below any real landscape kiosk display's
+     actual resolution if that path ever triggered. Raised to `1920`/`1200` (still a sane ceiling
+     for an unusual multi-monitor dev setup, but high enough that `min(this, real screen)` reduces
+     to "the real screen" on any display this project actually targets).
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
+- Why: (1) direct real-hardware feedback; (2) a forward-looking question about the Pi OS Lite/
+  cage migration, answered by code-reading `docs/KIOSK.md` + the window-creation code itself
+  rather than guessing, since there's no live cage deployment to test against yet.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). One new
+  ad hoc Tk smoke test (mocked model/controls, no pretrained weights, not part of the pytest
+  suite): `emotion_bar_no_toggle_smoke.py` (a fake chip_grid control with 2 real options + 2
+  hidden_pattern-matched placeholders builds exactly 2 Radiobuttons and zero Checkbuttons in
+  `emotion_bar_frame` -- confirms both the hidden options AND the toggle itself are gone, not
+  just hidden again).
+- Notes/gotchas: item 2 is **explicitly unverified against real cage** -- this session reasoned
+  from `docs/KIOSK.md` and Tk/EWMH semantics, not a live test (the Pi5 currently runs a full
+  desktop image, not Pi OS Lite). Next session should confirm live once that migration actually
+  happens: does the window fill the real screen under cage, and does adding `-fullscreen`
+  interfere with anything (e.g. the Settings/Sliders `Toplevel`s, which aren't set fullscreen
+  themselves and may need to be checked they still layer correctly above a fullscreen root).
+
+---
+
+## 2026-07-29 — Round 4 follow-up: emoji font installed on Pi5, experimental Piper leading-pause opt-in
+
+- What: two loose ends from the previous entry (same day), both explicitly confirmed with the
+  user first (AskUserQuestion) rather than assumed:
+  1. `fonts-noto-color-emoji` (recommended in `apt-packages-pi.txt` since round 2) actually
+     installed on the Pi5 via `ssh pi5` + `sudo apt-get install` -- confirmed registered
+     afterward (`fc-list | grep -i "noto color emoji"` -> `/usr/share/fonts/truetype/noto/
+     NotoColorEmoji.ttf`). Combined with the previous entry's font-pinning fix, the emotion bar's
+     12 mood icons should now actually render as color emoji instead of blank boxes.
+  2. An experimental, opt-in fix for "the first word/sound is always mispronounced" (Piper
+     English): `chatterbox/synthesis/backends/piper/text_frontend.py`'s `prepare()` now prepends
+     `". "` to the cleaned text when the model's `default_args.prepend_leading_pause` is `true` --
+     a period produces a brief pause in espeak-ng's phonemization, not spoken content, so unlike
+     prepending an actual dummy word, nothing needs cropping from the resulting audio afterward.
+     The reasoning (previous entry's Notes/gotchas): a waveform-envelope check found no audio-
+     level glitch, pointing at a genuine phonetic issue -- consistent with a documented espeak-ng
+     quirk where the very first word of an utterance can get wrong stress/prosody from having no
+     preceding context; giving it a throwaway leading pause first is the standard mitigation.
+     Enabled only on `"Piper en_US (lessac, medium)"` (`config_tts.yaml`) -- the specific entry
+     that was reported, not the French Piper voices, which haven't had this reported against them.
+     Explicitly **unverified by ear** in this session (no way to listen here) -- the user is
+     testing live and will report back whether it helps, hurts, or does nothing; revert by setting
+     the flag back to `false` if it doesn't.
+- Files: `chatterbox/config/config_tts.yaml`, `chatterbox/synthesis/backends/piper/text_frontend.py`.
+- Why: direct follow-through on the previous entry's two open items, both confirmed with the user
+  before acting (installing a system package and shipping an unverified-by-ear experimental
+  synthesis change both warranted asking first, per this project's own "actions with care"
+  convention).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged -- no
+  existing tests cover `text_frontend.py` at all). Verified `prepend_leading_pause` directly
+  (not via a Tk smoke test -- this is a pure text transform, no GUI involved): `False`/absent
+  leaves text unchanged, `True` prepends `". "`, empty input stays empty (no lone pause marker
+  glued onto nothing); confirmed the parsed `config_tts.yaml` has the flag `True` only on the
+  English Piper entry, absent (defaults `False`) on both French ones.
+- Notes/gotchas: the `prepend_leading_pause` fix's actual effectiveness is unconfirmed -- next
+  session should check back on what the user heard and either keep it, tune the leading marker
+  (e.g. a longer pause, or a different punctuation mark, if `". "` alone isn't enough context for
+  espeak-ng's prosody model), or revert it entirely if it made no audible difference.
+
+---
+
+## 2026-07-29 — Real-hardware feedback round 4: Settings-after-language-switch bug, bigger/pinned emotion-icon font
+
+- What: two of three new reports from live Pi5 testing are fixed here; the third (Piper English
+  mispronouncing the first word of every utterance) was investigated but not fixed -- see Notes.
+  1. "When I change the gui language for English, the Settings button doesn't work anymore" --
+     `chatterbox/gui/settings.py`'s `is_open()` used to be `_window is not None and _window.
+     winfo_exists()`. The new "Interface language" control (previous entry) lives INSIDE the
+     Settings dialog's own "Avancé" section -- clicking it calls `_set_gui_language()`, which
+     `window.destroy()`s the whole root Tk instance to rebuild the GUI in the new locale. That
+     tears down the open Settings `Toplevel` too, but WITHOUT ever calling `settings.close()`
+     (which is what resets the module's `_window` singleton back to `None`) -- root `.destroy()`
+     takes the whole widget tree down directly, it doesn't invoke any descendant's own protocol
+     handler. The next "Paramètres" click, in the freshly-rebuilt session, then called `is_open()`
+     against a `_window` pointing at a Toplevel whose entire Tcl interpreter no longer exists --
+     `winfo_exists()` itself raises `TclError` there, not a clean `False`, and that exception
+     propagated straight out of `_toggle_settings()` (a plain Tk menu `command`, not routed
+     through `dispatch()`'s own try/except) -- Tk's default `report_callback_exception` prints it
+     to stderr and moves on, so the button just silently did nothing from then on. Made `is_open()`
+     defensive (catches `TclError`, treats it as "not open", self-heals `_window` back to `None`)
+     and had both `_set_gui_language()` and `_set_language()` explicitly `settings.close()` before
+     `window.destroy()`, so the common case doesn't even need to fall back on the defensive catch.
+  2. "Emotions icons may be a bit too small and some of the icons are just blank square" -- the
+     emotion bar's chip font was `("TkDefaultFont", 20)`, bumped to `("Noto Color Emoji", 28)` in
+     both `_build_emotion_bar_control()` (the emotion bar itself) and `_build_chip_grid_control()`
+     (kept in sync for any future non-"style" chip_grid control that declares icons, though none
+     exists today). Naming the font explicitly doesn't fix the blank squares by itself -- these are
+     supplementary-plane Emoji-block codepoints that DejaVu Sans (what TkDefaultFont resolves to
+     on the Pi5, per the Play/Stop button's own font-pinning fix, round 3) simply doesn't contain
+     -- but it means the chips WILL pick up `fonts-noto-color-emoji` (already recommended in
+     `apt-packages-pi.txt`, round 3) the moment it's actually installed, rather than hoping
+     TkDefaultFont's own fontconfig aliasing happens to route there. Tk sizes `indicatoron=0`
+     Radiobuttons from the font's own glyph metrics, so the larger point size also enlarges the
+     touch target itself, addressing "too small" independently of the font-coverage question.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`.
+- Why: fourth round of the same live real-hardware feedback loop (Pi5) as the three previous
+  entries.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). One new
+  ad hoc Tk smoke test (mocked model loading, no pretrained weights, not part of the pytest
+  suite): `settings_after_language_switch_smoke.py` reproduces the exact report end to end via
+  `create_gui()`'s own restart loop -- opens Settings, calls `_set_gui_language("en")` from inside
+  it (destroying and rebuilding the whole window), then confirms Settings actually reopens in the
+  new session (`settings.is_open()` true both before and after, locale genuinely switched to
+  `"en"`) -- flaky at final process teardown on this Windows dev box (~1 run in 3, a `Tcl_
+  AsyncDelete: async handler deleted by the wrong thread` crash after both sessions' own logic had
+  already completed and produced correct results) from stacking two full Tk() root instances in
+  one process for testing purposes, not a sign of an app-level bug -- the passing runs' results
+  were consistent and correct every time.
+- Notes/gotchas: **Piper English mispronunciation not fixed.** "the first word/sound is always
+  mispronounced, it sounds kind of everytime the same word ... while the rest is correct" --
+  investigated via `ssh pi5`: generated 3 short English lessac utterances with different first
+  words directly through `PiperVoice.synthesize_wav()` (bypassing the GUI entirely) and compared
+  their 10ms-window RMS envelopes for the first 500ms. No obvious glitch signature (a sudden
+  spike/dropout/discontinuity) turned up -- each onset looked like a plausible, if different,
+  natural attack for its own first phoneme, which argues against a raw audio-level artifact
+  (amp/ffplay preroll timing, a decoder-cold-start click) and leaves a genuine phonetic
+  mispronunciation of the first word as the more likely explanation -- consistent with a
+  documented espeak-ng quirk where the very first word of an utterance can get slightly wrong
+  prosody/stress from lacking any preceding context. The standard mitigation (prepend a short
+  throwaway leading phrase so the effect lands on that instead of the user's real first word,
+  then crop the resulting extra audio) was NOT implemented -- it requires actually hearing the
+  output to verify it helps rather than just moving the artifact or, worse, clipping real speech,
+  and this session has no way to listen. Flagged back to the user rather than guessed at.
+
+---
+
+## 2026-07-28 — Real-hardware feedback round 3: startup-load error handling, moon icon, independent interface language
+
+- What: live testing against round 2's build (previous entry) on the Pi5 surfaced four more items:
+  1. "The Play/stop button doesn't go back to play once it has been pushed" and "the english model
+     from Piper loads indefinitely" turned out to be the SAME root cause. `ssh pi5` (read-only)
+     found `assets/models/Piper/` on that device only has the two French voices
+     (`fr_FR-siwis-medium`/`upmc-medium`) -- `en_US-lessac-medium.onnx`/`.json` were never actually
+     fetched. Combined with a real code bug -- `_initial_model_load_work()` (the STARTUP load path,
+     `chatterbox/gui/app.py`) had NO exception handling at all, unlike `_select_tts_model()`'s own
+     worker (which already wraps its load calls and routes failures through `_fail()`) -- a missing
+     checkpoint threw inside `tts_loading_script()`, silently killing the daemon thread; `post(_finish_
+     initial_model_load)` never ran, so `busy` stayed `True` forever and the "Chargement du
+     modele..." placeholder never went away -- no error, no timeout, just a permanent hang with
+     everything else in the GUI (including the Play/Stop toggle, stuck mid-state) wedged behind
+     the same stuck `busy` flag. Added a new `_fail_initial_model_load(exc)` (mirrors `_fail()`,
+     plus tearing down the loading placeholder, which `_finish_initial_model_load()` normally does
+     but never runs on this path) and wrapped `_initial_model_load_work()`'s body in try/except.
+     A failed startup load now surfaces as a normal, visible error state (busy clears, Play/Stop
+     resets to "▶") instead of hanging. The missing voice file itself is a deployment/asset gap,
+     not something a code change fixes -- flagged back to the user rather than fetched
+     unilaterally (fetching model files onto their device is a real-world side effect, not a plain
+     code edit).
+  2. "Instead of 'mettre en veille', it would be better to have a moon icon" -- `btn_put_away`'s
+     text changed from the `i18n.t("put_away_button")` label to "☾" (U+263E LAST QUARTER MOON,
+     Miscellaneous Symbols block -- confirmed present in the Pi5's actual `DejaVuSans.ttf` via the
+     same offline `fontTools` cmap check as the previous entry's Play/Stop fix, and font-pinned to
+     `("DejaVu Sans", 14)` for the same reason). The now-unused `put_away_button` key removed from
+     both `chatterbox/gui/i18n.py` locales (project convention: delete completely once certain
+     something is unused, not left as dead code).
+  3. "Add a parameter that changes the GUI language and not only the model language" -- found that
+     `chatterbox/power/config.py`'s persisted-prefs schema already had an unused `gui.language`
+     field (default `"fr"`, validated, and even name-checked in `settings.write_gui_prefs()`'s own
+     docstring) that nothing in `app.py` actually read or wrote -- a half-wired feature, not new
+     schema. Startup `i18n.set_locale()` now prefers `gui.language` over `default_tts`'s own model
+     `language` field; a new `_set_gui_language(code)` (module-exposed the same way `_set_theme`
+     is, for tests/smoke scripts) switches ONLY the interface locale and restarts onto the SAME
+     model (`state.TTS_INDEX`, not a language-matched lookup) -- unlike `_set_language()` (the
+     top-level "Langue" menu), which still also switches model. A new "Interface language" radio
+     picker in Settings → Advanced (mirrors the Theme/AZERTY-QWERTY pickers) is the only way to
+     reach it; `_set_language()` now also writes `gui.language` so the two controls cooperate
+     (whichever was used most recently wins on the next launch) instead of fighting.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: third round of the same real-hardware feedback loop (live Pi5 testing, not just a
+  screenshot this time) as the previous two entries.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). Two new
+  ad hoc Tk smoke tests (mocked model loading, no pretrained weights, not part of the pytest
+  suite): `round3_fixes_smoke.py` (a model configured to fail loading surfaces as a proper error
+  state with `busy=False`, not a hang; the put-away button's glyph/font; `write_gui_prefs`/`load_
+  config` round-trip `gui.language`) and `gui_language_independence_smoke.py` (an actual two-
+  session restart cycle via `create_gui()`'s own loop: `_set_gui_language("en")` switches locale
+  to `"en"` while `state.TTS_INDEX` and the model's own `"language"` field both stay unchanged
+  across the restart). `ssh pi5` (read-only: `ls assets/models/Piper/`, `ps aux`, `journalctl`,
+  the reused fontTools-cmap-check pattern) is what grounded both the Piper-hang root cause and the
+  moon-icon codepoint choice in this entry, instead of guessing.
+- Notes/gotchas: the English Piper voice will still fail to load on that Pi5 until `en_US-lessac-
+  medium.onnx`/`.json` are actually fetched (`scripts/fetch_piper_voices.sh`) -- this session
+  asked the user rather than running it unilaterally over SSH. Not yet re-verified live on the
+  device that the Play/Stop button genuinely resets after a normal (non-hung) synthesis+playback
+  cycle -- code review found no bug in that path once the startup-load hang is accounted for, but
+  it was reasoned about, not clicked through live.
+
+---
+
+## 2026-07-28 — Real-hardware feedback round 2: one-row header, drawn icons, unified Piper menu entry
+
+- What: a second live WayVNC/TigerVNC screenshot from the Pi5 (after the previous entry's layout
+  simplification already shipped) surfaced three more concrete issues, all fixed this round:
+  1. "Saisie :", the Synthèse button and "Mettre en veille" were still on 3+ separate rows,
+     visually disconnected from the battery indicator and the green status light even though all
+     five are conceptually one header. They're now one row, inside a new `header_frame`
+     (`chatterbox/gui/app.py`, gridded at `main_content_frame` row 0): Saisie label (col 0),
+     the chatbox `_input_frame` (col 1, the only stretching column), Synthèse (col 2), the status
+     circle (col 3), "Mettre en veille" (col 4), the battery indicator (col 5, far right). The
+     audio-duration / stage-duration-pool / total-synthesis-duration labels ("the Synthesis data
+     ... should be all aligned on top of the screen") moved out of 5 stacked rows into one
+     `synth_info_frame` row (row 1) with a smaller font, its labels `pack()`-ed side by side
+     instead of `grid()`-ed one per row -- `update_audio_infos()` and `_toggle_audio_info_
+     visibility()` switched from `.grid()`/`.grid_remove()` to `.pack(..., before=lbl_audio_infos_
+     synthesis_duration)`/`.pack_forget()` for the pool labels accordingly (mixing grid and pack
+     children under the same parent is a hard Tk error, and a bare `.pack()` with no `before=`
+     appends at the end of the current pack order, not where the label used to sit). Every row
+     below (status/error, GST, keyboard) shifted up to fill the header/put-away rows that no
+     longer exist; `keyboard_row` is now a running `_next_content_row` counter instead of
+     hardcoded arithmetic on `index_gst_token` (that old arithmetic put the put-away button on the
+     SAME row as the last GST token label whenever `add_GST_infos` was enabled -- latent, never
+     hit since that flag defaults `False`, fixed as a side effect of the rewrite, not separately).
+  2. "there is no play/stop triangle, there is no battery icon either" -- confirmed via `ssh pi5`
+     and `fc-list` that the Pi5 image has NO emoji-capable font installed at all (only dejavu/
+     noto-mono), and via an offline `fontTools` cmap dump against the exact installed `DejaVuSans.ttf`
+     that "▶" (U+25B6) IS in that font but "⏹" (U+23F9) is NOT, while "■" (U+25A0) is. Two
+     separate root causes, two separate fixes: (a) the Play button's font was `"Helvetica {size}
+     bold"` (a generic alias Tk/fontconfig substitutes to *something* installed -- whatever it
+     resolved to on that image doesn't have "▶", even though DejaVu Sans does) -- pinned that one
+     button's font to an explicit `("DejaVu Sans", size, "bold")` **tuple** (a
+     `"DejaVu Sans {size} bold"` *string* first attempt threw `TclError: expected integer but got
+     "Sans"` -- Tk's string font spec splits on whitespace with no quoting, so a two-word family
+     name breaks it; the tuple form has no such ambiguity) in `_create_letter_keyboard()`; (b) the
+     Stop glyph changed from "⏹" to "■" (`_set_ui_state()`) since no font fix helps a glyph that
+     isn't in the font at all. (c) The battery indicator dropped its "\U0001F50B" emoji glyph
+     entirely, replaced with a small drawn `tk.Canvas` icon (outline + terminal nub + a fill bar
+     sized to the actual charge %) -- same "draw it, don't depend on a font" technique the status
+     circle already used, so it has no font dependency to break regardless of what's installed.
+     Also added `fonts-noto-color-emoji` to `apt-packages-pi.txt` (commented as cosmetic-only) so
+     the GST mood-icon chip grid's 12 emoji faces (added last session, confirmed broken by the
+     same `fc-list` check) have a real font to render from -- not applied to play/stop/battery,
+     which were deliberately moved off font glyphs instead.
+  3. "When choosing the TTS Model, you can choose either french piper or US piper, it would make
+     more sense that you choose once piper and then when you choose between the Language it
+     decides if it goes to french or english" -- added a `menu_group` field to both Piper
+     `tts_models[]` entries in `config_tts.yaml` (`"Piper-tts"`, same value for both the fr and en
+     entries). `chatterbox/gui/app.py`'s top-level "TTS Model" menu construction now collapses
+     every entry sharing a `menu_group` into ONE radiobutton (label = the group name, first-seen
+     position), instead of one per language variant; picking it resolves, at click time, which
+     grouped member matches the CURRENTLY active locale (`i18n.get_locale()`) via a new
+     `_resolve_grouped_model()` closure, then loads that one through the existing
+     `_select_tts_model()` background-load path ("even if it takes more time to load" -- the user
+     already confirmed that cost is fine). `_set_language()` (the "Langue" menu handler) now
+     prefers a match sharing the ACTIVE model's own `menu_group` before falling back to the first
+     language-matching model overall -- without this, switching Piper from French to English would
+     have landed back on whichever model is FIRST in `tts_models[]` for French when switching back
+     (FastSpeech2, not Piper), since the old logic had no concept of "stay in the same family".
+     `_tts_menu_display_name()` (new small module-level helper) is what both the menu's initial
+     `tts_model_var` value and every later `.set()` call (`_finish_select_tts_model()`) go through,
+     so the group name (not the specific variant's own label) is what stays highlighted regardless
+     of which picker (this menu, its own group-resolved click, or Settings -> Advanced, which still
+     lists both Piper variants individually -- an intentional finer-detail view, not touched here)
+     triggered the switch.
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`, `apt-packages-pi.txt`.
+- Why: second round of the same real-hardware feedback loop (WayVNC/TigerVNC screenshot from the
+  Pi5) as the previous entry -- concrete visual/behavioral issues only visible once actually
+  looking at the device, not previously testable from a PC checkout with no Pi-matching font set.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged count --
+  no test files needed updating, this was all GUI-construction/config plumbing). Two new ad hoc Tk
+  smoke tests (mocked model loading, no pretrained weights, not part of the pytest suite):
+  `header_consolidation_smoke.py` (header_frame contains Saisie/Synthèse/circle/put-away; the
+  synth-info pack()/pack_forget() reflow doesn't crash across repeated stage-count changes; the
+  Play/Stop button's font and glyphs are exactly as described above) and
+  `piper_menu_group_smoke.py` (two `menu_group`-sharing fake models collapse into one menu entry;
+  clicking it loads the locale-matching member; the `_set_language()` group-aware resolution logic
+  picks the OTHER grouped member, not an unrelated model, when checked directly). `ssh pi5` +
+  `fc-list`/an offline `fontTools` cmap check (both read-only, no changes made on the device itself
+  beyond a throwaway venv used for the cmap check and removed immediately after) is what grounded
+  the icon-font root-cause analysis in this entry, instead of guessing.
+- Notes/gotchas: still NOT verified by actually looking at the live Pi5 screen again in this
+  session -- next real-hardware check should confirm the header row doesn't feel too cramped at
+  the real kiosk window width, and that `fonts-noto-color-emoji` (once someone re-runs
+  `scripts/setup_pi.sh` or installs it manually) actually fixes the GST mood-icon chips as
+  expected -- not verified here, since installing packages on the user's live device wasn't done
+  as part of this change (only a throwaway diagnostic venv, removed after use).
+
+---
+
+## 2026-07-28 — Layout simplification: compact header on top, keyboard fills the rest (real-hardware feedback)
+
+- What: second and final part of the same real-hardware feedback round (screenshot via WayVNC/
+  TigerVNC on the Pi5, previous entry). The screenshot showed the input row and synthesis-duration
+  info squeezed near the bottom, with the keyboard not actually filling the available space.
+  Confirmed with the user: the header (Saisie/chatbox/Synthèse + duration info) moves to a compact
+  block right at the top, and the keyboard fills 100% of the remaining space below it -- in EITHER
+  window orientation, not just one. This let the portrait/landscape keyboard-column-switching
+  machinery (`_apply_current_orientation()`, `keyboard_portrait_grid`/`landscape_keyboard_column`/
+  `landscape_keyboard_rowspan`, `_orientation_override`, `_KEYBOARD_SCREEN_SHARE`, the Settings ->
+  Advanced orientation radio picker) be deleted entirely rather than patched -- confirmed with the
+  user first, since it's a bigger, harder-to-reverse change: that machinery only ever existed so the
+  keyboard could share width with the options panel, and the options panel moved into the Sliders
+  window in an earlier phase, so there was nothing left to share space with.
+  - `chatterbox/gui/app.py`: `main_content_frame`'s header rows renumbered to a compact,
+    contiguous block right after the battery row -- input row (was row 7) -> row 1, audio
+    duration + status circle (was 8) -> row 2, the 3-slot stage-duration pool (was 9-11) -> rows
+    3-5, total synthesis duration (was 12) -> row 6, status/error label (was 13) -> row 7, GST
+    title/tokens (was 14/15+i, only if `add_GST_infos`) -> rows 8/9+i, put-away button (was
+    17+index_gst_token, leaving a since-Rejouer/Arrêter-removal-obsolete gap) -> row
+    9+index_gst_token (immediately after the header, no gap). `keyboard_area` now grids at ONE row
+    (`keyboard_row = 10 + index_gst_token`), `columnspan=max_buttons+2`, `sticky=NSEW`, and that row
+    is `main_content_frame`'s only `weight=1` row (previously row 2, back when it held the options
+    panel) -- no more `grid_propagate(False)`/explicit width-height capping, Tk just stretches
+    `keyboard_area` to fill whatever the row's weight allocates, in either window shape.
+  - Deleted: `_apply_current_orientation()`, `_on_window_configure()` +
+    `window.bind("<Configure>", ...)`, `_set_orientation_override()`, the `_orientation_override`/
+    `_refresh_orientation` globals, `_KEYBOARD_SCREEN_SHARE`, the Settings -> Advanced orientation
+    radio picker, and the `orientation_label`/`orientation_auto`/`orientation_portrait`/
+    `orientation_landscape` i18n keys (both locales) -- all genuinely dead once nothing reads them.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: real-hardware feedback (same WayVNC/TigerVNC screenshot as the previous entry).
+- Verify: full test suite (305 passed/1 skipped, unchanged). New ad hoc Tk smoke test (explicit
+  wide/landscape-shaped `1000x500` geometry) confirms: `_set_orientation_override`/
+  `_refresh_orientation`/`_KEYBOARD_SCREEN_SHARE` are all gone from the module; the Saisie label
+  sits at row 1, well above the keyboard's row; every header row is unweighted while the
+  keyboard's own row is the sole `weight=1` row; the keyboard's real on-screen height ends up
+  80% of the window's (400px of 500px) -- genuinely maximized, not just structurally weighted. A
+  real (non-mocked) 800x480 screenshot (this session's kiosk target resolution) visually confirms
+  the header sits compactly at the top (Saisie/entry/Synthèse on one line, duration info + Mettre
+  en veille right below) with the Texte/Phonèmes keyboard filling essentially all remaining height.
+- Notes/gotchas: **not verified on real Pi/Linux hardware** in this exact form (no Pi5 access this
+  session; the feedback that MOTIVATED this change came from a screenshot, not a live interactive
+  session) -- worth a real-hardware confirmation pass once available again, same stated-gap
+  convention as this session's other hardware-dependent items (Linux ffplay/Stop path, emoji
+  rendering). If a future real-hardware round finds the keyboard's letter/phoneme buttons render
+  too large or too small at the actual 800x480 kiosk resolution now that there's no explicit
+  width/height cap, that's the first place to look -- sizing is now purely a function of the
+  grid's own weighted-row allocation, not an explicit fraction like the deleted
+  `_KEYBOARD_SCREEN_SHARE` used to enforce.
+
+---
+
+## 2026-07-28 — Merge Play/Stop into the keyboard's ▶ button, drop standalone Rejouer/Arrêter
+
+- What: first real-hardware feedback round on the landscape redesign (user regained Pi5 access via
+  VNC and sent a screenshot). Confirmed: the standalone "Rejouer"/"Arrêter" buttons (added by the
+  Stop-button/interruptible-playback phase, four entries back) read as redundant next to the
+  Texte-mode keyboard's own "▶" control-row button -- an i18n comment on `replay_button` had
+  actually predicted this exact overlap ("ambiguous/redundant with the keyboards' own ▶ play
+  button") back when Rejouer was first added, well before this session. Confirmed with the user:
+  merge Play+Stop into that one ▶ button (removing the standalone buttons entirely) rather than
+  dropping Stop capability or dropping Replay-without-resynthesis.
+  - `chatterbox/gui/app.py`: `_create_letter_keyboard()`'s control-row button is now the module
+    global `btn_letter_kb_play` (was a purely local `btn_play`). `_set_ui_state()` toggles it on
+    every state transition: `"playing"` -> text `"⏹"`, `command=lambda: dispatch(Action.STOP)`,
+    enabled; every other state -> text `"▶"`, `command=lambda: dispatch(Action.KEY, ("__letter__",
+    "play", None))` (i.e. Speak), disabled only while `"synthesising"`/`"initialising"` (mirrors
+    Synthèse's own busy-guard disable). Removed the standalone Rejouer/Arrêter `_play_controls_frame`
+    block, `on_replay()`/`_replay_work()` (genuinely dead once nothing dispatches `Action.REPLAY`
+    anymore), and simplified `_set_action_buttons_state()`/`_done()`/`_fail()` back to touching only
+    `btn_syn_audio` -- the play/stop button's enable state is now entirely owned by `_set_ui_state()`.
+  - `chatterbox/gui/input.py`: removed `Action.REPLAY` and `make_dispatcher()`'s `replay_fn`
+    parameter/branch (unused once no button dispatches it).
+  - `chatterbox/config/config_tts.yaml` / `chatterbox/gui/i18n.py`: removed `add_play_button` (the
+    config flag that gated the now-deleted standalone buttons) and the `replay_button`/`stop_button`
+    i18n keys (both locales) -- all genuinely dead, per this project's "delete completely if certain
+    it's unused" convention rather than leaving unreferenced cruft.
+  - `tests/test_gui_input.py`: removed the two REPLAY-specific tests, `replay_fn` from the shared
+    recorder-dispatcher helper.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/input.py`, `chatterbox/config/config_tts.yaml`,
+  `chatterbox/gui/i18n.py`, `tests/test_gui_input.py`.
+- Why: real-hardware feedback (screenshot via WayVNC/TigerVNC on the Pi5) -- first genuine
+  real-device confirmation of anything from this whole landscape-refactor session.
+- Verify: full test suite (305 passed/1 skipped -- down from 307, the 2 removed REPLAY tests). New
+  ad hoc Tk smoke test (monkeypatches `chatterbox.synth.synthesize` and `playback.play_audio`/
+  `stop_audio`, same pattern as `test_gui_worker.py`'s own mocking) confirms: the button starts as
+  `"▶"`/enabled; dispatching Speak through it (after waiting out the backgrounded initial-model-
+  load + warm-up sequence, which shares the same busy flag and would otherwise silently swallow a
+  premature dispatch) flips it to `"⏹"`/enabled while `_work()` blocks in the fake `play_audio()`;
+  clicking it then calls the real `stop_audio` reference; it returns to `"▶"`/enabled once playback
+  ends.
+- Notes/gotchas: this entry covers ONLY the button merge -- the screenshot's other two asks (input
+  row + synthesis-duration info moved to a compact top header, keyboard maximized to fill the rest)
+  are a separate, larger change (touches the same portrait/landscape row math already flagged as
+  fragile in this session's emotion-icon-bar entries) and land in the next entry.
+
+---
+
+## 2026-07-24 — Scrolling pass: MouseWheel everywhere (landscape-refactor plan, final phase)
+
+- What: final phase of `cc_prompt_gui_landscape_v2.md`'s implementation. Audited every scrollable
+  canvas in the GUI (exactly two): the sliders window's options-panel canvas
+  (`chatterbox/gui/app.py`, `gui_generic_controls()`) had `<Button-4>`/`<Button-5>` (Linux/X11 --
+  the Pi's actual target) but no `<MouseWheel>` (Windows/Mac -- this dev checkout) at all; Settings'
+  own `scroll_canvas` (`chatterbox/gui/settings.py`) had **neither** -- only its draggable
+  scrollbars. Both now respond to all three; only one of the three ever actually fires on a given
+  platform, so no `platform.system()` branch was needed.
+  - `chatterbox/gui/app.py`: new module-level `mouse_wheel(event)` alongside the existing
+    `mouse_wheel_up`/`mouse_wheel_down`, bound/unbound in `bound_to_mouse_wheel`/
+    `unbound_to_mouse_wheel` (already the `<Enter>`/`<Leave>`-scoped pattern for the other two).
+    `int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)`: Windows delivers ±120 per
+    notch (a multiple of 120 for higher-resolution wheels), Mac a smaller ±1-ish delta with the
+    same sign convention -- the `or` fallback keeps a sub-120 delta from rounding to a silent 0.
+  - `chatterbox/gui/settings.py`: added the same three-event binding as a local closure inside
+    `open_settings()` (its `scroll_canvas` is a local variable, not a module global like app.py's
+    `canvas`) -- `<Enter>`/`<Leave>`-scoped the same way, so scrolling this dialog's canvas doesn't
+    fight the main window's own scrollable canvas if both happened to be visible.
+  - The Sliders window (previous entry) needed **no separate fix** -- it reuses the exact same
+    `canvas`/`bound_to_mouse_wheel` machinery this phase already updated, just now living inside a
+    Toplevel instead of `main_content_frame`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3 ("Scrolling: MouseWheel + Button-4/5 everywhere") --
+  the last remaining phase of this session's landscape GUI redesign.
+- Verify: full test suite (307 passed/1 skipped, unchanged -- no pytest coverage added, matching
+  this project's own "real Tk mainloop scenarios are ad hoc manual smoke scripts" convention,
+  `docs/GUI.md` "Testing"). New ad hoc Tk smoke test (20 fake slider controls to guarantee
+  overflow, monkeypatches `USER_PREFS_PATH`) confirms both canvases actually scroll (`canvas.
+  yview()[0]` measurably changes) in response to a synthetic `<MouseWheel>` event with a
+  Windows-style `delta=-120`, not just that a handler is *bound*.
+- Notes/gotchas: the smoke test itself hit a real Tk sizing gotcha worth remembering for any future
+  scroll-related script: setting only the canvas widget's own `width`/`height` via `.config()` did
+  **not** produce an overflow to scroll, because the canvas is grid-managed with `sticky='news'`
+  inside a `weight=1` cell -- Tk stretches it to fill however big its actual container (the
+  Toplevel) ends up, which auto-sizes to fit all content with no scrolling needed by default. Had
+  to constrain the **Toplevel's own** `.geometry("WxH")` to force a real, measurable overflow.
+  **Not verified on real Pi/Linux hardware** (no Pi5 access this session) -- `<Button-4>`/
+  `<Button-5>` is what actually matters there and was already present for the options-panel canvas
+  before this phase; Settings' dialog gained it for the first time and is unverified on that
+  platform specifically.
+- **Landscape GUI redesign (`cc_prompt_gui_landscape_v2.md`) -- session summary**: all phases now
+  land -- backgrounded TTS model switching; menu-bar restructure (Tools/TTS Model/Speaker cascades,
+  Theme relocation, battery alignment); chatbox masking; `phoneme_fallback: "disable"`; the Stop
+  button and interruptible playback; Piper voice unification (separate, earlier session); light/
+  dark theme; settings-persistence extension; emotion icon bar (emoji + full-height left column);
+  Sliders window and chatbox-visibility; this scrolling pass. Two things explicitly **not** verified
+  on real
+  hardware this whole session (no Pi5 access): the Linux ffplay/Stop path, and the emotion bar's
+  actual on-screen proportions/keyboard-width-share interaction at real kiosk resolution -- both
+  worth a real-hardware pass once available again, per their own CHANGELOG entries above.
+
+---
+
+## 2026-07-24 — Sliders window + chatbox-visibility Tools item (sliders-window phase, landscape-refactor plan)
+
+- What: all remaining per-model controls (sliders, StyleTag text entry -- "style" chip_grid already
+  moved to the emotion bar, previous entry) now render in a dedicated Toplevel instead of the main
+  screen, opened/closed from a new Tools menu command. Also closed a gap noticed while touching the
+  Tools cascade: the menu-bar-restructure phase's own comment promised a chatbox-visibility toggle
+  "lands with the input-row phase" that never actually got built (only masking did) -- added now,
+  same cascade.
+  - `chatterbox/gui/app.py`: `gui_generic_controls()`'s options-panel `frame` now parents onto a new
+    per-call `_sliders_window` (`tk.Toplevel`) instead of `main_content_frame` -- `+20+60`
+    positioning mirrors `chatterbox/gui/settings.py`'s own dialog. Starts hidden (`withdraw()`,
+    deferred to the end of the function so nothing queries its geometry while withdrawn); the OLD
+    Toplevel is explicitly `destroy()`ed before building a new one on every model switch (unlike
+    `frame`/`frame_options` themselves, which have always just been silently replaced/leaked at the
+    same grid cell -- a real, separate OS-level Toplevel accumulating on every switch would be far
+    more visible/confusing than an orphaned Frame, so this got an explicit fix while touching the
+    code, not left to match the pre-existing pattern). New `_toggle_sliders_window()` (Tools menu):
+    `withdraw()`/`deiconify()`, deliberately never `destroy()`, so slider positions/StyleTag text
+    survive a hide/show cycle -- re-reading fresh defaults on every hide (Settings' own approach)
+    would silently reset an AAC user's in-progress tweaks each time they closed the window, an
+    active regression, not just a missed nicety.
+  - Chatbox-visibility: new Tools checkbutton hides/shows the "Saisie" label + input row together
+    (fixed a latent Tkinter gotcha while wiring this: `tk.Label(...).grid(...)` returns `None`, not
+    the Label -- the old one-liner silently made `lbl_text_input` unusable for exactly this kind of
+    later reference; split into two statements). Persists via the already-extended `gui:` prefs
+    schema's `show_chatbox` field (reserved but unwired since the settings-persistence phase).
+  - New rebindable global `_refresh_chatbox_visibility` (same pattern as `_refresh_orientation` etc.)
+    and `_toggle_sliders_window()` as a plain module-level function (same pattern as
+    `_toggle_settings()`/`_show_about()`), since `_sliders_window` needs no `_run_gui_session()`
+    closure state to act on.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new keys: `menu_toggle_chatbox`,
+  `menu_sliders`, `sliders_window_title`, both locales).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, sliders-window phase.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (fake model
+  with one slider control, monkeypatches `USER_PREFS_PATH`) confirms: the sliders Toplevel exists
+  and starts hidden; its slider control renders inside it; the Tools menu command shows it; a
+  second click hides it (`winfo_exists()` still true -- not destroyed); a slider value set while
+  visible survives a hide/show cycle; switching models destroys the old Toplevel and creates a
+  distinct new one (no accumulation); the chatbox-visibility checkbutton hides/shows the input row
+  and persists `show_chatbox` immediately.
+- Notes/gotchas: confirmed via `git status` that the real `user_prefs.yaml` stayed untouched (same
+  monkeypatch discipline as every GUI smoke script this session). `main_content_frame`'s own row-2
+  weighting (previous entry, now genuinely empty since the options panel moved out) was
+  deliberately **left unchanged** rather than removed -- the landscape keyboard's own height/rowspan
+  math explicitly depends on row 2 being *a* weighted row to absorb extra vertical space (see that
+  code's own long-standing comments); removing the weight would have meant re-deriving that math
+  blind, unverifiable without a Pi. The empty row becomes invisible padding roughly where the
+  options panel used to visually sit -- worth a real-hardware look once available again, but not
+  worth the regression risk of "fixing" preemptively.
+
+---
+
+## 2026-07-24 — Full-height emotion icon bar (emotion-icon-bar phase, landscape-refactor plan, step 2/2)
+
+- What: the style chip grid (already icon-rendered, previous entry) now lives in a persistent
+  full-height column on the left, not the scrollable options panel. Confirmed with the user before
+  starting: this touches the same grid geometry as the portrait/landscape keyboard reflow (several
+  real-hardware iterations deep already), so it's the riskiest single change of this whole
+  landscape-refactor session -- proceeded carefully rather than deferring or simplifying, per the
+  user's explicit choice.
+  - `chatterbox/gui/app.py`: `window`'s own grid now holds exactly two children side by side --
+    `emotion_bar_frame` (new, column 0, unweighted/natural width, `sticky=NS`) and
+    `main_content_frame` (new, column 1, weight=1, `sticky=NSEW`). Every widget `_run_gui_session()`
+    used to grid directly onto `window` (~15 call sites: battery label, loading placeholder, input
+    row, audio-info labels/status circle, GST title, replay/stop/put-away buttons, the keyboard
+    area) now grids onto `main_content_frame` instead -- a **fresh grid namespace starting again at
+    row/column 0**, identical to what `window`'s own grid used to be, so **none of this function's
+    existing row/column numbers changed**, only which widget owns the grid they're numbered
+    against. The responsive-layout column/row weighting and the landscape-keyboard's own dynamic
+    `grid_columnconfigure` calls (`_apply_current_orientation()`) retarget from `window` to
+    `main_content_frame` the same way. `gui_generic_controls()`'s own options-panel frame
+    (`tk.Frame(window, ...)`) retargets too.
+  - New `_build_emotion_bar_control(parent_frame, control)`: a single vertical stack of icon chips
+    (not `_build_chip_grid_control()`'s wrapped multi-column grid, which is sized for the options
+    panel's width) -- each visible chip's row gets equal weight so the stack stretches to fill the
+    bar's full height (bigger touch targets, not just cosmetic default). Hidden options
+    (`TOKEN13-16`) go behind a small `…` toggle at the bottom, same idea as the options panel's own
+    advanced toggle.
+  - `gui_generic_controls()`: the `"style"` chip_grid control is now intercepted before the normal
+    per-control loop and routed to `_build_emotion_bar_control(emotion_bar_frame, ...)` instead of
+    `_build_chip_grid_control(frame_options, ...)` -- it no longer consumes an options-panel row at
+    all. `emotion_bar_frame`'s previous children are torn down and rebuilt fresh every call (same
+    as `frame`/`frame_options`), and the bar itself is `grid_remove()`'d for a backend that declares
+    no `"style"` control at all (e.g. Piper) rather than showing stale chips or an empty bordered
+    column.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, emotion-icon-bar phase, completing what step 1 (emoji
+  labels, previous entry) started.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (two fake
+  models, one with a style control + an ordinary slider, one with none) confirms: `window`'s
+  row-0/column-0 and column-1 slaves are exactly `emotion_bar_frame`/`main_content_frame`; the
+  style control's icon chip renders inside `emotion_bar_frame` and NOT duplicated in the scrollable
+  options panel; an ordinary (non-style) slider control still renders in the options panel, not the
+  emotion bar; forcing both `_set_orientation_override("landscape")` and `"portrait"` (the
+  highest-risk regression target) still reflows correctly, confirmed by finding the keyboard's
+  Texte/Phonèmes toggle under `main_content_frame` in both cases; switching to the no-style model
+  leaves `emotion_bar_frame` empty and hidden, not stale.
+- Notes/gotchas: **two real issues caught during this step's own verification, both fixed before
+  committing**:
+  1. An early draft of the smoke test called `_set_orientation_override()`/`gui_generic_controls()`
+     directly from the probe thread (not the Tk thread) -- both perform real Tk widget mutations,
+     and calling them from a background thread hung the process indefinitely (a genuine Tcl
+     deadlock, not just a lint-level "should use `post()`" concern). Fixed the *test* by routing
+     those calls through `window.after()` + a `threading.Event`, mirroring this codebase's own
+     `post()`/worker-thread discipline -- not a production code change, but worth remembering for
+     any future smoke script that pokes orientation or panel-rebuild functions directly.
+  2. A routine `git status` check (this session's standing habit) caught the real, git-tracked
+     `chatterbox/config/user_prefs.yaml` showing a modified `brightness_dim` and a full default
+     `gui:` section -- leftover pollution from an earlier, unmonkeypatched smoke-test run (predates
+     this step; it was already flagged in this session's very first `git status` snapshot).
+     Reverted via `git checkout -- chatterbox/config/user_prefs.yaml` before committing this step's
+     real changes. Confirms, yet again: any ad hoc script that ends up calling `write_gui_prefs()`
+     (directly or via `_set_theme()`/`_set_keyboard_layout()`) or `write_settings()` must monkeypatch
+     `chatterbox.config.paths.USER_PREFS_PATH` before importing `chatterbox.gui.app`.
+  - **Still not verified on real Pi/Linux hardware** (no Pi5 access this session): the emotion bar's
+    actual on-screen proportions relative to the keyboard/options panel at real kiosk resolution
+    (800x480), and whether the landscape keyboard's width-share calculation
+    (`_KEYBOARD_SCREEN_SHARE`, based on `window.winfo_width()`, deliberately left unchanged rather
+    than narrowed to `main_content_frame`'s own width) ends up generous now that the emotion bar
+    claims some of `window`'s width -- worth a real-hardware check once available again.
+
+---
+
+## 2026-07-24 — Emotion icons for the style chip grid (emotion-icon-bar phase, landscape-refactor plan, step 1/2)
+
+- What: first of two steps for the emotion icon bar (the second, moving it into a full-height left
+  column, is a separate follow-up given its much larger blast radius across `_run_gui_session()`'s
+  geometry). This step: the 12 named GST style tokens (COLERE/DESOLE/.../SUPPLIANT) now render as
+  emoji glyphs instead of French text on their chip buttons -- confirmed with the user (the earlier
+  icon proposal from before a context compaction wasn't recoverable): Unicode emoji over canvas-
+  drawn schematic faces or a plain-text-only deferral.
+  - `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`: new `GST_TOKEN_ICONS` dict
+    (token name -> emoji, e.g. `"COLERE": "😠"`, `"PENSIF": "🤔"`), FS2/GST-specific by design (same
+    precedent as `keyboards.py`'s own mood-shortcut table) -- not something a generic control
+    descriptor should assume every backend shares. Added as the style chip_grid control's new
+    `"icons"` key in `describe_controls()`. The 4 hidden `TOKEN13-16` placeholders intentionally
+    have no entry.
+  - `chatterbox/synthesis/base.py`: documented the new optional per-chip_grid `"icons"` key in
+    `describe_controls()`'s docstring (`{option text: emoji glyph}`, chip falls back to plain text
+    for anything missing).
+  - `chatterbox/gui/app.py`: `_build_chip_grid_control()` reads `control.get("icons")` and uses
+    `icons.get(option_text, option_text)` as each chip's displayed text -- generic opt-in, a
+    control without an `"icons"` key renders exactly as before. Font bumps to size 20 when a
+    control declares icons (a single emoji reads better bigger; plain-text chips are unaffected).
+- Files: `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`,
+  `chatterbox/synthesis/base.py`, `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, emotion-icon-bar phase.
+- Verify: full test suite (307 passed/1 skipped, unchanged). New ad hoc Tk smoke test (fake
+  `describe_controls()` with one iconized chip_grid control and one plain one) confirms: COLERE/
+  NEUTRE chips show their emoji, not raw token text; the hidden TOKEN13 placeholder falls back to
+  plain text; a control with no `"icons"` key at all is unaffected. A real (non-mocked, full 12-
+  token) screenshot on this Windows dev checkout confirmed all 12 render as distinct, legible
+  glyphs -- Windows' font fallback drew them as monochrome outline glyphs (not color Segoe UI
+  Emoji), which happens to match the session's original "monochrome" framing even though that's an
+  incidental font-substitution behavior, not something this code requested.
+- Notes/gotchas: **not verified on real Pi/Linux hardware** -- the user no longer has Pi5 access
+  this session; whether the Pi's font stack has ANY emoji coverage at all (vs. tofu boxes) is
+  unknown and worth checking once hardware is available again, same stated-gap convention as the
+  Stop button's ffplay path (previous entry). The full-height-left-column geometry move is
+  deliberately NOT part of this commit, given its much larger blast radius across
+  `_run_gui_session()`'s widget placements -- a separate, later CHANGELOG entry covers it once it
+  lands.
+
+---
+
+## 2026-07-24 — Stop button + interruptible playback (input-row phase, landscape-refactor plan)
+
+- What: final sub-step of the input-row phase. Adds a Stop button next to Replay (shared sub-frame,
+  same `add_play_button` config gate) that interrupts in-flight playback, and makes playback
+  actually interruptible on every platform this app runs on:
+  - `chatterbox/audio/playback.py`: `_play_raw()` now records a zero-arg stop callable into a new
+    module-level `_current_stop_fn` immediately before each platform branch's blocking wait, clears
+    it (via `finally`) right after. New `stop_audio()` just invokes whatever's currently recorded,
+    a no-op if nothing is playing -- safe to call from the Tk thread while `_play_raw()` blocks on
+    the worker thread (single-reference read/write, atomic under the GIL, same reasoning as this
+    codebase's own `busy` flag). Windows: `simpleaudio`'s `play_obj.stop()` / `sounddevice`'s
+    `sd.stop()` already existed and just needed capturing. Linux/Pi: **replaced**
+    `pydub.playback.play()` (wraps a BLOCKING `subprocess.call()` to `ffplay` with no handle to
+    interrupt) with a direct `subprocess.Popen(["ffplay", ...])` against a temp-exported wav --
+    `proc.terminate()` is the stop callable. No new dependency (ffmpeg/ffplay was already required
+    for pydub itself).
+  - `chatterbox/gui/input.py`: new `Action.STOP` + `make_dispatcher(stop_fn=...)` (defaults to a
+    no-op, same as `replay_fn`), so a future physical switch can trigger Stop identically to
+    Speak/Replay, not just a Tk button click.
+  - `chatterbox/gui/app.py`: new `btn_stop_audio`, wired to `playback.stop_audio` via
+    `dispatch(Action.STOP)`. Deliberately **not** gated by the busy-guard's
+    `_set_action_buttons_state()` (which disables Speak/Replay) -- `_set_ui_state()` enables it
+    exactly when `state_name == "playing"` and disables it every other state, since Stop must stay
+    clickable precisely while a worker thread is busy playing audio, the opposite of Speak/Replay's
+    guard.
+- Files: `chatterbox/audio/playback.py`, `chatterbox/gui/input.py`, `chatterbox/gui/app.py`,
+  `chatterbox/gui/i18n.py` (new `stop_button` key, both locales), `docs/ARCHITECTURE.md`
+  (playback section updated to match), `tests/test_gui_input.py` (4 new: STOP routing + default
+  no-op, plus 2 filling a pre-existing gap -- REPLAY was never actually tested before this).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase's last piece (chatbox masking and the
+  phoneme_fallback "disable" mode, previous two entries, were this phase's first two).
+- Verify: full test suite (307 passed/1 skipped, up from 303 -- the 4 new `test_gui_input.py`
+  cases). New ad hoc Tk smoke test (monkeypatches `playback.play_audio`/`playback.stop_audio` to a
+  controlled fake rather than exercising the real audio backends, which need real hardware/ffplay
+  -- this dev checkout's pydub import itself warns "Couldn't find ffmpeg", confirming the real
+  ffplay path is genuinely unverifiable here without a Pi) confirms: Stop starts disabled; becomes
+  `state="normal"` exactly while a triggered Replay is blocked in the (fake) `play_audio()`, and
+  Replay itself flips to `disabled` at the same moment; clicking Stop calls the real
+  `playback.stop_audio` reference; Stop returns to `disabled` once the (fake) playback ends.
+- Notes/gotchas: the real ffplay/Popen path (Linux/Pi) is **not verified on real hardware** in this
+  session -- the user stated they no longer have Pi5 access; this is a stated gap, not a hidden
+  one, consistent with `docs/GUI.md`'s existing "Known gaps" convention. Re-verify
+  end-to-end (Stop actually silences ffplay mid-sentence, not just that `.terminate()` was called)
+  once a Pi is available again.
+
+---
+
+## 2026-07-24 — phoneme_fallback: "disable" mode (input-row phase, landscape-refactor plan)
+
+- What: a third `GUI_config.phoneme_fallback` value alongside the existing `"translate_labels"`/
+  `"hide"`: `"disable"` keeps the Texte/Phonèmes toggle visible but greys out the Phonèmes side
+  (`state="disabled"`, unclickable) instead of removing it entirely -- same Texte-only end state as
+  `"hide"` (forced back to Texte mode if Phonèmes was active when a model without phoneme support
+  loads), but without the layout itself changing, which "hide" does. `_apply_keyboard_capabilities()`
+  (`chatterbox/gui/app.py`) restructured with an early return for the `"hide"` branch, then falls
+  through to a shared "grid both buttons" path that additionally toggles `btn_mode_phonemes`'s
+  `state` for `"disable"`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml` (comment only -- the default
+  stays `"translate_labels"`), `CLAUDE.md` (two `phoneme_fallback` mentions updated).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase (the A/Phon control's own sub-item;
+  chatbox masking, previous entry, was this phase's first).
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test (two fake
+  models, one `accepts_phoneme_input: false` with `phoneme_fallback: "disable"` config-wide,
+  monkeypatches `USER_PREFS_PATH`) confirms: starting on the phoneme-capable model, the toggle is
+  visible and `state="normal"`, and clicking it actually switches keyboard mode to `"phonemes"`;
+  switching (via the top-level TTS Model menu) to the non-capable model keeps the toggle visible
+  (`winfo_ismapped()` still `True`, unlike `"hide"`) but flips it to `state="disabled"` and forces
+  the keyboard back to `"text"` mode.
+- Notes/gotchas: none new.
+
+---
+
+## 2026-07-24 — Chatbox masking (input-row phase, landscape-refactor plan)
+
+- What: an eye-icon toggle (👁, `tk.Checkbutton(indicatoron=0)` -- same "button-like toggle" idiom
+  already used for the AZERTY/QWERTY and orientation pickers) next to the text input masks the
+  composed sentence (password-style, `•` bullets) so a bystander can't read it while an AAC user is
+  still composing -- confirmed with the user (this feature's exact behavior wasn't in context after
+  a compaction): masking is purely visual, `ent_text_input.get()` always returns the real plain
+  text regardless of mask state, so Speak/Replay/the phoneme keyboard's mirrored display are
+  unaffected. Uses `tk.Entry`'s own native `show=` option -- no new widget type, the existing
+  single-line Entry already doubles as the "chatbox". Wrapped `ent_text_input` in a small sub-frame
+  (occupying the same column-1 cell the bare Entry used to fill alone) so the eye-icon button fits
+  without changing the outer window's column count/weights. Persists immediately via the already-
+  extended `write_gui_prefs(chatbox_masked=...)` (settings-persistence phase, previous docs
+  entries) -- that phase deliberately left this field unwired since the feature didn't exist yet;
+  this is that wiring landing.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase (first sub-step; A/Phon's new
+  "disable" fallback mode and the Play/Stop/Replay interruptible-playback work are still pending in
+  this same phase).
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test
+  (monkeypatches `USER_PREFS_PATH`) confirms: launches unmasked by default; typed text round-trips
+  through `.get()` as plain text both masked and unmasked; toggling the eye icon flips the Entry's
+  `show` option between `""` and `"•"` and persists `chatbox_masked` immediately; a second,
+  independent `create_gui()` call with a pre-seeded `chatbox_masked: true` launches already masked.
+- Notes/gotchas: same `USER_PREFS_PATH` monkeypatch discipline as every GUI smoke script this
+  session, confirmed via `git status` that the real `user_prefs.yaml` stayed untouched.
+
+---
+
+## 2026-07-24 — Menu-bar restructure: Tools/TTS Model/Speaker cascades, Theme relocation, battery alignment (landscape-refactor plan)
+
+- What: rebuilt the app-bar to match `cc_prompt_gui_landscape_v2.md` Sec3.1's mockup order —
+  Paramètres, Tools, TTS Model, Language, Speaker, About (battery stays a separate right-aligned
+  Label, not a menu entry).
+  - **Tools** cascade: houses the synthesis-data-visibility checkbutton, relocated from its own
+    top-level checkbutton. The mockup's other Tools item (chatbox visibility) doesn't exist yet —
+    it lands, into this same cascade, with the input-row phase.
+  - **TTS Model** cascade: radiobuttons built from `tts_config["tts_models"]`, driving the same
+    (now-backgrounded, previous entry) `_select_tts_model()` Settings -> Advanced's own picker
+    buttons already used — picking a model from either updates both (`tts_model_var` is synced in
+    `_finish_select_tts_model()` regardless of which one triggered the switch).
+  - **Speaker** cascade: replaces `gui_generic_controls()`'s in-panel speaker `OptionMenu` entirely
+    (same declutter rationale as moving TTS/vocoder pickers into Settings earlier) — a new
+    rebindable-global `_refresh_speaker_menu()` (mirrors the existing `_refresh_keyboard_
+    capabilities` pattern) rebuilds its entries from `describe_controls()["speaker_list"]` every
+    time the options panel itself rebuilds (model switch or startup), since the speaker list is
+    model-specific (e.g. Piper-tts (Français)'s 3 vs. lessac's 0). A single-voice model shows one
+    disabled "Aucun"/"None" entry rather than an empty menu. Selecting a speaker writes directly
+    into `gui_generic_controls()`'s module-global `speaker_selection` IntVar (read live at click
+    time, not captured at menu-build time, since that IntVar is a fresh object every panel rebuild)
+    — `get_gui_controls()` needed no changes.
+  - **Theme** relocated from its own top-level cascade into Settings -> Advanced
+    (`_build_advanced_settings()`, alongside the existing model/orientation/keyboard-layout
+    pickers) — the mockup's six top-level items have no Theme entry; its own prose files Theme
+    under "Add to Paramètres" instead. `_set_theme()` itself is unchanged, only where its
+    radiobuttons are built moved. (Fixed a latent bug found while doing this: the AZERTY/QWERTY
+    keyboard-layout block never incremented `next_row` after itself, harmless while it was the last
+    section but would have overlapped Theme's new row.)
+  - **Battery** label: added `sticky=tk.E` to its `grid()` call (spec: "far right") — it already
+    spanned the whole row via `columnspan`, so this only changes where within that span it sits,
+    not any other column's width.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new keys: `menu_tools`,
+  `menu_tts_model`, `menu_speaker`, `menu_no_speaker`, both locales).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3.1, second sub-step of the menu-bar-restructure phase
+  (first was backgrounding `_select_tts_model()`, previous entry).
+- Verify: full test suite (303 passed/1 skipped, unchanged — no pytest coverage added here,
+  matching this project's own stated convention, `docs/GUI.md` "Testing": real-`tk.Tk()`/
+  mainloop scenarios are ad hoc manual smoke scripts, not part of the automated suite). New ad hoc
+  Tk smoke test (two fake TTS models, one with 2 speakers and one with none, monkeypatches
+  `USER_PREFS_PATH`) confirms: top-level order is exactly Paramètres/Outils/Modèle TTS/Langue/
+  Locuteur/À propos with no top-level Thème; Tools contains the audio-info checkbutton; TTS Model
+  cascade lists both fake models and switching via it actually switches (`state.TTS_INDEX` updates,
+  `busy` returns to `False`); Speaker cascade lists `["Alice", "Bob"]` for the first model,
+  selecting "Bob" sets `speaker_selection.get() == 1`, and switching to the single-voice second
+  model repopulates it to `["Aucun"]`; the battery label's grid `sticky` contains `"e"`; opening
+  Settings shows a "Thème" label inside the Advanced section.
+- Notes/gotchas: none new — same `USER_PREFS_PATH` monkeypatch discipline as every GUI smoke script
+  this session, confirmed via `git status` that the real `user_prefs.yaml` stayed untouched.
+
+---
+
+## 2026-07-24 — Background TTS model switching (landscape-refactor plan, menu-bar-restructure phase)
+
+- What: `_select_tts_model()` (`chatterbox/gui/app.py`) used to call its backend's `load_script`
+  synchronously on the Tk thread, freezing the whole GUI for however long the model takes to load.
+  Tolerable while buried in Settings → Advanced (a rare, deliberate action); the menu-bar-restructure
+  phase promotes TTS Model switching to a first-class top-level menu, so the freeze would become far
+  more frequent. Backgrounded it, mirroring the existing `_initial_model_load_work()`/
+  `_finish_initial_model_load()` startup pattern and reusing `on_speak()`/`on_replay()`'s
+  `busy`/`_set_action_buttons_state()`/`_fail()` machinery — a model switch and a synthesis are now
+  treated as the same "GUI is doing real work" state rather than two independent guards. Split into
+  `_select_tts_model()` (flips `busy`, disables Speak/Replay, spawns a worker thread that only calls
+  `registry.activate_tts_backend()` + the load script, `post()`s failures to `_fail()`) and
+  `_finish_select_tts_model()` (Tk thread: rebuilds the options panel, refreshes keyboard
+  capabilities, re-enables Speak always and Replay only if `playback.AUDIO_EXAMPLE is not None` —
+  same care `_done()` already takes, not the blunter "enable both"). `_select_vocoder_model()` stays
+  synchronous on purpose: HiFi-GAN's checkpoint is a few MB (not the ~600 MB class of cost that
+  motivated this), and the vocoder picker isn't being promoted to a top-level menu.
+- Files: `chatterbox/gui/app.py`.
+- Why: `cc_prompt_gui_landscape_v2.md` Sec3 menu-bar restructure — first sub-step, since every other
+  new top-level menu item in that phase (TTS Model, Speaker) builds on this not blocking the GUI.
+- Verify: full test suite (303 passed/1 skipped, unchanged). New ad hoc Tk smoke test
+  (two fake TTS models, one with a simulated 1.5s slow load, monkeypatches
+  `USER_PREFS_PATH` to a tmp file) drives a real button click via `window.after()` and polls a
+  `window.after()`-driven tick counter throughout the switch: 29 ticks (~1.5s at 50ms/tick) recorded
+  while `busy` was `True`, proving the Tk mainloop never blocked on the simulated load; `state.
+  TTS_INDEX` and `busy` end in the correct post-switch state.
+- Notes/gotchas: none — `_select_tts_model` was already only ever invoked as a `tk.Button`
+  `command=` callback (`_build_advanced_settings()`'s `_grid_model_buttons()`), so no caller depended
+  on it returning synchronously.
+
+---
+
+## 2026-07-24 — Extend settings persistence with a gui: section (landscape-refactor plan)
+
+- What: second implementation phase. Phase 0 discovery found persistence was much narrower than
+  assumed: only power-timer/brightness settings survived a restart; TTS model, orientation,
+  keyboard layout, theme, language all lived in session-only runtime globals. Extends the existing
+  mechanism (`chatterbox/power/config.py`'s load/merge/atomic-write, already field-by-field
+  defaulted and crash-proof) rather than inventing a second one, per the plan's own instruction.
+  - New `"gui"` top-level section in `user_prefs.yaml`'s schema (`DEFAULTS` + a new `_merge_gui()`,
+    same field-by-field-fallback-to-default philosophy as every other section): `theme`,
+    `language`, `keyboard_layout`, `postprocess_enabled`, `show_chatbox`, `show_data`,
+    `chatbox_masked`, `selected_tts_model`, and three per-model dicts (`selected_speaker`/
+    `selected_style`/`slider_values`, keyed by `tts_models[i]["label"]` so switching models
+    doesn't clobber another model's own choices). New `_validate_enum_string()`/
+    `_validate_mapping()` validators — the per-model dicts aren't schema-validated beyond "is this
+    a mapping", since their actual shape comes from `config_tts.yaml`, a file this module
+    deliberately knows nothing about.
+  - `chatterbox/gui/settings.py`: new `write_gui_prefs(**updates)` alongside the existing
+    `write_settings()` — same atomic write (extracted into a shared `_atomic_write_yaml()`), but
+    saves immediately on each change rather than gated behind "Enregistrer", matching how TTS/
+    vocoder model switches already take effect immediately elsewhere.
+  - Wired the two GUI features that already exist today: theme and keyboard layout.
+    `_run_gui_session()` now loads persisted `gui:` prefs once per session and calls
+    `theme.set_theme()` before the option database is populated, so the app launches in the
+    last-chosen theme instead of always "light". `_letter_layout_current`'s existing "seed only if
+    None" first-run guard now prefers the persisted value over `config_tts.yaml`'s static default.
+    `_set_theme()`/`_set_keyboard_layout()` each call `write_gui_prefs()` after applying their
+    change live; a save failure is logged, not raised.
+  - Language, chatbox visibility/masking, postprocess toggle, and TTS model/speaker/slider
+    selections are **not** wired to this schema yet — those features don't exist as GUI controls
+    today; they'll be wired to the already-extended schema when their own phases land.
+- Files: `chatterbox/power/config.py`, `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`,
+  `tests/test_power_config.py` (8 new), `tests/test_gui_settings.py` (5 new).
+- Why: `cc_prompt_gui_landscape_v2.md` Sec4, sequenced right after theme so later phases (menu-bar,
+  input row, sliders window) can wire their own new settings into an already-extended schema
+  instead of inventing persistence piecemeal per feature.
+- Verify: full test suite (303 passed/1 skipped). New ad hoc Tk smoke test (monkeypatches
+  `chatterbox.config.paths.USER_PREFS_PATH` to a tmp file, never touches the real one) confirms: a
+  pre-seeded dark theme + qwerty layout are both honored at startup; switching theme live writes it
+  back immediately; switching keyboard layout live writes it back immediately; unrelated `gui:`
+  fields stay untouched by either write.
+- Notes/gotchas: an earlier ad hoc smoke script (the theme phase's own verification, written
+  before this phase existed) did not monkeypatch `USER_PREFS_PATH` and, once `_set_theme()`
+  started persisting, wrote a stray `"gui:"` section into the real, git-tracked
+  `chatterbox/config/user_prefs.yaml` on a routine re-run — caught immediately via `git status`,
+  reverted, and the script fixed to redirect to a tmp path before importing `chatterbox.gui.app`.
+  Any future ad hoc script that ends up calling `write_gui_prefs()` (directly or via `_set_theme()`/
+  `_set_keyboard_layout()`) must do the same.
+
+---
+
+## 2026-07-24 — Light/dark theme (landscape-refactor plan, phase 1)
+
+- What: first implementation phase of the landscape GUI redesign
+  (`cc_prompt_gui_landscape_v2.md` Sec3.1) — "Thème" was a disabled stub since no second theme
+  table existed. This app uses classic Tk widgets throughout (not `ttk`), which has no automatic
+  system dark-mode support — every color needs to come from one explicit source of truth.
+  - New `chatterbox/gui/theme.py`: `THEMES["light"/"dark"]` color dicts (bg/fg, entry/button
+    colors, `select_color`, error/warning text, status-circle colors per UI state, battery low/ok),
+    plus `set_theme()`/`get_theme()`/`color()` accessors. `select_color` (the chip/radio "selected"
+    highlight) is deliberately identical across themes — it needs to stay recognizable regardless
+    of theme.
+  - `_apply_theme_option_db(window)` sets Tk's option database (`window.option_add`, per widget
+    class) once at window creation — covers every plain widget with zero per-constructor changes,
+    since none of them hardcoded a color already. The handful that did (status circle, error text,
+    battery threshold, chip `selectcolor`, the options-panel border, the model-picker "selected"
+    highlight) now read `theme.color()` directly instead of a literal.
+  - Theme switching is **live**, not a window restart (unlike the existing Langue mechanism) — a
+    cosmetic change doesn't need a model reload, and a restart would reset the in-progress text
+    input for no reason. `_retheme_widget_tree()` walks the already-built tree, **class-aware**
+    (mirrors `_apply_theme_option_db`'s per-class mapping — an early version applied the same bg
+    to every widget uniformly, flattening Entry/Button/Radiobutton back to the plain background
+    instead of their own contrasting color; caught by an ad hoc Tk smoke test, not by inspection),
+    followed by re-applying `lbl_status`'s error-red text and replaying the last known UI state so
+    the status circle re-derives its correct themed color instead of staying stuck. `lbl_battery`'s
+    fg is deliberately left to its next scheduled poll (≤30s) rather than tracked separately — a
+    harmless, self-correcting cosmetic detail.
+  - New "Thème" app-bar cascade (Clair/Sombre), mirroring the existing "Langue" cascade's
+    structure. `_set_theme` is exposed at module level (same pattern as `_refresh_orientation`) so
+    a later persistence phase can restore a saved theme on startup without `create_gui()` needing
+    to thread it through separately.
+  - `chatterbox/gui/settings.py`'s two hardcoded warning/error label colors now read
+    `theme.color()` too — Tk's option database is shared application-wide, so the Settings
+    Toplevel already inherits the rest of the theme for free, no per-widget changes needed there.
+- Files: `chatterbox/gui/theme.py` (new), `chatterbox/gui/app.py`, `chatterbox/gui/settings.py`,
+  `chatterbox/gui/i18n.py` (`theme_light`/`theme_dark` keys), `tests/test_theme.py` (new).
+- Why: `cc_prompt_gui_landscape_v2.md`'s Phase 2 plan, sequenced as its own phase first (theme
+  plumbing is a broad, mechanical pass touching many widget call sites, best isolated before the
+  menu-bar/input-row/emotion-bar work that also touches `app.py` heavily).
+- Verify: full test suite (291 passed/1 skipped — 6 new for the pure color-dict logic). New ad hoc
+  Tk smoke test confirms: the initial (light) theme applies via `option_add` with no widget-
+  specific code; switching to dark live recolors an existing Entry to `entry_bg` (not the plain
+  `bg` — this caught the class-unaware retheme bug above), the status circle to dark's idle color,
+  and `lbl_status`'s fg to dark's error color; switching back to light restores correctly; opening
+  Settings after a dark switch shows it already themed dark via the shared Tk option database.
+- Notes/gotchas: incidentally found and fixed — an older ad hoc smoke script (not part of the
+  pytest suite) assumed synchronous GUI startup and raced a fixed `sleep` guess against the
+  panel-build/teardown of the "Chargement du modèle…" placeholder from an earlier session's
+  backgrounded-model-load change, occasionally hitting `TclError: bad window path name` on a
+  widget mid-destroy. Fixed with a poll-until-ready loop instead of a longer sleep — will recur for
+  any other pre-existing scratch script that assumes startup is still synchronous.
+
+---
+
+## 2026-07-24 — Unify Piper siwis/upmc into one "Piper-tts (Français)" speaker list
+
+- What: first concrete step of a landscape-GUI redesign (`cc_prompt_gui_landscape_v2.md`, planned
+  in phases: discovery -> assessment -> plan -> implementation). While designing a Model ->
+  Language -> Speaker menu cascade, presenting siwis/upmc as two separate top-level "models"
+  didn't match the user's own mental model ("the two models are FastSpeech2 and Piper-tts... it
+  doesn't make much sense to have to select two models from the same bigger model"). Dropping
+  upmc to simplify was rejected: it's the only male voice (`pierre`), and losing it for no quality
+  gain (keeping only siwis) was judged not worth it.
+  - New `config_tts.yaml` field, `speakers:` — an ordered list of `{name, checkpoint_file,
+    speaker_id}` — lets one `tts_models[i]` entry span speakers backed by *different* onnx
+    checkpoints (siwis's own single-speaker checkpoint; jessica/pierre sharing upmc's). Siwis,
+    Jessica, and Pierre are now one entry, `"Piper-tts (Français)"`.
+  - `PiperBackend.describe_controls()` builds an ordinary `{name: index}` `speaker_list`/int
+    `default_speaker` from `speakers:` (Siwis=0, Jessica=1, Pierre=2) — the exact same shape
+    `gui/app.py` already renders generically for any multi-speaker voice. **Zero GUI changes**
+    were needed for a model whose speakers span multiple checkpoints.
+  - `PiperBackend._resolve_speaker()` (called from `tts()`) maps `gui_control["speaker"]` (now an
+    index into `speakers:`, not a raw per-voice speaker id) to the right checkpoint, swapping
+    `self._active_voice` via the existing `self._voices` cache (keyed by `checkpoint_file`,
+    unchanged mechanism) only if the resolved entry needs a different one. A `<SPEAKER=name>` text
+    tag overrides the GUI selection, same precedent as FS2's own tags overriding its GUI controls.
+    This reload only ever happens inside `tts()`, on the synthesis worker thread — a first-time
+    switch to a not-yet-loaded checkpoint costs a moment of synthesis time, never a GUI freeze;
+    switching back to an already-loaded one (or between Jessica/Pierre, same checkpoint) is
+    instant.
+  - `text_frontend.prepare()` no longer resolves `speaker_id` itself (needs `self` to swap voices,
+    which a pure text-transform function doesn't have) — now just returns the parsed
+    `<SPEAKER=name>` tag name, leaving resolution entirely to the backend.
+  - `en_US-lessac-medium` (already true single-voice) is untouched — `describe_controls()`/
+    `_resolve_speaker()` both fall back to the legacy per-voice `speaker_id_map` path when a model
+    config has no `speakers:` key at all, so this is purely additive to the contract.
+- Files: `chatterbox/config/config_tts.yaml`, `chatterbox/synthesis/backends/piper/backend.py`,
+  `chatterbox/synthesis/backends/piper/text_frontend.py`, `chatterbox/synthesis/backends/piper/
+  README.md`, `CLAUDE.md`, `docs/research/INTERCHANGEABLE_BACKENDS.md` (new §3.6), `tests/
+  test_piper_backend.py` (5 new cases), `tests/test_piper_describe_controls.py` (1 new case).
+- Why: user request, made while confirming direction for the landscape GUI redesign's Model/
+  Language/Speaker menu cascade.
+- Verify: full test suite (285 passed/1 skipped, 6 new). Also verified with real (non-mocked) runs
+  on this dev checkout, which happens to have `piper-tts` and all three real `.onnx` voices
+  installed: `PiperBackend.tts()` called directly for Siwis/Jessica/Pierre produced three distinct,
+  valid 22050 Hz mono wavs (1.7s/1.6s/1.8s for the same sentence — genuinely different synthesis,
+  not a cached repeat); a real `create_gui()` session (nothing mocked) showed the speaker dropdown
+  listing exactly `["Siwis", "Jessica", "Pierre"]`, defaulting to Siwis, and selecting each through
+  the real dropdown + `get_gui_controls()` + `registry.BACKEND.tts()` produced three
+  distinctly-sized wavs through the full real GUI code path, not just the backend in isolation.
+- Notes/gotchas: this is the first implementation step of the landscape redesign plan, not the
+  whole thing — the Model/Language/Speaker menu cascade itself, the emotion icon bar, the sliders
+  window, theme, and the rest of that plan's phases are still ahead.
+
+---
+
+## 2026-07-24 — English Piper voice, live "Langue" menu, AZERTY/QWERTY keyboard toggle
+
+- What:
+  - Added `en_US-lessac-medium` (single speaker, 22050 Hz, same `default_args` shape as
+    `fr_FR-siwis-medium`) as a 4th `config_tts.yaml` `tts_models` entry — no Piper backend code
+    changes needed (`PiperBackend`/`text_frontend.py` were already voice-agnostic:
+    `apply_custom_regex_rules` already defaults to `false`, so French regex data never touches
+    this voice). Each `tts_models[i]` entry now carries a `language` field (defaults to `"fr"`
+    when absent) — the new entry is the first with `language: "en"`.
+  - Made the GUI's "Langue" app-bar entry (previously a disabled stub) real: a config-driven
+    submenu (`config_tts.yaml`'s new `GUI_config.languages` list) that switches
+    `chatterbox/gui/i18n.py`'s locale (new `set_locale()`/`get_locale()`, plus a full `"en"`
+    string table mirroring every existing `"fr"` key) and restarts the GUI window onto the first
+    `tts_models[]` entry whose own `language` matches. Implemented as a full window rebuild, not
+    live re-labelling — nearly every widget's text is set once, as a literal `i18n.t(...)` call,
+    at creation time, with no existing refresh mechanism; `create_gui()` was split into a thin
+    restart loop wrapping the actual session logic (renamed `_run_gui_session()`), which now
+    returns the next `default_tts` index to reload with (or `None` to exit normally) instead of
+    just calling `window.mainloop()` and returning nothing.
+  - Added a QWERTY alternative for the Texte-mode soft keyboard's letter grid (previously
+    hardcoded simplified AZERTY only) — `app.py`'s `_LETTER_ROWS_AZERTY`/`_LETTER_ROWS_QWERTY`/
+    `_LETTER_LAYOUTS`, switchable live via a new Settings → Advanced radio pair next to the
+    existing Orientation control, independent of the language switch above (a QWERTY layout
+    doesn't imply English, nor AZERTY French). `_create_letter_keyboard()` was split so only the
+    letter grid (not the space/backspace/clear/play control row) gets destroyed and rebuilt on a
+    layout switch — both layouts are fixed at 3 rows so the control row's position never moves.
+- Files: `chatterbox/gui/i18n.py` (`set_locale`/`get_locale`, full `"en"` table,
+  `keyboard_layout_label` key), `chatterbox/gui/app.py` (`create_gui`/`_run_gui_session` split,
+  language cascade menu, `_LETTER_LAYOUTS`, `_populate_letter_grid`, keyboard-layout radios),
+  `chatterbox/config/config_tts.yaml` (English Piper entry, `GUI_config.languages`,
+  `GUI_config.keyboard_options.letter_layout`), `scripts/fetch_piper_voices.sh` (generalized from
+  one shared fr_FR `BASE_URL` to a per-voice `locale_path`, since the English voice lives under a
+  different HuggingFace path segment), `chatterbox/synthesis/backends/piper/README.md` (lessac
+  voice row), `tests/test_i18n.py` (new), `tests/test_gui_letter_layout.py` (new), `CLAUDE.md`,
+  `INSTALL.md`.
+- Why: asked directly — "add english model for Piper-tts and be able to change with the Menu
+  Language. There should also be the option to choose between qwerty and azerty on the touchscreen
+  keyboard."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 279 passed, 1 pre-existing skip (Windows).
+  Real end-to-end checks on the PC dev checkout: ran the actual `fetch_piper_voices.sh` (siwis/
+  upmc skipped as already-present-and-verified, lessac downloaded fresh and sha256-verified against
+  a real HuggingFace download); loaded+synthesized through the real `PiperBackend` with the new
+  English config entry (produced a valid 22050 Hz/16-bit/mono wav, `describe_controls()` correctly
+  omits `speaker_list` for this single-speaker voice); confirmed the language→model-index
+  resolution logic picks `tts_models[0]` for `"fr"` and the new lessac entry for `"en"` against the
+  real `config_tts.yaml`.
+- Notes/gotchas: switching language does **not** remember "last voice used for this language" —
+  it always restarts onto that language's *first* matching `tts_models` entry (e.g. switching
+  fr→en→fr lands back on FS2, not whichever fr_FR Piper voice was active before), a deliberate
+  simplicity trade-off over adding per-language state tracking. Keyboard-layout and orientation
+  overrides are both plain runtime state (module-level globals, matching `_orientation_override`'s
+  existing precedent) — neither persists across a process restart; only the language-driven
+  window restart preserves the *keyboard layout* choice (`_letter_layout_current` is deliberately
+  not reset each time `_run_gui_session()` reruns, unlike the letter grid's initial layout, which
+  is only read from `config_tts.yaml` the first time).
+
+---
+
+## 2026-07-24 — compare_runs.py: repeat-aware aggregation, CPU governor warning, n_repeats fix
+
+- What: the single-run version of `compare_runs.py` (previous entry) produced two contradictory
+  conclusions in a row — one single FS2 run measured ~2x slower than siwis, a different single
+  FS2 run measured roughly tied with it. Root cause, confirmed via `meta.json`'s `governor` field
+  (`research/profiling/__init__.py`'s `_read_governor()`, already recorded on every run,
+  just never surfaced): the Pi's CPU frequency governor is `"ondemand"`, not `"performance"` —
+  known source of run-to-run noise on this hardware. A user-run `--repeats 3` benchmark (33
+  sentences per backend, not 11) resolved it: FS2's RTF held steady at 0.30-0.40 and siwis's at
+  0.14-0.17 across all 3 repeats, no drift — confirming a consistent ~2x gap, with the single-run
+  "tied" result being the actual anomaly. Rewrote the tool around this finding rather than trusting
+  single-run numbers again:
+  - `compare()` now aggregates by `sentence_id` (mean +/- std across however many times a sentence
+    was repeated) instead of matching rows by raw position — position-matching quietly broke once
+    two runs used a different `--repeats` count, and gave no visibility into how noisy any single
+    number actually was.
+  - `print_report()` now prints each run's CPU governor first, with a loud warning when it isn't
+    `"performance"`.
+  - Module docstring now states explicitly that `total_synth_ms`/`rtf` already cover the *whole*
+    pipeline (front_end/acoustic/vocoder/write for FS2, synth/write for Piper) — real user
+    confusion (docs/research/CHANGELOG.md, previous entries) about whether HiFi-GAN/FlauBERT time
+    was being excluded, when it wasn't.
+  - Bug found only by running the new code against real 10-sentence data (not the small fake CSVs
+    in the unit tests): the summary's `n_repeats` read `present[0]["n"]` — whichever sentence_id
+    happened to be first in file order, almost always `"REF"`. `runner.py` deliberately places
+    `"REF"` at *both* the start and end of every `--repeats` pass (its own anchor/drift-check
+    design), so it has double the occurrence count of every other sentence (6 vs 3 for
+    `--repeats 3`) — the summary printed "n_repeat: 6" for an actual `--repeats 3` run. Fixed to
+    use the mode across all sentences instead. The original unit test for this used only 2
+    sentences (a 1-vs-1 tie that doesn't reproduce the bug); fixed to use 4, matching the real
+    benchmark's lopsided REF-is-the-only-outlier shape.
+- Files: `research/benchmark/compare_runs.py`, `tests/test_compare_runs.py` (rewritten
+  for the new aggregation shape, +3 tests: governor reporting, repeat-averaging, the n_repeats fix).
+- Why: asked directly, after being shown a `--repeats 3` comparison result and a live GUI
+  observation (FS2 at ~39% of audio length, siwis at ~14%) that contradicted this tool's own
+  earlier single-run conclusion — "suggest improvements to the benchmark comparison and fix the
+  program."
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 271 passed, 1 pre-existing skip (Windows).
+  Re-run live on the Pi against the user's real `profile/FS2_0`/`profile/siwis_0` (`--repeats 3`)
+  data: governor warning correctly fires (`"ondemand"` on both), per-sentence std values are small
+  relative to their means (confirms the repeats=3 data itself is internally consistent, not
+  further contaminated), and `n_repeat` now correctly reads `3` instead of `6`.
+- Notes/gotchas: the empirically confirmed, consistent result (10 sentences x 3 repeats, both
+  backends) is FS2 at mean RTF 0.325 vs. siwis at 0.154 — siwis takes roughly **half** FS2's total
+  synth time and total energy for the same 10-sentence benchmark set. Treat any *single*-repeat
+  benchmark comparison on this hardware as indicative only; `--repeats 3+` is what actually
+  produced a trustworthy, self-consistent result during this investigation.
+
+---
+
+## 2026-07-23 — Add compare_runs.py for side-by-side FS2 vs. Piper benchmark comparison
+
+- What: new `research/benchmark/compare_runs.py` — takes 2+ already-joined
+  `profile/run_.../` directories (`do_tts.py --default_tts <idx> --benchmark --join`) and prints a
+  per-sentence side-by-side comparison (`total_synth_ms`, `audio_duration_s`, `rtf`, `energy_wh`,
+  `peak_temp`, with a ratio column when comparing exactly 2 runs) plus an overall summary
+  (totals/means per run, "X is Nx the total synth time/energy of Y" for the 2-run case). `--out
+  FILE.csv` writes a combined wide-format CSV (one row per benchmark position, one column trio per
+  run/metric) for pivoting in a spreadsheet. Reads only `per_sentence_results.csv` — deliberately
+  not `per_stage_results.csv`, which stays FS2-shape-specific (`export_to_xlsx.py`'s
+  `_check_stage_shape()` guard exists for exactly that reason, not repeated here). Runs are
+  compared by row *position*, not by joining on `sentence_id` — the fixed benchmark set repeats
+  "REF" as both the first and last sentence, so `sentence_id` alone isn't a unique key; mismatched
+  row counts or `sentence_id`s between runs print a warning rather than silently misaligning rows.
+- Files: `research/benchmark/compare_runs.py` (new), `tests/test_compare_runs.py` (new,
+  5 tests against fake CSVs — no real profile run needed).
+- Why: asked directly, after the Piper integration/fixes above were done — "is there an efficient
+  way to run the benchmark to compare the performances of FS2 and Piper?" No dedicated comparison
+  tool existed; `export_to_xlsx.py` is bound to an external template and FS2-only by design.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 268 passed, 1 pre-existing skip (Windows).
+  Run live on the Pi against 3 real runs (FS2, siwis, upmc from the previous entry's testing):
+  2-run (FS2 vs. siwis) and 3-run (FS2/siwis/upmc) invocations both produced correct output —
+  e.g. "siwis is 0.48x the total synth time of FS2" / "0.46x the total energy" — and `--out`
+  produced a valid, correctly-shaped CSV (confirmed via `csv.DictReader` round-trip).
+- Notes/gotchas: an early version's "Overall" header printed `rows[0]["position"] + 1` (always
+  `1`, the *first* row's position) instead of `len(rows)` — caught immediately by actually running
+  it against real data (printed "Overall (1 sentences each)" for an 11-sentence run), not by the
+  unit tests (which used 1-2 fake rows, too small to expose an off-by-construction bug like this).
+  Fixed before shipping.
+
+---
+
+## 2026-07-23 — Piper GUI fixes from real-hardware feedback, and dropping the tom voice
+
+- What: follow-up to the Piper integration below, driven entirely by testing the real GUI in
+  landscape on the Pi 5 kiosk display (none of these were caught by the Tk repro script's mocked
+  backends, the pytest suite, or the CLI/`--benchmark` verification — all genuinely needed eyes on
+  the physical screen):
+  1. **Main window and Settings dialog both opened off-screen in landscape.** Root cause in both
+     cases: `.geometry("WxH")` sizes the *content* area only; the window manager draws its title
+     bar *outside* that (typically above it). The main window's fixed `440x800` (portrait-shaped)
+     config value, applied with no position and no screen-size awareness, let the WM's default
+     placement center a too-tall window with its title bar entirely above the visible screen. The
+     Settings dialog had the same problem from unset position, once its own content also grew
+     wide/tall enough (see the Piper integration entry below). Fixed properly, not by re-guessing
+     pixel margins: the main window now tries `window.attributes("-zoomed", True)` (X11 maximize)
+     first, falling back to a centered-with-margin geometry only if unsupported; the Settings
+     dialog is now explicitly positioned near the left edge with a top margin reserved for the
+     title bar, per explicit user preference over centering again.
+  2. **Piper's speed slider only had two selectable values.** `gui_generic_controls()`'s slider
+     builder defaults to `resolution=1` when a control doesn't declare one; `PiperBackend.
+     describe_controls()`'s three sliders (`length_scale`, `noise_scale`, `noise_w_scale`) all
+     omitted it (every FS2 slider sets this explicitly — this was purely an oversight, not a gap
+     in the generic contract). On `length_scale`'s 0.5-2.0 range that left only 0.5/1.5 reachable.
+     Fixed: `length_scale` now spans 0.0-2.0 in 0.1 steps (confirmed 0.0 doesn't crash — a
+     real-hardware check on the Pi showed it just produces a near-silent ~0.01s clip), the two
+     advanced noise sliders get 0.05 steps. Added a regression test asserting every Piper slider
+     declares a resolution.
+  3. **"Piper voices are super slow"** turned out not to be a bug: length_scale=1.0 (the default,
+     untouched slider) produces 4.249s for the benchmark's REF sentence on the Pi — essentially
+     identical to FS2's 4.203s for the same sentence. The "7.4s" originally reported was measured
+     with the slider pushed to its old max (2.0), which produces 7.721s — matching almost exactly.
+     Confirmed via FastSpeech2's own code (`predicted_duration = ... * d_control`,
+     `assets/models/FastSpeech2/model/modules.py`) that FS2's "Vitesse" slider already has this
+     same "higher = slower" direction — a pre-existing ambiguity, not something Piper introduced.
+     Rather than inverting Piper's value (which would make it *inconsistent* with FS2 instead of
+     fixing the real problem), fixed the shared `speed_label` i18n string to state the direction
+     explicitly (`"Vitesse (coef)"` → `"Vitesse (+ = plus lent)"`) — benefits both backends, zero
+     behavior change.
+  4. **`fr_FR-tom-medium` removed.** Real-hardware listening (user evaluation, all 3 voices heard
+     directly on the Pi) found it noticeably lower quality and slower to synthesize than either
+     `siwis` or `upmc`, with no offsetting benefit — not a bug, a deliberate choice given the
+     evidence. Removed its `config_tts.yaml` entry, its `fetch_piper_voices.sh` download, its two
+     `assets/models/Piper/fr_FR-tom-medium.onnx(.json)` files, and updated every doc/comment that
+     named it or counted "3 voices". `siwis`/`upmc` keep their existing indices (`tom` was last in
+     the list, so no renumbering).
+- Files: `chatterbox/gui/app.py` (window maximize/fallback geometry, button-wrap comment),
+  `chatterbox/gui/settings.py` (dialog position), `chatterbox/gui/i18n.py` (`speed_label` text),
+  `chatterbox/synthesis/backends/piper/backend.py` (slider resolutions, tom removed from
+  comments), `chatterbox/config/config_tts.yaml` (tom entry removed), `scripts/
+  fetch_piper_voices.sh` (tom removed, voice count now dynamic), `chatterbox/synthesis/backends/
+  piper/README.md`, `CLAUDE.md`, `INSTALL.md`, `docs/research/INTERCHANGEABLE_BACKENDS.md` (voice
+  count/mentions updated), `tests/test_piper_describe_controls.py` (new slider-resolution
+  regression test, comment fixes).
+- Why: the previous entry's GUI verification only covered a Tk repro script with mocked backends
+  at a dev-machine resolution — this entry is what actually running it on the real kiosk display
+  in landscape, and listening to all 3 voices, turned up.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 263 passed, 1 pre-existing skip (Windows).
+  Each fix pushed individually to the Pi and re-verified: `-zoomed`/settings position via user
+  confirmation on the physical screen ("window is fixed"); slider steps via
+  `describe_controls()` output inspection; tom's removal via `scripts/fetch_piper_voices.sh`
+  reporting "All 2 Piper fr_FR voices present" and a clean `pytest` run with both local voice
+  files deleted first.
+- Notes/gotchas: the Wayland-vs-X11 caveat from the main-window fix still applies —
+  `-zoomed` is an X11 attribute; Tk reaches the display via xwayland under the Pi's Wayland
+  session, and if a WM ever stops honoring it, the geometry fallback is what actually keeps the
+  window fully on-screen (size, not position, is the load-bearing part of that fallback).
+
+---
+
+## 2026-07-23 — Add Piper (fr_FR) as a second synthesis backend
+
+- What: implements `cc_prompt_piper_backend.md`'s Phase A (verification) and Phase B (integration)
+  — Piper becomes a real, selectable second TTS backend alongside FastSpeech2+HiFi-GAN, run
+  through the same `synth.py`/`cli.py`/`gui/app.py` layer, deliberately chosen as an acid test of
+  the interchangeable-backend contract (`docs/research/INTERCHANGEABLE_BACKENDS.md`) because it's
+  maximally different from FS2 along every axis (monolithic vs. two-stage, ONNX Runtime vs.
+  PyTorch, internal espeak-ng phonemizer vs. no G2P at all, no style dimension, per-voice speaker
+  maps vs. a shared `speakers.json`). Phase A confirmed live on the Pi 5: `piper-tts==1.5.0`
+  (OHF-voice/piper1-gpl fork, GPL-3.0-or-later) installs from a single prebuilt aarch64 wheel, no
+  source build, and needs neither `piper-phonemize` nor `espeakng-loader` — it bundles its own
+  compiled `espeakbridge.so` + `espeak-ng-data` directly in the wheel.
+  - Two real contract gaps found and fixed, both documented in full in
+    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 (not summarized twice here):
+    1. **`registry.BACKEND` was a hardcoded singleton**, unable to resolve `tts()`/
+       `describe_controls()` (identically named on every backend by design) once a second backend
+       existed. Fixed with a small resolving proxy (`_BackendProxy`, `activate_tts_backend()`) in
+       `chatterbox/synthesis/registry.py` — `synth.py` needed zero changes; `cli.py`/`gui/app.py`
+       each got one new line (activating the right backend before resolving `load_script`,
+       explicit rather than a hidden side effect of `load()`, a design reviewed and chosen over
+       the self-registering alternative before implementation).
+    2. **`gst_token_selection`/`speaker_selection` (`gui/app.py`) were only ever set, never
+       reset** — switching from FS2 (always today's startup default) to a style-less/single-
+       speaker Piper voice left both pointing at FS2's torn-down widgets instead of `None`. Not a
+       crash, but contradicted the compat shim's own documented intent; found only by driving a
+       real `tk.Tk()` instance through an actual backend switch (an ad hoc scratch script, not a
+       unit test — see INTERCHANGEABLE_BACKENDS.md §3.2 for why a mocked-widget test can't see
+       this class of bug). Fixed by resetting both to `None` at the top of every
+       `gui_generic_controls()` call.
+  - One additional bug found by actually running a synthesis, not by reading code: FS2's
+    `text_pipeline.parse_pronunciation_mistakes()` substitution *mechanism* is backend-agnostic,
+    but the *data* it substitutes (`custom_regex_rules.csv`/`url_regex_rules.csv`) is full of
+    FS2's own `{phonetic}` bracket syntax (`"test"` → literal `{t e^ s t}`, every URL rule) that
+    Piper's phonemizer can't interpret. Piper's own `text_frontend.py` calls it only when
+    `apply_custom_regex_rules: true` (default **false** in Piper's `config_tts.yaml` entries) —
+    kept as an opt-in A/B flag per the original prompt's intent, not removed outright.
+  - `chatterbox/gui/keyboards.py:play_and_clear_with_style()` crashed (`AttributeError`) if a
+    mood-shortcut key (`:D`/`:p`/`:(`/`:O`) was actually pressed while `gst_token_selection` is
+    `None` (a style-less backend active) — guarded to no-op the style part instead.
+  - `PiperVoice.synthesize_wav()` (the pinned 1.5.0 API) re-phonemizes internally regardless of
+    calling `.phonemize()` first, so `PiperBackend.tts()` times the whole call as a single
+    `"synth"` `profiling_rec.stage()`, not separate `"phonemize"`/`"synth"` stages as originally
+    sketched — avoids double-phonemizing every sentence for a stage split the public API can't
+    actually support without redundant work.
+  - **Three more real bugs, found only by actually running `do_tts.py --default_tts <piper_index>
+    --benchmark --join` on the Pi 5** — none caught by the 254-test suite, the real-weights
+    backend-level smoke test, or the Tk repro script, because none of those exercise the full
+    `cli.py` → `chatterbox.synth.synthesize()` → backend chain together with a real
+    `needs_vocoder: false` model selected via `load_models()`:
+    1. `cli.py:syn_audio()` reads `state.VOCODER_INDEX` unconditionally
+       (`getattr(state, "VOCODER_INDEX")`), but `load_models()`'s `needs_vocoder` guard (this same
+       session, added as an earlier "optional" step) skipped `state.update_selected_vocoder()`
+       entirely for a monolithic model, so the attribute was never set →
+       `AttributeError: module 'chatterbox.state' has no attribute 'VOCODER_INDEX'` on the very
+       first sentence. Fixed by keeping `state.update_selected_vocoder()` unconditional and only
+       guarding the actual `vocoder_loading_script()` call (the expensive part) — `gui/app.py`'s
+       equivalent path was already correct (it sets both state indices unconditionally at
+       `create_gui()` build time, before the loading work even starts), so only `cli.py` needed
+       this fix.
+    2. `chatterbox/synth.py`'s subtitle-writing path unconditionally reads
+       `audio_file_duration.npy` — FastSpeech2-specific per-symbol duration output its own
+       duration predictor writes, that no other backend produces — gated only by the top-level
+       `subtitles.create_file` flag, with no per-model capability check. Fixed by adding
+       `supports_subtitles` (new static per-model flag, same pattern as `needs_vocoder`/
+       `accepts_phoneme_input`) to the contract, defaulting `true` (every existing FS2 entry's
+       real behavior) and `false` on all 3 Piper entries; `synth.py` now ANDs it with
+       `subtitles.create_file`. The `"|"`-separated multi-utterance ("§") branch remains
+       unconditionally FS2-specific below this fix (raw `.WAVEGLOW`/`.AU` binary concatenation) —
+       documented as a known, deliberately out-of-scope remaining gap, not silently left for
+       someone to rediscover.
+    3. **`PiperBackend.tts()`'s own return value was wrong** — it returned
+       `os.path.join(out_dir, "audio_file")` (a file-path prefix), but `chatterbox/synth.py`'s
+       `needs_vocoder=False` branch treats whatever `tts()` returns as a *directory* and builds
+       the base wav path itself via `os.path.join(location_mel_file, "audio_file")` — exactly
+       matching FS2's own `tts()` contract (`fastspeech2_hifigan/backend.py:330` returns a
+       directory too). The double-join produced a nonexistent
+       `.../audio_file/audio_file.wav` and crashed every single sentence. This was a plain
+       implementation slip, not a misunderstanding — the correct contract was already documented
+       correctly in this same integration's own planning notes; the code just didn't match its
+       own docstring. The unit test written earlier (`test_tts_writes_wav_at_location_mel_file_plus_dot_wav`)
+       asserted the *wrong* (buggy) behavior and passed, because it encoded the same mistake as
+       the implementation — only a real run through the actual `synth.py` code, which has its own
+       independent opinion about the contract, could catch this. Fixed: `tts()` now returns
+       `out_dir` directly; the regression test (renamed
+       `test_tts_returns_output_dir_not_a_file_prefix`) now asserts against the shape `synth.py`
+       actually expects instead of mirroring the backend's own (previously wrong) output.
+  - **A 4th real bug, found by inspecting the actual `per_stage_results.csv` from the fixed
+    Piper run above, not by reading code**: `PiperBackend.tts()`'s `profiling_rec.stage("synth")`
+    call was silently getting dropped from every joined CSV. `research/profiling/
+    recorder.py`'s `Recorder.stage(name)` *does* accumulate any name generically into
+    `self.durations`/`self.timestamps` — but `Recorder.finalize()` only ever read back 4
+    **hardcoded** names (`front_end`/`acoustic`/`vocoder`/`write`) into the JSON record it writes;
+    a `"synth"` stage was computed correctly then thrown away at serialization, no error, no
+    warning. This is pre-existing profiling-subsystem behavior, not something the Piper
+    integration introduced — just the first thing to ever call `.stage()` with a 5th name.
+    Confirmed live: `front_end_ms: 0.0, acoustic_ms: 0.0, vocoder_ms: 0.0, write_ms: 74.4` in a
+    real per-sentence record, with the correctly-computed `total_synth_ms: 620.2` nowhere broken
+    down. Properly generalized (not just worked around for Piper), after weighing the two options
+    with the user given the blast radius on shared measurement tooling:
+    - `Recorder.finalize()` now also writes a generic, order-preserving `"stages"` list
+      (`[{"name", "t_end", "duration_ms"}, ...]`) alongside the 4 fixed fields, which stay
+      byte-identical for backward compatibility.
+    - `research/profiling/join.py`'s `build_per_stage_results()` now derives each
+      sentence's stage rows from that generic list via a new `_stage_windows()` (chaining each
+      stage's start from the previous stage's end, first stage from `t_synth_start`) — falling
+      back to the old fixed 4-stage chain only for a record with no `"stages"` field at all
+      (re-joining a `per_sentence.jsonl` written before this change existed, a use case the
+      module's own docstring already documents).
+    - `research/benchmark/export_to_xlsx.py` was deliberately **not** generalized — its
+      whole layout (`STAGES`, `PASS_SIZE * len(STAGES)` block-splitting, the `front_ms`/`acou_ms`/
+      `voco_ms`/`write_ms` columns) is bound to a specific external spreadsheet template
+      (`Chatterbox_Power_Measurements_final.xlsx`'s `P2P3_Synthesis` sheet, per this module's own
+      docstring), which redesigning wasn't asked for and isn't this integration's call to make.
+      Added a loud guard instead (`_check_stage_shape()`): a run with any stage name outside the
+      fixed 4 now raises a clear `SystemExit` telling the caller to read the CSVs directly, rather
+      than silently mis-slicing rows into misaligned blocks and corrupting the pasted data with no
+      error at all (confirmed live: exporting the Piper run above now fails loudly with exactly
+      that message, instead of producing a corrupted `.xlsx`).
+    Re-verified on the Pi after this fix: a fresh Piper siwis run now writes `"Wrote 11 sentence
+    rows, 22 stage rows"` (11 sentences x the real 2 stages, `synth`+`write` — not the old,
+    silently-wrong `44` = 11 x FS2's 4), with real `synth`/`write` rows (including energy/CPU
+    columns) in `per_stage_results.csv`; FS2 re-run afterward still produces `44` stage rows with
+    its original 4 names, confirming the generalization changes nothing for FS2.
+- Files:
+  - New: `chatterbox/synthesis/backends/piper/{__init__.py,backend.py,text_frontend.py,README.md}`,
+    `scripts/fetch_piper_voices.sh`, `tests/{test_registry_backend_proxy.py,
+    test_piper_describe_controls.py,test_piper_backend.py,test_gui_keyboards.py}`.
+  - Modified: `chatterbox/synthesis/registry.py` (proxy), `chatterbox/synth.py` (`supports_subtitles`
+    gate — the one genuinely necessary change to this file, documented per `cc_prompt_piper_backend.md`
+    §0 rather than avoided at all costs), `chatterbox/cli.py`/`chatterbox/gui/app.py`
+    (activation call sites, the `needs_vocoder` state-vs-load-call fix, the stale-global reset in
+    `gui_generic_controls()`), `chatterbox/gui/keyboards.py` (None-guard),
+    `chatterbox/gui/i18n.py` (2 new label keys), `chatterbox/config/config_tts.yaml` (3 new
+    `tts_models` entries: siwis/upmc/tom, each with `supports_subtitles: false`), `.gitignore`
+    (Piper voice files, matching every other vendored model's "weights not in git" pattern),
+    `research/profiling/recorder.py` (generic `"stages"` field), `research/
+    profiling/join.py` (`_stage_windows()`), `research/benchmark/export_to_xlsx.py`
+    (`_check_stage_shape()` guard), `tests/{test_profiling.py,test_export_xlsx.py}` (new coverage
+    for all three), `chatterbox/synthesis/backends/piper/backend.py` (the `location_mel_file` fix).
+- Why: `cc_prompt_piper_backend.md`'s explicit purpose — prove or disprove the interchangeable-
+  backend contract against a real second backend, not just the one it was extracted from.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 262 passed, 1 pre-existing skip (Windows).
+  Real-weights smoke test run locally (all 3 voices have a Windows wheel too, convenient for
+  dev-loop testing without SSH): loaded each voice, synthesized, confirmed wav format (22050 Hz/
+  16-bit/mono, matching FS2+HiFi-GAN's own output so the shared playback path needs no resampling
+  regardless of backend), confirmed `<SPEAKER=...>`/`<STYLE=...>` tags strip correctly and
+  discarded tags never leak into Piper's input text, confirmed FlauBERT never loads on the Piper
+  path. Ad hoc Tk repro script (`docs/research/INTERCHANGEABLE_BACKENDS.md` §3.2's convention) drove a
+  real `create_gui()` at 800×480 through FS2→siwis→upmc→tom→FS2, all 11 checks passing (no crash,
+  style grid/speaker dropdown present exactly when expected, mood-shortcut keys no-op cleanly).
+  **Then, on real Pi 5 hardware** (the step that actually caught the 3 bugs above):
+  `do_tts.py --default_tts 1 --benchmark --join` (siwis) — full 11-execution run, console shows
+  `TTS`/`Denoise` lines only (no `Vocoder` line, correctly), `Wrote 11 sentence rows, 44 stage
+  rows`; free-text single-sentence runs against `--default_tts 2` (upmc) and `--default_tts 3`
+  (tom), both producing real playback audio; `do_tts.py --benchmark --join` (FS2, no
+  `--default_tts`, i.e. the original default) re-run afterward and produces the same
+  `TTS`/`Vocoder`/`Denoise` pattern and magnitudes as before any of this session's changes —
+  confirms all three fixes together leave FS2 untouched.
+- Notes/gotchas: `piper-tts` is a whole optional *backend* selected by config (GPL-3.0-or-later),
+  not a runtime-guarded optional import like `smbus2`/`gpiozero` — deliberately **not** added to
+  `requirements-pi.txt`; install manually (`pip install piper-tts==1.5.0`) per `INSTALL.md`. Voice
+  files (`assets/models/Piper/*.onnx*`) are fetched by `scripts/fetch_piper_voices.sh`
+  (sha256-verified against `chatterbox/synthesis/backends/piper/README.md`), not committed.
+  `SynthesisConfig`'s field is `noise_w_scale`, not `noise_w` — the original integration prompt
+  had this wrong throughout its `config_tts.yaml`/`describe_controls()` sketches.
+
+---
+
+## 2026-07-22 — Background the startup model load in the GUI (startup-latency phase 2)
+
+- What: `chatterbox/gui/app.py:create_gui()` used to call `_select_tts_model()`/
+  `_select_vocoder_model()` for the default models synchronously, before any of the rest of the
+  window's widgets were built and before `window.mainloop()` -- so the window never painted until
+  FastSpeech2+HiFi-GAN had fully loaded (phase 1 already removed FlauBERT from that wait; this
+  phase removes the remainder). Fix: the startup call-site now only does the cheap part
+  immediately -- `state.update_selected_tts()`/`update_selected_vocoder()` (so anything below that
+  only needs to know which model is selected, e.g. `_apply_keyboard_capabilities()`, already sees
+  the right answer) and a "Chargement du modèle…" placeholder label in the options-panel's spot
+  (row 2) -- then lets the rest of `create_gui()` build every other widget (menu, entry, keyboard,
+  nav, etc.) exactly as before. The actual `loading_script()` calls for both models move to a new
+  background thread (`_start_initial_model_load()`/`_initial_model_load_work()`), scheduled via
+  `window.after(50, ...)` right before `mainloop()` -- the same pattern already used for warm-up
+  (`_start_warmup()`). Its completion (`_finish_initial_model_load()`, run back on the Tk thread via
+  the existing `post()`/`_pump()` machinery) destroys the placeholder, builds the real options
+  panel (`gui_generic_controls()`, which needs the just-loaded model's config), re-applies keyboard
+  capabilities, then chains straight into `_start_warmup()` -- which can no longer be scheduled
+  independently since it also needs a loaded model. `busy` goes `True` before a single further
+  widget is built (so `on_speak()`/`on_replay()`'s existing busy-guards block any click for the
+  whole load, with no gap), then briefly back to `False` right before `_start_warmup()`'s own
+  busy-guard sets it `True` again -- both happen synchronously in one Tk-thread callback with no
+  event processing in between, so there's no window for a click to slip through either transition.
+  `_select_tts_model()`/`_select_vocoder_model()` themselves are unchanged and still run
+  synchronously for an interactive Settings -> Advanced model switch -- only the startup path is
+  backgrounded.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py` (new `loading_model_label` string).
+- Why: continues the "FlauBERT takes forever, GUI appears a while later" fix from phase 1 -- with
+  FlauBERT lazy, FastSpeech2's 621 MB checkpoint was still the dominant remaining startup cost, and
+  it was still blocking `mainloop()` the same way FlauBERT used to.
+- Verify: `pytest tests/` (242 passed, 1 pre-existing skip, unchanged). Manually: launched
+  `do_tts.py --gui` with real weights and per-line wall-clock timestamps -- "TTS .../390000 loaded"
+  and "Vocoder .../g_00570000 loaded" only print ~4-5s after process start, and since those calls
+  only run from inside `_initial_model_load_work()`, itself only reachable via the
+  `window.after(50, _start_initial_model_load)` timer callback -- which Tk can only fire once
+  `mainloop()` is already pumping events -- the window is structurally guaranteed to have started
+  painting before that load completes, not just empirically observed to. No exceptions through the
+  full load -> options-panel-build -> keyboard-capability-refresh -> warm-up chain.
+- Notes/gotchas: if `_start_warmup()`'s own busy-guard or its call site ever changes, re-check the
+  `busy = False` right before `_start_warmup()` in `_finish_initial_model_load()` -- without it,
+  warm-up silently no-ops forever (busy stays `True` from the load, `_start_warmup()`'s `if busy:
+  return` fires immediately), which is exactly the bug this phase's implementation hit and fixed
+  before landing.
+
+---
+
+## 2026-07-22 — Lazy-load FlauBERT (startup-latency phase 1)
+
+- What: `FlaubertModel.from_pretrained()` (a ~1.4 GB checkpoint -- bigger than
+  FastSpeech2's own 621 MB checkpoint and HiFi-GAN's 3.7 MB combined) was being
+  loaded eagerly on every `do_tts.py`/`--gui` startup as part of
+  `get_model()`, even though the FlauBERT encoder it produces is only ever
+  used by `preprocess_styleTag()`
+  (`chatterbox/synthesis/backends/fastspeech2_hifigan/text_pipeline.py`) when
+  a free-text `<STYLE_TAG=...>` tag is present in the input -- a path the GUI
+  doesn't expose at all today (`gui_styleTag_control: False` in
+  `config_tts.yaml`) and rarely used from the CLI either. This was the
+  dominant contributor to the "FlauBERT takes forever to launch, GUI appears a
+  while later" complaint: in `chatterbox/gui/app.py:create_gui()`, model
+  loading (`_select_tts_model()`) runs synchronously before `window.mainloop()`
+  is reached, so the whole load -- FlauBERT included -- blocks the window from
+  ever painting.
+  Fix: `assets/models/FastSpeech2/utils/model.py`'s `get_model()` now wraps
+  the FlauBERT *model* in a `_LazyFlaubertModel` proxy that defers the actual
+  `from_pretrained()` checkpoint load until the first real forward call
+  (`__call__`/`__getattr__`); the tokenizer stays eager since it only reads
+  small vocab/merges files and is fast. No other call site changed --
+  `_LazyFlaubertModel` is a drop-in stand-in wherever `flaubert_model` used to
+  be passed around.
+- Files: `assets/models/FastSpeech2/utils/model.py`.
+- Why: cut everyday `do_tts.py`/`--gui` startup latency without touching the
+  free-text style-tag feature itself; see the earlier chat's analysis (not a
+  separate doc) for the full breakdown of file sizes / load path. This is
+  phase 1 of a multi-step plan; phase 2 (backgrounding the remaining model
+  load in the GUI so the window paints before `_select_tts_model()` finishes)
+  is still open.
+- Verify: `pytest tests/` (242 passed, 1 pre-existing skip, unchanged from
+  before this change). Manually: `do_tts.py` free-text with a plain sentence
+  no longer prints "Loading of FlauBERT"/"FlauBERT loaded" at startup; a
+  sentence starting with `<STYLE_TAG=...>` still prints those two lines (now
+  at the point of first use, inside that synthesis call) and produces the
+  correct `StyleTag: ...` output identical to before.
+- Notes/gotchas: only the FlauBERT *model* is proxied, not the tokenizer --
+  keep it that way unless tokenizer loading is ever shown to be slow too,
+  since a second lazy-proxy class isn't worth the complexity for a sub-second
+  load. The standalone `assets/models/FastSpeech2/synthesize.py` script (its
+  own `main()`, not part of the chatterbox daily-use path) calls the same
+  `get_model()` and gets the same lazy behavior for free.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 1/5: contract formalization
+
+- What: the user wants to be able to swap the FastSpeech2+HiFi-GAN backend for a
+  different TTS technology (possibly a monolithic model with no separate
+  vocoder stage) without rewriting the GUI. This is the first of a planned
+  5-phase refactor (see `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`
+  for the full design) that makes the *existing* backend conform to a generic
+  contract, proving it covers today's needs before any second backend exists.
+  No behavior change in this phase -- purely additive contract/config surface.
+  1. `SynthesisResult` (`chatterbox/synthesis/base.py`) gains `wav_path:
+     Optional[str] = None`. Convention: a two-stage backend (today's FS2+HiFi-
+     GAN) fills `mel_path`, leaves `wav_path=None`; a monolithic backend fills
+     `wav_path` directly, leaves `mel_path=None`. `chatterbox/synth.py`'s
+     `synthesize()` (phase 2) will branch on which one is set to decide whether
+     a vocoder call is needed at all.
+  2. `Synthesizer.describe_controls()`'s docstring formalizes the dict shape a
+     backend returns to drive a *generic* model-options panel: an ordered
+     `"controls"` list of `chip_grid`/`slider`/`text` descriptors (key, label
+     key, options/min/max/default, optional `hidden_pattern`/`advanced`
+     grouping) -- this will replace `gui_fastspeech2()`'s hand-written,
+     FS2-specific widget code in phase 4.
+  3. `config_tts.yaml`: two new static per-`tts_models`-entry capability flags,
+     decidable *before* a model loads (same convention as the existing
+     `gui_style_control`/`gui_control_bias`/`gui_styleTag_control` booleans) --
+     `needs_vocoder` (will hide the Settings -> Advanced Vocodeur picker for a
+     monolithic model, phase 5) and `accepts_phoneme_input` (will drive a new
+     `GUI_config.phoneme_fallback: "translate_labels" | "hide"` setting when a
+     model doesn't understand the Phonemes keyboard's raw phone-code syntax,
+     phase 5). Both default to `True` for the current FastSpeech2 model (no
+     behavior change).
+- Files: `chatterbox/synthesis/base.py`, `chatterbox/config/config_tts.yaml`.
+- Why: user request -- see plan file for the full context/design rationale,
+  including two research passes' findings on exactly what's FS2-specific today
+  (GUI duration labels/control panel, `AudioResult`, `cli.py` reporting, the
+  phoneme-keyboard's "Emmanuelle" custom phone-symbol alphabet with no G2P step).
+- Verify: full test suite (233 passed/1 skipped, unchanged -- nothing reads the
+  new fields yet).
+- Notes/gotchas: this is phase 1 of 5; phases 2-5 (synth.py pipeline, backend.py
+  schema, app.py generic panel, app.py keyboard/vocoder gating) are tracked in
+  the same plan file and will each get their own changelog entry.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 2/5: conditional vocoder + generic stage timing
+
+- What: second phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- makes
+  `chatterbox/synth.py`'s pipeline able to skip the vocoder stage entirely for a
+  monolithic backend, and duration reporting generic instead of 3 named fields.
+  1. `synth.synthesize()` reads phase 1's `needs_vocoder` config flag to decide
+     whether to call `BACKEND.vocoder()` at all -- a monolithic backend's
+     `tts()` call is expected to have already written a finished wav under the
+     same output-folder/`AUDIO_FILE_NAME` convention `BACKEND.vocoder()` itself
+     returns. Denoising stays universal regardless of pipeline shape.
+     Visual-smoothing's `.AU`-file read is now guarded by `os.path.exists()`
+     (matching the existing `gst_weights`/`path_au` exists-check pattern a few
+     lines down) since visual/facial-animation output is backend-optional
+     (`SynthesisResult.au_path`, already `Optional`).
+  2. `AudioResult.stage_durations` (dict, insertion-ordered) replaces the named
+     `tts_duration_s`/`vocoder_duration_s`/`denoiser_duration_s` fields --
+     `"vocoder"` is simply absent when `needs_vocoder` is false.
+  3. `chatterbox/cli.py`'s console reporting and `chatterbox/gui/app.py`'s
+     `_update_audio_info()` updated to read the generic dict (the latter is a
+     minimal compatibility shim for now -- `update_audio_infos()`'s own
+     hardcoded 3-argument signature gets replaced by a generic pooled-row
+     renderer in phase 4).
+- Files: `chatterbox/synth.py`, `chatterbox/cli.py`, `chatterbox/gui/app.py`,
+  `tests/test_synth.py`, `tests/test_gui_worker.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (234 passed/1 skipped -- one new test added
+  confirming "vocoder" can be legitimately absent from `stage_durations`).
+- Notes/gotchas: phase 3 (backend.py's `describe_controls()` schema + dict-keyed
+  `gui_control`) and phase 4 (app.py's generic control panel + duration rows)
+  are next; `update_audio_infos()`'s signature is intentionally still
+  FS2-specific until phase 4.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 3/5: describe_controls() schema, dict gui_control
+
+- What: third phase of the interchangeable-backend refactor (plan file:
+  `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `FastSpeech2HifiGanBackend.describe_controls()` now emits the full
+  `"controls"` schema mirroring exactly what `gui_fastspeech2()` used to
+  hand-build directly from `config_tts.yaml`: style chip grid (`TOKEN13-16`
+  placeholders hidden via `hidden_pattern`), style-intensity slider, pitch/
+  energy/speed sliders, 5 "bias" sliders, StyleTag free-text entry -- read from
+  the same YAML keys it already had (no new YAML schema for the controls
+  themselves).
+  1. `load_fastspeech2()` now keeps the `config_tts.yaml` model entry itself
+     (`self.tts_model_config`) alongside the parsed FastSpeech2 sub-configs
+     (`self.configs`) -- `describe_controls()` needs it.
+  2. `syn_fastspeech2()`'s `gui_control` unpacking changed from a fixed
+     12-element positional list to a dict keyed by the same "key"s
+     `describe_controls()` declares -- the fragile part of the old contract a
+     different backend couldn't conform to. Uses `.get(key, <yaml default>)`
+     throughout so an undeclared control falls back to the model's own
+     configured default instead of a `KeyError`, matching today's actual
+     behavior (a hidden-but-created slider/entry still contributes its
+     default value).
+  3. Bias sliders get an `"advanced"` flag from `gui_control_bias` -- phase 4's
+     generic panel will add one shared "advanced controls" reveal toggle for
+     these, where today there was none at all (`gui_control_bias: False` meant
+     permanently absent, no way to reveal from the GUI). A small, low-risk UX
+     improvement that falls out of building this generically, not a design
+     goal on its own.
+- Files: `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`,
+  `tests/test_backend_describe_controls.py` (new, 7 tests).
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (241 passed/1 skipped -- 7 new).
+- Notes/gotchas: phase 4 (`app.py`'s generic control panel + duration rows) is
+  next -- until then `gui_fastspeech2()` in `app.py` still builds the panel the
+  old, hand-written way and does NOT yet call `describe_controls()["controls"]`
+  at all; this phase only prepared the data the backend side will hand over.
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 4/5: generic control panel + duration pool
+
+- What: fourth (largest) phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`).
+  `gui_fastspeech2()` -- FS2-specific, hand-written widget code -- is replaced
+  by `gui_generic_controls()`, which renders the panel entirely from the
+  active backend's `describe_controls()`: a speaker dropdown (skipped for a
+  backend with no `speaker_list`) plus one widget per `"controls"` entry,
+  dispatched by `"type"` (`chip_grid`/`slider`/`text`) to small builder
+  helpers reusing the exact logic `gui_fastspeech2()` used to hand-write
+  (stable-sort-default-first, dynamic 4-row chip columns, `hidden_pattern`-
+  gated placeholders).
+  1. `get_gui_controls()` returns a dict (was a fixed 12-element positional
+     list) assembled from `_generic_control_widgets`.
+  2. `describe_controls()` gained `"default_speaker"` (the backend's own
+     configured default speaker index) -- `app.py` no longer reads
+     `config_tts.yaml`'s `default_args` directly at all for the speaker
+     dropdown, keeping it fully generic.
+  3. Bias sliders' `"advanced"` flag now drives one new shared "Contrôles
+     avancés" toggle in the generic panel -- reveals/hides them together
+     instead of `gui_control_bias: False` meaning permanently absent with no
+     way to show them from the GUI (a small, low-risk UX improvement, not a
+     design goal on its own).
+  4. Duration display: the 3 hardcoded tts/vocoder/denoiser labels are
+     replaced by a pool of 3 generic rows, assigned to whichever
+     `stage_durations` keys are present at synthesis time via one shared i18n
+     template (`stage_duration_label`) + a display-name lookup, instead of 3
+     separate pre-written i18n keys -- hides any pool row a synthesis didn't
+     use (e.g. no `"vocoder"` for a monolithic backend). The "Afficher les
+     données de synthèse" menu checkbox now tracks how many pool rows are
+     actually active so re-enabling it doesn't reveal an unused row.
+  5. `config_tts.yaml`'s `gui_script` now points at `gui_generic_controls`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`,
+  `chatterbox/synthesis/base.py`, `chatterbox/synthesis/backends/
+  fastspeech2_hifigan/backend.py`, `chatterbox/config/config_tts.yaml`,
+  `tests/test_backend_describe_controls.py`.
+- Why: see phase 1's entry above for the full user request/context.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (mocked `describe_controls()`, no pretrained weights) confirmed
+  pixel-identical FS2 layout (speaker dropdown defaults correctly, style grid
+  still 4 rows x 3 cols for 12 named tokens, all 9 sliders present with
+  matching ranges/resolutions/defaults), the new advanced-controls toggle
+  correctly shows/hides bias sliders, `get_gui_controls()`'s keys match what
+  `backend.py`'s `syn_fastspeech2()` reads, and the duration pool correctly
+  handles both a 2-stage (monolithic-shaped) and 3-stage (today's FS2) result.
+- Notes/gotchas: phase 5 (`needs_vocoder`-gated Vocodeur picker + phoneme-
+  keyboard fallback) is last -- until then the Vocodeur picker always shows
+  and the Phonèmes keyboard has no fallback behavior wired up yet even though
+  the capability flags/config setting exist (phase 1).
+
+---
+
+## 2026-07-22 — Interchangeable-backend GUI, phase 5/5: vocoder gating + phoneme fallback
+
+- What: fifth and final phase of the interchangeable-backend refactor (plan
+  file: `C:\Users\rphev\.claude\plans\reflective-shimmying-ember.md`) -- wires
+  up the two static per-model capability flags from phase 1 (`needs_vocoder`,
+  `accepts_phoneme_input`) to actual GUI behavior.
+  1. Settings -> Advanced's Vocodeur picker row is skipped entirely when the
+     selected TTS model's `needs_vocoder` is false (a monolithic model has
+     nothing to pick).
+  2. `_keyboard_emit()` checks the active model's `accepts_phoneme_input`:
+     when false, a phoneme keypress inserts the key's already-computed display
+     label (ordinary French spelling, e.g. "CH"/"ON") instead of the raw phone
+     code (this backend's own custom phone-symbol alphabet -- no G2P step
+     exists anywhere in this pipeline for a different backend to fall back
+     on). Per the user's explicit choice, the fallback itself is a config
+     setting (`GUI_config.phoneme_fallback`): `"translate_labels"` (default)
+     keeps the Phonemes keyboard usable with that substitution;
+     `"hide"` removes the Texte/Phonemes toggle and the phoneme keyboard
+     entirely, forcing Texte-only mode.
+  3. `_apply_keyboard_capabilities()`/`_refresh_keyboard_capabilities` (new,
+     mirrors the existing `_refresh_orientation` pattern) re-evaluates
+     `accepts_phoneme_input` whenever the TTS model is switched live from
+     Settings -> Advanced, not just once at startup.
+  4. Compat fix found via smoke testing: `chatterbox/gui/keyboards.py`'s
+     "Emmanuelle" phoneme keyboard has its own hardcoded mood-shortcut keys
+     (`:D`/`:p`/`:(`/`:O`) that resolve the literal global name
+     `"gst_token_selection"` via `app.py`'s `globals()` to temporarily
+     override the GST style selection around a quick styled phrase. Phase 4
+     removed that global entirely, which broke GUI startup outright (a
+     `KeyError` at button-creation time, not even requiring a keypress).
+     Fixed by keeping `gst_token_selection` as a compat alias, set to the
+     "style" chip_grid's `IntVar` whenever `gui_generic_controls()` builds
+     one (module-level default `None` otherwise, so a backend with no
+     "style" control degrades to a no-op on those keys instead of crashing).
+- Files: `chatterbox/gui/app.py`.
+- Why: see phase 1's entry above for the full user request/context. This
+  closes out the 5-phase refactor -- FastSpeech2+HiFi-GAN now conforms fully
+  to the generic contract; a future backend needs only its own module +
+  `config_tts.yaml` entry, no `app.py`/`synth.py` changes.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk
+  smoke test (two fake TTS models -- monolithic/no-phonemes vs two-stage/
+  phonemes-ok, mocked `describe_controls()`, no pretrained weights) confirmed:
+  Vocodeur picker absent for the monolithic model, present after switching to
+  the two-stage model; a phoneme keypress inserts "CH " for the no-phonemes
+  model and "s^ " after live-switching to the phonemes-capable one;
+  `phoneme_fallback="hide"` un-maps the Phonemes mode radio button entirely.
+- Notes/gotchas: `keyboards.py`'s "Emmanuelle" mood-shortcut keys and phoneme
+  symbol table remain FS2/GST-specific by design (documented, not touched) --
+  a future backend that also wants phoneme input support would need its own
+  keyboard layout/symbol table, not a reuse of this one.
+
+---
+
+## 2026-07-22 — Seventh feedback round: keyboard fills available height, denser style chips
+
+- What: real-hardware landscape screenshots (800x480-ish) showed the keyboard -- "the most
+  important aspect of the GUI" -- sitting small and anchored to the top of its column, with a lot
+  of dead space below it, while the Style chip grid read as comparatively large.
+  1. The landscape keyboard now grids with `sticky=tk.NSEW` instead of `sticky=tk.N`. The
+     previously-computed `natural_height` (via `grid_propagate(False)` + explicit `height=`,
+     sixth round) is still the *minimum* -- still protects against the earlier "huge letters"
+     regression -- but the frame now stretches to fill however much height its row span actually
+     has, instead of anchoring at its own natural minimum and leaving blank space below.
+     `keyboard_area`'s own weighted internal row (and each keyboard's own weighted button rows/
+     columns) grow to fill that, so the keys themselves get physically bigger.
+  2. Style chips: width capped at 9 characters (was sized to fit the single longest option name,
+     "RECONFORTANT"/"ENTHOUSIASTE" at 12 chars, forcing every chip that wide), smaller font (8pt)
+     and padding, with each chip's label bound to wrap to its own actual rendered width (the
+     existing letter-keyboard "Tout effacer" wraplength-on-`<Configure>` fix extracted into a
+     shared `_wrap_label_to_width()` helper) so a name past the cap wraps onto two lines instead
+     of forcing an oversized button or silently clipping.
+  3. Duration-info pool rows (added in the interchangeable-backend refactor, phase 4) now start
+     `grid_remove()`'d instead of gridded-with-blank-text -- they previously still claimed their
+     row height before any synthesis had run, leaving a dead, empty-looking gap and denying that
+     height to the options panel's own weighted row. Real-hardware feedback: "as the synthesis
+     data has been reduced, it may be useful to extend the upper window" -- this reclaims that
+     space for the options panel automatically via the existing weight mechanism.
+- Files: `chatterbox/gui/app.py`.
+- Why: seventh real-hardware feedback round (landscape, 800x480-ish kiosk screen).
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test at a real
+  800x480 landscape geometry confirmed: keyboard height now matches the full window height (480,
+  was capped at its ~263px natural minimum); duration pool rows unmapped before any synthesis, all
+  three mapped after a 3-stage result; a 12-char style-chip label is capped at `width=9` with a
+  nonzero `wraplength` instead of forcing a wide button.
+
+---
+
+## 2026-07-22 — Eighth feedback round: fixed 0.6 keyboard share both orientations, bigger chips
+
+- What: real-hardware feedback on the previous round's fixes. Landscape: "the right share of
+  keyboard seems to be between 1/2 and 2/3 of the screen. Disable the option to choose the share
+  in parameters and find an optimal share." Portrait: "the keyboard is very small compared to the
+  window... the share [is] far below the landscape orientation. Make the keyboard bigger." Also:
+  "Style boxes can be slightly bigger to match the range of the pitch and energy cursors" (the
+  previous round's chip-shrink read as a bit too aggressive once seen next to the sliders).
+  1. `_keyboard_landscape_fraction` (user-configurable via Settings -> Advanced, three presets
+     1/2 through 3/4) replaced by a single fixed module constant, `_KEYBOARD_SCREEN_SHARE = 0.6`
+     -- inside the requested range. The Settings -> Advanced picker section and
+     `_set_keyboard_landscape_fraction()` removed; i18n's now-unused `keyboard_width_*` keys
+     removed too.
+  2. Portrait now applies the *same* mechanism landscape already used (measure natural size with
+     `grid_propagate(True)`, then `grid_propagate(False)` + explicit width/height + `sticky=NSEW`)
+     but on **height** instead of width: the keyboard's height floor is now
+     `max(natural_height, window_height * 0.6)`, giving portrait the same ~60% share landscape
+     already had -- previously portrait's keyboard row had no weight of its own (unlike row 2, the
+     options panel), so it only ever got its own small natural minimum.
+  3. Style chips sized back up slightly: width cap 9->10, font 8->9pt, padding 2/4->3/6.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: eighth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  landscape keyboard width is exactly 0.6x window width; portrait keyboard height is exactly 0.6x
+  window height after a genuine orientation flip (matching landscape's ratio); the Settings
+  keyboard-width picker is gone; a 12-char style-chip label is capped at `width=10` with font
+  size 9.
+- Notes/gotchas: `_apply_current_orientation()` only recomputes sizing on an actual
+  portrait<->landscape flip (an existing, intentional optimization, not new) -- a same-orientation
+  resize (e.g. portrait window just getting taller) won't re-derive the keyboard's height from the
+  new dimensions until the orientation actually flips at least once. Not addressed here; flagged
+  in case a future round needs it (e.g. by also reacting to `<Configure>` size deltas within the
+  same orientation, not just flips).
+
+---
+
+## 2026-07-22 — Ninth feedback round: stale scrollregion, cropped Synthèse, chip columns per orientation
+
+- What: real-hardware feedback on the previous round.
+  1. Landscape: clicking "Contrôles avancés" made the checkbox itself disappear and "Biais de
+     hauteur" render partly out of frame. Root cause: `canvas.config(scrollregion=canvas.bbox(
+     "all"))` was computed once at build time and never recomputed -- revealing more rows below
+     the fold (via `grid()`/`grid_remove()`) grows `frame_options`' actual content height, but the
+     canvas's scrollbar range stayed capped at the original, smaller size, so the newly-revealed
+     rows became genuinely unreachable by scrolling. Fixed by binding `frame_options`' own
+     `<Configure>` to recompute the scrollregion whenever its rendered size actually changes (the
+     standard Tkinter scrollable-frame idiom) instead of a one-time computation.
+  2. Landscape: "Synthèse is partly hidden by 'Texte à saisir'." That label's own unweighted
+     column left too little of the row's remaining width for the weighted Synthèse-button column,
+     clipping it to "nthè". Shortened the label to "Saisie" per the user's own suggestion.
+  3. Landscape: "Rejouer and Mettre en veille buttons can be placed slightly upper." The status/
+     error label (row 13) permanently reserved a blank row between the duration info and those two
+     buttons even with nothing to show. Now `grid_remove()`'d whenever there's no error (`_set_ui_
+     state()`), matching the same hide-when-empty idiom already used for the duration-info pool.
+  4. Portrait: "Styles and cursors can take more space in vertical, there can be 4 styles per
+     row." The chip grid's "target ~4 rows" column computation (introduced for landscape, where
+     the keyboard shares screen width) was being applied in portrait too, where there's no such
+     constraint. `_build_chip_grid_control()` now takes a `landscape` flag (decided once at GUI
+     build time from the window's actual on-screen shape): landscape keeps the narrower ~3-per-row
+     computation, portrait uses a flat 4-per-row (the original, pre-adaptive default).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: ninth real-hardware feedback round.
+- Verify: full test suite (242 passed/1 skipped, unchanged). New ad hoc Tk smoke test confirms:
+  the canvas scrollregion's height grows after revealing the bias sliders; the "Saisie" label
+  renders; the status label starts unmapped, maps on an error, unmaps again back to idle; the
+  style chip grid renders 3 columns at a landscape-shaped (900x480) window and 4 columns at a
+  portrait-shaped (440x800) one.
+- Notes/gotchas: the chip-grid orientation choice is decided once at build time, not live-
+  reactive to a later manual orientation override in Settings -> Advanced -- consistent with this
+  app's "portrait is native, landscape is maintenance-only" design, not expected to flip mid-
+  session in normal use.
+
+---
+
+## 2026-07-22 — Sixth feedback round: landscape row-0 collision, keyboard label clipping
+
+- What: real-hardware screenshots (800x480-ish landscape kiosk screen) showed the entire
+  speaker/style options panel gone and "Mettre en veille" cut off past the bottom edge. Root
+  cause, confirmed with a reproduction script driving the real `create_gui()` at 800x480: the
+  landscape keyboard was gridded at a single row (`row=0`), but Tk's grid row height is shared
+  across every column at that row index -- placing the ~263px-tall keyboard there forced row 0 to
+  be ~263px tall for EVERY column, including column 0 where only a small battery label lives. That
+  stole the vertical budget from row 2 (the options panel, the only weighted row), collapsing it
+  from a healthy size to 7px, while the fixed rows below it (Texte a saisir, duree labels, Rejouer,
+  Mettre en veille) kept their natural size and overflowed past the window's bottom edge.
+  Fixed by spanning the keyboard across the same row range the main content stack already
+  occupies (`rowspan=18+index_gst_token`) instead of a single row, so its height gets absorbed by
+  row 2 (still the only weighted row in that span) instead of inflating row 0 alone.
+- Also fixed: the letter keyboard's "Tout effacer" button rendered as "out effacer" -- clipped
+  once the landscape width cap (Settings -> Advanced fraction) made its column narrower than the
+  label's natural width, same class of bug as the earlier GST-token chip clipping. Its control-row
+  buttons (Espace/Effacer/Tout effacer/Play) now bind `wraplength` to their own actual
+  `<Configure>` width, so labels wrap instead of clipping regardless of the chosen fraction.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `_create_letter_keyboard()`).
+- Why: sixth real-hardware feedback round (800x480-ish kiosk screen).
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk reproduction at a real
+  800x480 geometry confirmed: options-panel frame height went from 7px (collapsed) to 270px;
+  "Mettre en veille" (row 17) still ends exactly at the window's bottom edge (480), no longer past
+  it; "Tout effacer" now reports a nonzero `wraplength` (66px) matching its actual rendered width
+  instead of clipping.
+- Notes/gotchas: row 17 (Mettre en veille) still ends EXACTLY at the window's bottom edge with no
+  slack on an 800x480 screen -- any future addition to the fixed-row stack (another always-visible
+  label/button) will need either more vertical budget or to go behind a toggle, the same way
+  audio-info rows already do.
+
+---
+
+## 2026-07-22 — Fifth feedback round: landscape keyboard zero-height bug, style grid rows
+
+- What: user reported "both keyboards disappeared, whatever dimension we chose" (the landscape
+  keyboard-width fraction from the fourth round) and asked for the style chip grid to use 4 rows
+  so every style fits once the keyboard takes half the screen.
+  1. Root cause of the disappearing keyboards: `grid_propagate(False)` stops Tk deriving BOTH
+     width and height from a frame's children, not just width -- the landscape reflow
+     (`_apply_current_orientation()`) only ever called `.config(width=...)`, never `height=`, so
+     `keyboard_area` silently collapsed to ~0px tall the moment propagate was turned off,
+     regardless of the configured fraction (the fraction only ever changed the width that was
+     being applied to an invisible frame). Fixed by measuring `winfo_reqheight()` with propagate
+     still on (so it reflects the actual keyboard content) immediately before locking the frame's
+     size, and passing that as an explicit `height=` alongside `width=`.
+  2. GST-style chip grid: columns-per-row was a fixed 4, giving 3 rows for the 12 named tokens --
+     real-hardware feedback was that 4-wide rows overflowed the narrower options column once the
+     landscape keyboard ate half the screen's width. Chips-per-row is now derived from the named
+     (non-`TOKEN*`-placeholder) token count via ceiling division targeting 4 rows, giving 3
+     columns x 4 rows for the current 12-token config instead of 4x3.
+- Files: `chatterbox/gui/app.py` (`_apply_current_orientation()`, `gui_fastspeech2()`'s style
+  chip-grid block).
+- Why: fifth real-hardware/PC feedback round.
+- Verify: full test suite (233 passed/1 skipped, unchanged). New ad hoc Tk smoke test (mocked
+  model loading, no pretrained weights) confirmed: landscape `keyboard_area` height is 263px (not
+  ~0) after a resize + fraction change; the 12 named style chips land on grid rows 0-3 (4 rows)
+  across columns 0-2 (3 columns).
+- Notes/gotchas: `_CHIPS_PER_ROW` is no longer shared between the speaker dropdown and the style
+  grid -- it now only sizes the speaker dropdown's columnspan; the style grid computes its own
+  `_style_chips_per_row`. If the named-token count changes (a new style trained, or a placeholder
+  promoted to real), the column count reflows automatically to keep ~4 rows rather than needing a
+  manual constant update.
+
+---
+
+## 2026-07-21 — Power-timer presets: eliminate overlap between adjacent ranges
+
+- What: user clarified the ambiguous "timer before assombrissement" comment from the fourth
+  feedback round: the old preset ranges overlapped enough that a nonsensical combination (2min
+  dim + 30s screen-off) was directly pickable. `_DIM_PRESETS` now tops out at 2min,
+  `_DARK_PRESETS` starts at 2min and tops out at 30min, `_DEEP_PRESETS`'s shortest real option
+  (excluding "Désactivé"/0) now starts at 30min (same pattern applied to dark/deep for
+  consistency; added a 4h option since 5min/15min no longer fit that range).
+- Files: `chatterbox/gui/settings.py`.
+- Why: direct user clarification -- see the fourth feedback round's changelog entry for the
+  original ambiguous comment.
+- Verify: full test suite (233 passed/1 skipped, unchanged -- `validate_power_settings()`'s own
+  `>` check is untouched, still the actual enforcement at save time) plus a re-run of the settings
+  smoke test confirming the dark-timer dropdown reflects the new range with a custom loaded value
+  still correctly inserted ("20 min (actuel)" for 1200s).
+- Notes/gotchas: the exact boundary case (dim=2min AND dark=2min, both now valid preset picks) is
+  still only caught by save-time validation, not prevented by the preset ranges themselves --
+  narrowing how far off an accidental pick can be, not a replacement for that check.
+
+---
+
+## 2026-07-21 — Fourth feedback round: powerd reload bug, settings scroll, keyboard sizing
+
+- What: nine fixes from a fourth feedback pass, across three commits:
+  1. **Real daemon bug**: `PowerFSM.set_config()` only swapped the config dict -- brightness only
+     re-applied on the NEXT actual state transition, which might never come soon after a Settings
+     save (daemon usually already sitting in ACTIVE/DIM). Now re-runs the current state's entry
+     actions immediately (skipped in DEEP, terminal). 3 new FSM tests.
+  2. Preset-dropdown custom ("actuel") values now format in the same s/min/h units as the presets
+     (1200s showed as "1200 s (actuel)" next to "10 min"/"30 min" presets -- now "20 min (actuel)").
+  3. Settings dialog: scrollable content area + a FIXED footer (error text + Enregistrer/Annuler)
+     -- this round's added fields (timer dropdowns, percent scales, Avancé section) could push the
+     window taller than the actual screen with nothing to scroll it.
+  4. Added an inline warning when `chatterbox-powerd` isn't reachable -- "mettre en veille
+     ineffective"/"brightness doesn't change"/"enregistrer=annuler" most likely all trace to this.
+  5. Orientation radios now `indicatoron=0`+`selectcolor` (chip style) instead of a plain radio
+     dot -- likely why the current selection wasn't visibly registering.
+  6. Speaker chip grid replaced with a dropdown beside "Locuteur :" -- speakers don't change often
+     and some future backends may have only one voice; frees width for the style chip grid.
+  7. Added a "Tout effacer" (clear all) button to the letter keyboard -- only backspace existed.
+  8. **Root-caused** "keyboard huge/takes all the space" in landscape: `rowspan=20` pulled in the
+     options panel's own large weighted row height, inflating the keyboard's internal weighted
+     buttons vertically too, with no width cap at all. Replaced with natural-height/top-anchored
+     placement + an explicit pixel-width cap (`grid_propagate(False)`), now a configurable
+     Settings -> Advanced fraction (1/2 default, 2/3, 3/4), applied live.
+- Files: `chatterbox/power/fsm.py`, `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`,
+  `chatterbox/gui/i18n.py`, `tests/test_power_fsm.py`.
+- Why: direct user feedback after a fourth testing round.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 233 passed/1 skipped (230 + 3 new FSM
+  tests), unchanged otherwise. Multiple mocked smoke runs confirmed: FSM re-applies brightness
+  immediately in ACTIVE/DIM and leaves DEEP alone; settings dialog's scroll canvas and footer are
+  separate grid rows; a 1200s custom value shows as "20 min (actuel)"; the powerd warning appears
+  (this checkout has none reachable); the speaker dropdown shows AD first and updates the correct
+  underlying index; "Tout effacer" empties the entry; the landscape keyboard measures exactly
+  500px in a 1000px window at 1/2 default and exactly 750px after switching to 3/4 live.
+- Notes/gotchas: two items from this round were deliberately NOT implemented, pending user
+  input -- (a) an ambiguous "timer before assombrissement can't be lower than the time it takes
+  for the screen to dim" comment (asked the user for clarification rather than guess), and (b)
+  whether orientation override should rotate the WHOLE screen (terminal included) vs. just the
+  GUI's own layout (today's behavior) -- presented trade-offs, awaiting the user's decision.
+
+---
+
+## 2026-07-21 — Third feedback round: settings modal bug, chip defaults, landscape crop root cause
+
+- What: six fixes from a third feedback pass, split across two commits:
+  1. **Real bug**: the Réglages Toplevel was never made modal (no `transient()`/`grab_set()`), so
+     clicks landed on the main window behind it. Fixed with `transient()`+`grab_set()`+
+     `focus_set()`, `grab_release()` added to `close()`.
+  2. Power-timer sliders (assombrissement/extinction/veille profonde) replaced with preset
+     dropdowns scoped to each field's role; a non-preset loaded value shows as its own
+     "(actuel)" option rather than silently snapping.
+  3. Brightness sliders now show 0-100% instead of raw 1-255 -- conversion only at the GUI
+     boundary, `write_settings()`/powerd/backlight driver untouched.
+  4. Default speaker (AD)/style (NEUTRE) chips now render at grid position [0,0] via a stable
+     sort of `enumerate(...)` by "is this the default" -- the chip's `value` stays each item's
+     ORIGINAL index (the real model speaker ID / the index `keyboards.py`'s hardcoded mood-
+     shortcuts depend on), only draw order changes. Reverted the previous round's
+     `gst_token_list` YAML reorder (unnecessary now) back to alphabetical/stable order,
+     `gst_token_index` back to 8.
+  5. All 9 sliders now `sticky=W` -- previously centered in their cell, so position shifted
+     unpredictably between portrait/landscape.
+  6. **Root-caused** "Synthèse cropped in landscape": the options-panel canvas's one-time
+     `width=`/`height=` hint (440x400) was a hard grid MINIMUM regardless of weight -- in a
+     landscape window shorter than 400px, that minimum forced the window taller than the actual
+     screen, pushing everything below the options panel off-screen. Replaced with a
+     `<Configure>` binding on the surrounding frame that keeps canvas's size matched to whatever
+     the grid actually allocates it.
+- Files: `chatterbox/gui/settings.py`, `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after a third round of testing (mix of PC and Pi 5).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged
+  (`validate_power_settings()`/`write_settings()` signatures untouched). Two mocked smoke runs:
+  settings dialog holds the modal grab, a non-preset value shows as "45 s (actuel)", brightness
+  204/255 shows as 80% and saving at 50% writes back 128; AD/NEUTRE chips render at row=0/col=0
+  and are selected by default, sliders report `sticky="w"`, and the options canvas shrinks to
+  279px (well below the old 400px floor) in a short 350px-tall landscape window.
+
+---
+
+## 2026-07-21 — Orientation override + kiosk maintenance-recovery docs
+
+- What: the two items deferred from the second feedback round:
+  1. Settings -> Advanced gains an Auto/Portrait/Paysage orientation override (`_orientation_override`
+     module global + `_set_orientation_override()`/`_refresh_orientation` in `gui/app.py`). "Auto"
+     keeps the `<Configure>`-based detection; forcing Portrait/Paysage applies immediately and
+     makes further real resize events a no-op until set back to Auto.
+  2. `docs/KIOSK.md` gained a "Maintenance / recovery access" section (manual SSH-over-
+     Ethernet, config.txt dtoverlay restore, getty@tty1 re-enable steps) instead of an in-GUI
+     feature -- both radios and getty are boot-time config, not live-toggleable, and a kiosk-escape
+     control needs real access-control design not yet done.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `docs/KIOSK.md`.
+- Why: user asked for a persisted-feeling manual orientation override (kiosk windows may never
+  actually resize at runtime, defeating pure auto-detection) and a way back into a locked-down
+  kiosk Pi once `scripts/kiosk_finalize.sh` disables wifi/bluetooth/console login.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Two
+  mocked `create_gui()` smoke runs: forcing landscape/portrait moves `keyboard_area` with no real
+  window resize, switching back to Auto restores real detection; the radio buttons render in
+  Settings -> Advanced and clicking one sets the override correctly.
+- Notes/gotchas: the user picked the Settings -> Advanced *location* explicitly; persistence
+  wasn't separately confirmed, so this implementation defaulted to **runtime-only** (resets to
+  Auto on GUI restart, not persisted to `user_prefs.yaml`) as the smaller/reversible choice.
+  Flagged back to the user -- revisit if they actually want it to survive a restart.
+
+---
+
+## 2026-07-21 — Second real-hardware feedback round: landscape width, chip labels, apostrophe
+
+- What: six fixes from a second Pi/PC feedback pass (landscape crop persisted after the first
+  round's fixes; new issues surfaced):
+  1. Landscape keyboard column no longer weighted (was competing with the options panel for
+     extra width -- "keyboard takes a lot of space"); stays at natural/minimum width now.
+  2. Added a horizontal scrollbar to the options-panel canvas as an explicit fallback (still no
+     way to reach horizontally-overflowing content in landscape).
+  3. Speaker/style labels moved to their own row above the chip grid instead of a column to its
+     left -- frees horizontal space for the grid itself.
+  4. Chip width now computed from the longest label in each grid instead of a fixed `width=11` --
+     "RECONFORTANT"/"ENTHOUSIASTE" (12 chars) were being clipped.
+  5. Added an apostrophe key to the letter keyboard -- missing but essential for French.
+  6. Renamed the replay button "Lire" -> "Rejouer" -- was confusable with the keyboards' own "▶"
+     play button (that one re-synthesizes; this one only replays the last audio).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`.
+- Why: direct user feedback after testing on the Pi 5 a second time.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. Mocked
+  `create_gui()` smoke run confirmed: landscape keyboard column weight is 0 (was 1), the options
+  canvas has a horizontal scrollbar, style label/chip-grid are on consecutive (not shared) rows,
+  the "RECONFORTANT" chip is wide enough (13) not to clip, the apostrophe key inserts `'`
+  correctly, and the replay button reads "Rejouer".
+- Notes/gotchas: three items from this same feedback round are NOT yet addressed, deliberately --
+  they need more than a mechanical fix: (a) "Mettre en veille doesn't seem to be effective" --
+  most likely `chatterbox-powerd` isn't running/reachable on the user's Pi (the client silently
+  no-ops if it can't connect at GUI startup, and doesn't retry), not a code bug in anything
+  touched this session; needs the user to confirm powerd's status before further action. (b) A
+  settings toggle to force portrait/landscape manually (as a persisted override, not just live
+  `<Configure>`-based auto-detection) -- open design question on where it lives / how it's
+  persisted. (c) A "Maintenance access" entry to re-enable wifi/bluetooth/terminal once the kiosk
+  is boot-locked (`scripts/kiosk_finalize.sh`) -- a security-sensitive feature (`dtoverlay=disable-
+  wifi/-bt` in `config.txt` needs a reboot to take effect, isn't a runtime toggle; a kiosk-escape
+  terminal needs real access-control thought) that needs a design conversation, not blind
+  implementation.
+
+---
+
+## 2026-07-21 — PC-GUI feedback: menu reorg, settings auto-size, style/speaker defaults
+
+- What: five corrections from user testing on PC (not the Pi):
+  1. Moved "Réglages" from a physical main-window button (sat directly above the keyboard area)
+     into a "Paramètres" menu entry -- drops Settings from the switch-driven NavRing, deemed
+     acceptable since physical switches aren't wired/validated on any real deployment yet.
+  2. "À propos" moved to the far right (last) of the menu bar.
+  3. Removed the settings dialog's hardcoded `win.geometry("420x420")` -- didn't scale to actual
+     content (worse once the "Avancé" model-picker section existed); Tk now auto-sizes it.
+  4. Reordered `config_tts.yaml`'s `gst_token_list` so NEUTRE sits at index 6 (middle of the 3x4
+     chip grid) instead of 8, chosen to not disturb `keyboards.py`'s hardcoded mood-shortcut
+     indices; `default_args.gst_token_index` 8->6 to keep pointing at NEUTRE.
+  5. Confirmed (no change needed) that the default speaker (AD, `speaker_id: 4`) and default style
+     (NEUTRE) were already correct, against `assets/models/FastSpeech2/preprocessed_data/
+     ALL_corpus/speakers.json`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/gui/settings.py`,
+  `chatterbox/config/config_tts.yaml`.
+- Why: direct user feedback after testing the real-hardware-bugfix session's GUI on PC.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 230 passed/1 skipped, unchanged. A mocked
+  `create_gui()` smoke run confirmed: menu order/labels, no physical Réglages button, settings
+  dialog auto-sizes (562x461 observed vs. the old fixed 420x420), NEUTRE chip position + default
+  selection, AD default selection.
+- Notes/gotchas: item 1 is a deliberate accessibility trade-off (Settings no longer reachable via
+  the physical switch-driven NavRing) -- revisit if `user_prefs.yaml`'s `switches:` list is ever
+  populated for a real deployment.
+
+---
+
+## 2026-07-21 — Battery percentage display (DFRobot FIT0992 UPS HAT)
+
+- What: new `chatterbox/power/battery.py` reads battery voltage/percentage over I2C (i2c-1 @
+  0x36, a Maxim/Analog-Devices MAX17048-style fuel gauge) for the DFRobot FIT0992 Raspberry Pi 5
+  UPS HAT. `gui/app.py` polls it every 30s and shows a "🔋 NN%" label (row 0 -- the space freed up
+  when model selection moved into Settings -> Advanced), red under 20%, hidden entirely whenever
+  no reading is available (no hardware/no `smbus2` -- the normal case for any other checkout).
+  New `add_battery_info` config flag (default `True`).
+- Files: new `chatterbox/power/battery.py`, `tests/test_power_battery.py`; modified
+  `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`, `requirements-pi.txt` (comment
+  only -- `smbus2` now has a second consumer), `CLAUDE.md`.
+- Why: user request, mid-session, once the exact SKU (FIT0992) was confirmed. Register
+  addresses/scaling (VCELL @ 0x02, SOC @ 0x04, byte-swap-then-scale) were verified against the
+  exact reference driver DFRobot's own FIT0992 wiki page links to
+  (github.com/suptronics/x120x/bat.py) rather than guessed -- wrong I2C register addresses sent to
+  real hardware was an explicit thing to avoid here.
+- Verify: `tests/test_power_battery.py` (byte-swap pure-function round-trip against a known value;
+  `read_battery()` degrades to `None` on this checkout, which has no `smbus2` installed -- the
+  same guarded-optional-hardware posture as `chatterbox/power/amp.py`). GUI wiring verified with a
+  mocked `create_gui()` smoke run (shortened poll interval, `battery.read_battery` monkeypatched):
+  label starts hidden, shows the right text/color for a healthy and a low reading, hides again
+  once the reading goes back to `None`. Full suite: 230 passed/1 skipped (227 + 3 new).
+- Notes/gotchas: **not yet verified against the real FIT0992 on Pi hardware** -- the register
+  map/scaling is taken on faith from the vendor-linked reference driver (same chip family,
+  different product line: X1200/X1201/X1202 UPS shields, not the FIT0992 itself), not confirmed
+  against this exact board. First real-hardware run should sanity-check the reported percentage
+  against the board's own behavior (e.g. does it read ~100% on a freshly charged cell, does it
+  track a charge/discharge cycle sensibly) before trusting it further.
+
+---
+
+## 2026-07-21 — GUI real-hardware bug-report fixes (post Phase 3)
+
+- What: seven fixes from user testing of the Phase 3 refactor (below) on real Pi 5 hardware:
+  1. Column-weight loop covered one column past the widest actual content (max_buttons+2, not
+     +1), so a dead column soaked up width in landscape that should've gone to the options panel.
+  2. Speaker picker was still a single unwrapped row (only the GST style picker got the chip-grid
+     treatment) -- overflowed the canvas viewport with more than 2-3 speakers, no horizontal
+     scrollbar to reach the rest. Same wrapped chip-grid treatment as the style picker now.
+  3. Replay/Ranger/Réglages sat in grid rows *after* `keyboard_area` (16/18/19 vs its 17) -- on a
+     screen too short to show every row, they fell off-screen below the (now taller, two-
+     keyboards-in-one) keyboard, in both orientations. Reordered so keyboard_area is last.
+  4. Removed the menu's "Paramètres" entry (opened the identical dialog the physical "Réglages"
+     button already does; that button has to stay regardless -- it's in the switch-driven
+     `NavRing`, which the menu bar isn't reachable from).
+  5. Renamed "Ranger" -> "Mettre en veille" (states what it actually does: powerd put-away/dim).
+  6. `config_tts.yaml`'s `add_play_button` was `False` -- the earlier replay-button crash fix was
+     invisible since the button never showed up. Flipped to `True`.
+  7. Added a menu checkbutton to hide/show the 5 synthesis-duration labels (reclaims vertical
+     space; the status circle stays visible regardless, separate from the timing breakdown).
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `chatterbox/config/config_tts.yaml`.
+- Why: direct user bug reports after testing the Phase 3 refactor's 7 commits on a real Pi 5 --
+  landscape crop, missing buttons in both orientations, duplicate settings entry point, an
+  unclear button label, and an invisible feature toggle.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` -- 227 passed/1 skipped, unchanged. Each fix
+  had a one-off mocked-`create_gui()` smoke script (real Tk, no pretrained weights) run manually
+  during the session confirming the specific claim (dead column gone, speakers wrap into 2+ rows,
+  Replay/Ranger/Réglages rows all precede keyboard_area's row, menu entry counts/labels, toggle
+  visibility) -- not checked into `tests/`, same carve-out as the rest of `docs/GUI.md`.
+- Notes/gotchas: none of these seven has been re-verified on the Pi yet as of this entry (the
+  session ended mid-verification) -- flagged for the next session/user check. A separate,
+  not-yet-started request came in mid-session: a battery-percentage display for a DFRobot
+  FIT0xxx UPS/fuel-gauge HAT reportedly installed on the Pi 5 -- blocked on the user providing the
+  exact SKU (register map/vendor library unknown, didn't want to guess and send wrong I2C
+  commands to real hardware).
+
+---
+
+## 2026-07-21 — GUI responsive/accessible refactor (cc_prompt_gui_refactor.md, Phase 3)
+
+- What: seven incremental commits against `cc_prompt_gui_refactor.md`'s Phase 1 audit list (Phase
+  0 discovery found the reliability item, #9, already solved in an earlier session — worker
+  thread + busy-guard + exception-swallowing were already in place per `docs/GUI.md`):
+  1. Responsive grid: `window`/options-panel `columnconfigure`/`rowconfigure` weights replace the
+     fixed-pixel `grid_propagate(False)` pinning, so content tracks window size.
+  2. Fixed a real latent bug in the "Play" replay button (crashed on click before any synthesis,
+     ran unguarded on the Tk thread) by routing it through a new `Action.REPLAY` + `on_replay()`
+     on the same worker/busy-guard machinery as Speak.
+  3. Portrait/landscape reflow: a `<Configure>` binding moves the embedded keyboard area into a
+     second column in landscape (maintenance use) and back in portrait (native orientation).
+  4. GST-token style picker: one-radio-per-row column → a wrapped 4-per-row chip grid;
+     `TOKEN13`-`16` placeholders (unnamed/untrained LST directions) hidden behind an "Styles
+     avancés" toggle.
+  5. Added an app-bar menu (Paramètres/À propos wired up; Thème/Langue honest disabled stubs) and
+     `chatterbox/gui/i18n.py`, a French string table replacing a hardcoded French/English label
+     mix. Caught `tk.Menu()`'s default tearoff entry shifting every menu index.
+  6. Demoted the TTS/vocoder model-selector buttons out of the main window into a new "Avancé"
+     section of the settings dialog (dependency-injected via `open_settings(...,
+     build_advanced_section=...)`, mirroring `gui/input.py`'s no-import-cycle pattern) — kept
+     rather than deleted since Matcha-TTS/FastSpeech2s are still being benchmarked.
+  7. Added a Texte/Phonèmes segmented toggle and a new simplified-AZERTY soft letter keyboard
+     (`app.py:_create_letter_keyboard()`) alongside the existing phonetic grid — both keyboards
+     live in one `keyboard_area` container that landscape reflow (item 3) now repositions as a
+     unit.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/input.py`, `chatterbox/gui/settings.py`, new
+  `chatterbox/gui/i18n.py`; `CLAUDE.md` (repo map updated for the above).
+- Why: `cc_prompt_gui_refactor.md` — Objective 5 (accessible interface) of the project report,
+  which flagged the GUI as buggy/slow-to-wake/touchscreen-bound; user confirmed on real Pi 5
+  hardware mid-session that the portrait/landscape reflow (item 3) works correctly.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed/1 skipped, unchanged by every
+  commit. Each commit additionally has a one-off mocked-`create_gui()` smoke script (real Tk, no
+  pretrained weights, `registry.BACKEND` model-loading monkeypatched) run manually during the
+  session, not checked into `tests/` — same "needs real weights/Tk, not part of pytest" carve-out
+  `docs/GUI.md` already documents for the worker-thread responsiveness check.
+- Notes/gotchas: manual on-hardware test checklists were given per-commit in-session; only the
+  portrait/landscape reflow (item 3) has been confirmed by the user on a real Pi 5 so far. Chip
+  grid touch-target size, French menu label accent rendering, and the new letter keyboard still
+  need real-hardware eyes-on. `docs/GUI.md` itself was not updated in this session (still
+  accurate on the pre-existing worker-thread/dispatch architecture; the new pieces layer on top
+  without changing it) — flagged here in case it drifts further from `app.py`'s actual layout.
+
+---
+
+## 2026-07-21 — Kiosk finalization (step 3): cage decided, opt-in unattended-boot script
+
+- What: `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passed on real Pi 5 hardware (per the
+  user) — powerd alone, GUI alone, full integration, reliability/fault-injection, and power
+  measurement all green. That's the gate for step 3 of `README_power_gui_workstream.md`'s build
+  sequence: wrapping the now-known-good stack in an actual unattended kiosk boot.
+  - Compositor decision (previously open in the workstream README): **cage**, confirmed with the
+    user, matching what `deploy/systemd/chatterbox-gui.service` already assumed. Added `cage`+
+    `xwayland` to `apt-packages-pi.txt` (were missing — the unit referenced `/usr/bin/cage` but
+    nothing installed it).
+  - New `scripts/kiosk_finalize.sh`: the one opt-in script (not part of `setup_pi.sh`'s default
+    run) that commits a verified Pi to unattended kiosk boot — read-only EEPROM
+    `POWER_OFF_ON_HALT` check, backed-up/idempotent `config.txt`/`cmdline.txt` tuning
+    (`dtoverlay=disable-wifi/-bt`, `arm_freq_min=500`, quiet-boot tokens), disables
+    `getty@tty1.service` (which would otherwise race `chatterbox-gui.service`'s
+    `TTYPath=/dev/tty1` for the same tty — the standard systemd kiosk pattern), and enables+starts
+    both systemd units. Deliberately never writes EEPROM (same boot-config brick-risk posture
+    already established for the powerd task).
+  - New `docs/KIOSK.md` (what each step does + how to undo it); `INSTALL.md` gained a
+    "Finalizing the kiosk" section pointing at it.
+- Files: new `scripts/kiosk_finalize.sh`, `docs/KIOSK.md`; modified `apt-packages-pi.txt`,
+  `deploy/systemd/chatterbox-gui.service` (comment only — states cage as decided, not open),
+  `INSTALL.md`, `CLAUDE.md`, `docs/ARCHITECTURE.md` (also updated its stale "unverified on
+  hardware" notes for powerd/GUI now that T0-T7 passed).
+- Why: the bring-up protocol's own closing line names this as the explicit next gate once T0-T7
+  are green.
+- Verify: `bash -n scripts/kiosk_finalize.sh` (syntax) + manual review of the idempotent-append
+  logic (exact-line/whole-token matching, backup-before-write, never a blind `sed`/rewrite). Not
+  runnable from this checkout — no `pytest` coverage applies (all bash/systemd/boot-config, same
+  as the powerd task's systemd units) and no SSH access to the Pi this session.
+- Notes/gotchas: **not yet run on the Pi** — the user needs to run `scripts/kiosk_finalize.sh`
+  and reboot to confirm unattended boot actually works before this is considered done end-to-end.
+  Explicitly out of scope (see `docs/KIOSK.md`): any EEPROM *write* automation,
+  `scripts/hw_check.py` (T1/T2 tooling, already done manually), and wake→interactive boot-time
+  measurement (needs a real reboot + stopwatch, feeds `power.t_deep_s`).
+
+---
+
+## 2026-07-21 — Fix the first free-text prompt going invisible (warmup()'s stdout redirect race)
+
+- What: on real Pi 5 hardware, `python3 do_tts.py` (free-text mode) loaded models fine but then
+  looked hung — no `"Input Text (Ctrl+C to exit): "` prompt appeared. Typing blind and pressing
+  Enter worked anyway, and every prompt *after* the first one displayed correctly, which pinned
+  it down: a race between the background warm-up thread (started right before the first
+  `input()` call, per the existing "overlap warm-up with the user's first keystrokes" design) and
+  `input()`'s own prompt-printing. `warmup()` wraps its throwaway synthesis in
+  `contextlib.redirect_stdout(io.StringIO())` to keep it quiet -- but `sys.stdout` is one
+  process-wide object, not per-thread. If that redirect is still active (likely: warm-up takes
+  ~0.2-0.5s, and starts a hair before the main thread reaches `input()`) at the moment `input()`
+  writes its prompt, the prompt text lands in warm-up's throwaway buffer instead of the terminal.
+  `input()`'s stdin read is unaffected by stdout redirection, which is why blind-typing still
+  worked and why every subsequent prompt (warm-up long since finished) was fine.
+  Fix: print the prompt to `sys.__stdout__` (the real stdout stream, captured once at interpreter
+  startup -- `contextlib.redirect_stdout` only ever reassigns `sys.stdout`, never touches this)
+  instead of through `input()`'s own prompt argument, then call bare `input()` to read the line.
+- Files: `chatterbox/cli.py` (free-text loop in `main()`).
+- Why: bug report from real Pi 5 usage (once the earlier FastSpeech2-weights setup issue was
+  cleared) -- this predates this session's GUI/powerd work (same `contextlib.redirect_stdout`
+  pattern existed in the pre-refactor `_warmup_synthesis` closure too) but only actually got
+  exercised/noticed now.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` still 227 passed/1 skipped (no test exercises
+  the free-text interactive loop directly). The fix itself follows directly from documented Python
+  semantics (`sys.__stdout__` is never reassigned by `contextlib.redirect_stdout`/`sys.stdout =
+  ...`), not empirically re-tested against the race on real hardware from this session -- **not
+  re-run on the Pi**, no SSH access.
+- Notes/gotchas: **this fix is on `reorg/phase-0-path-anchoring`, not `master`** -- the Pi that
+  reported this bug is running `master`, which has none of this session's power-daemon/GUI-refactor
+  work and still has the pre-refactor `_warmup_synthesis` closure (same bug, different code shape).
+  This fix needs to reach `master` separately (either a small standalone fix there, or merging this
+  branch) before the Pi actually sees it — flagged to the user, not resolved unilaterally.
+
+---
+
+## 2026-07-21 — Harden setup_pi.sh's FastSpeech2 weight check (single-sentinel gave a false PASS)
+
+- What: on real Pi 5 hardware, `python3 do_tts.py` (and `--benchmark`) failed at model load with
+  `FileNotFoundError: assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`, even though
+  `scripts/setup_pi.sh` had reported "pretrained weights present: PASS" earlier. Root cause:
+  `fetch_and_unzip()`'s FastSpeech2 call only ever checked one sentinel file
+  (`output/ckpt/ALL_corpus/390000.pth.tar`) to decide both "skip re-download" and "download
+  succeeded" — but that Drive folder bundles `output/`, `config/`, and `preprocessed_data/`
+  separately, so a `gdown --folder` run that fetched the (large) checkpoint but missed the
+  (small) config/preprocessed_data files still passed the single-sentinel check and reported
+  success, deferring the actual failure to a confusing runtime traceback deep inside
+  `backend.py:load_fastspeech2()` instead of surfacing loudly at setup time.
+  Changed `fetch_and_unzip()` to accept multiple sentinels (all must exist to skip a re-download;
+  all must exist after extraction to report success) and pass it every file
+  `load_fastspeech2()`/`describe_controls()` actually open: the checkpoint, all three
+  `config/ALL_corpus/*.yaml` files, and `preprocessed_data/ALL_corpus/speakers.json`.
+- Files: `scripts/setup_pi.sh`.
+- Why: bug report from the first real `do_tts.py --benchmark` run on Pi 5 hardware (this repo's
+  power daemon / GUI refactor work so far had only been verified on this PC dev checkout).
+- Verify: `bash -n scripts/setup_pi.sh` (syntax) + a standalone bash unit-check of the new
+  multi-sentinel skip/report logic (present/missing/all-present cases) confirmed correct exit
+  codes; `.venv/Scripts/python.exe -m pytest tests/` still 227 passed/1 skipped (unrelated to this
+  bash-only change, run as a sanity check). **Not re-run on the actual Pi** — this session has no
+  SSH access to it.
+- Notes/gotchas: this fixes the check going forward, but does **not** retroactively fix the
+  reporting user's already-partial `~/chatterbox/assets/models/FastSpeech2/` — they need to either
+  delete that directory and re-run `./scripts/setup_pi.sh` (now that the sentinel is stronger, a
+  re-run will correctly detect the incomplete config/ and retry the whole folder download), or
+  manually download the Drive folder per `README.md` and place `config/`/`preprocessed_data/`
+  under `assets/models/FastSpeech2/` themselves. `fetch_and_unzip()` re-downloads the *entire*
+  Drive folder on any missing sentinel (no incremental/partial fetch), so a retry re-pulls the
+  large checkpoint too, not just the missing pieces — acceptable for a one-time setup step, not
+  optimized further since download bandwidth wasn't the bottleneck this was fixing.
+
+---
+
+## 2026-07-21 — Refactor the Tkinter GUI: worker thread, Tk-free synth(), input dispatcher, settings
+
+- What: per `chatterbox_gui_spec_v0.1.md` §9 (step 2 of `README_power_gui_workstream.md`'s build
+  sequence, after chatterbox-powerd). Fixed the GUI freezing the whole window for every synthesis
+  (it called `cli.syn_audio()` directly on the Tk thread, with no `try/except`):
+  - Extracted the Tk-free compute path out of `cli.py:syn_audio()` into new `chatterbox/synth.py:
+    synthesize()`; `cli.syn_audio()` (kept for CLI/benchmark, exact same signature/behavior) and
+    the GUI's worker thread both call it now.
+  - `chatterbox/gui/app.py`: synthesis+playback moved to a daemon worker thread
+    (`on_speak()`/`_work()`/`_done()`/`_fail()`), guarded by a `busy` flag and `try/except` around
+    both calls (exceptions now show an "error" UI state instead of reaching Tk's event loop). One
+    `ui_queue`/`post()`/`_pump()` marshaling queue carries both worker results *and*
+    powerd-forwarded switch input (unifying/replacing last session's bespoke
+    `_power_event_queue`).
+  - New `chatterbox/gui/input.py`: `Action` enum + dependency-injected `dispatch()` + a minimal
+    `NavRing` — the Speak button, `<Return>`, and the on-screen keyboard route through it now;
+    powerd-forwarded switch presses (`handle_power_input`'s old logging stub) are now fully wired
+    to real actions.
+  - New `chatterbox/gui/settings.py`: edits `chatterbox/config/user_prefs.yaml`'s power-timer/
+    brightness fields, range-validated, atomic `.tmp`+`os.replace` write, `powerd.reload()` on
+    save. Added `PowerdClient.send_reload()` (`chatterbox/power/client.py` had no reload method
+    yet).
+  - `cli.py`'s warm-up (previously a closure inside `main()`) is now module-level `cli.warmup()`
+    so the GUI can call it too, on startup, through the same busy/worker machinery as real
+    synthesis.
+- Files: new `chatterbox/synth.py`, `chatterbox/gui/{input,settings}.py`, `docs/GUI.md`,
+  `tests/test_synth.py`, `tests/test_gui_{input,worker,settings}.py`; modified `chatterbox/cli.py`
+  (shrunk a lot), `chatterbox/gui/{app,keyboards}.py`, `chatterbox/power/client.py`
+  (+`send_reload`), `chatterbox/config/config_tts.yaml` (+`add_settings_button`), `CLAUDE.md`,
+  `docs/ARCHITECTURE.md`.
+- Why: the spec's own audit anchor — a hung/blocking GUI and an unguarded synthesis call are the
+  two things standing between this demonstrator and being trustworthy for unattended/AAC use.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed, 1 skipped (same platform-gated
+  powerd IPC test as before). Unlike the powerd task, this checkout has real pretrained weights, so
+  two manual real-weights checks were actually run (not just written) while building this — see
+  `docs/GUI.md` "Testing" for how to reproduce:
+  1. `chatterbox.synth.synthesize()` called directly (no Tk) against loaded models — correct
+     `AudioResult`, `playback.AUDIO_EXAMPLE` set, matching the pre-refactor pipeline's output shape.
+  2. A scripted `create_gui()` run with a `window.after(50, tick)` counter running throughout a
+     real `dispatch(Action.SPEAK)` (real synthesis + playback, 5.37s total): **138 ticks, max gap
+     0.077s** — direct, quantitative proof the Tk thread never blocked during a real call. Window
+     closed cleanly afterward, no crash.
+- Notes/gotchas: found and fixed one real bug while writing `tests/test_gui_worker.py` — `except
+  Exception as exc: post(lambda: _fail(exc))` referenced `exc` from inside a lambda queued for
+  *later* execution, but Python implicitly `del`s an `except ... as name` binding at the end of the
+  except block, so the lambda raised `NameError` once actually run via `post()`/drain. Fixed with a
+  default-arg capture (`lambda exc=exc: _fail(exc)`) in both spots. Also deviated from the spec's
+  own §2.2 pseudocode, which has a `finally: post(_done)` after the playback `try/except` — taken
+  literally that re-queues `_done` right after `_fail` on the exception path, silently erasing the
+  error state ~30ms after showing it; implemented as mutually-exclusive `_done`/`_fail` posting
+  instead. Not verified on real Pi hardware (this is a PC dev checkout) or with a human physically
+  dragging/resizing the window during synthesis, or with real physical switches (none configured in
+  `user_prefs.yaml` yet) — see `docs/ARCHITECTURE.md` "Not yet implemented".
+
+---
+
+## 2026-07-21 — Implement chatterbox-powerd (kiosk power-state daemon)
+
+- What: built the `chatterbox-powerd` daemon per `chatterbox-powerd_spec_v0.1.md` §9's build task
+  — a new `chatterbox/power/` package (FSM, backlight, amp+watchdog, evdev/switch inputs, unix-
+  socket IPC server+client, config loader, `daemon.py` entry point), wired into the existing
+  pipeline at two points: `chatterbox/audio/playback.py`'s `play_audio()` now runs an amp-on→ack→
+  settle+preroll→play→tail→amp-off handshake around the existing platform playback, and
+  `chatterbox/gui/app.py` sends `activity`/`put_away` and receives forwarded switch presses (via a
+  logging-stub `handle_power_input()` — the real dispatcher is a separately specced, not-yet-
+  written component). Both integration points go through one shared `chatterbox.power.client`
+  singleton that degrades to a permanent silent no-op if powerd isn't reachable.
+  Also added: `deploy/systemd/{chatterbox-powerd,chatterbox-gui}.service`, a `scripts/setup_pi.sh`
+  install step (units + socket group, non-fatal if it fails), an `INSTALL.md` section, and
+  `docs/POWERD.md` (run/configure/test).
+- Files: new `chatterbox/power/{__init__,config,fsm,backlight,amp,inputs,ipc,client,daemon}.py`,
+  `chatterbox/config/user_prefs.yaml`, `deploy/systemd/*.service`, `docs/POWERD.md`,
+  `tests/test_power_{fsm,config,backlight,amp,ipc}.py`; modified `chatterbox/config/paths.py`
+  (+`USER_PREFS_PATH`), `chatterbox/audio/playback.py`, `chatterbox/gui/app.py`,
+  `chatterbox/config/config_tts.yaml` (+`add_put_away_button`), `requirements-pi.txt`
+  (+gpiozero/lgpio/evdev), `scripts/setup_pi.sh`, `INSTALL.md`, `CLAUDE.md`,
+  `docs/ARCHITECTURE.md`.
+- Why: `chatterbox-powerd_spec_v0.1.md` — an unattended AAC kiosk needs the display/amp to sleep
+  and the amp to never be left silently drawing power, without adding failure modes to the TTS
+  pipeline itself.
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` — 193 passed, 1 skipped (the one live unix-
+  socket test in `test_power_ipc.py`, `skipif`'d on Windows). Manually confirmed on this Windows
+  checkout: all `chatterbox.power.*` submodules import cleanly with no `gpiozero`/`evdev`
+  installed and degrade to logged no-ops (`amp.Amp._device is None`,
+  `backlight.Backlight.node is None`); `PowerdClient.request_amp()` returns `False` in ~15 ms (not
+  a blocking hang) when powerd isn't running; `playback.play_audio()` end-to-end with a synthetic
+  clip completes with no exception and no added latency versus before this change.
+- Notes/gotchas: **nothing here has been run on real Pi 5 hardware** — GPIO/backlight/evdev/
+  systemd/halt behavior (spec §5/§8/§10) is implemented per spec but entirely unverified; that
+  needs the spec's own §10 test pass on actual hardware (see `docs/ARCHITECTURE.md` "Not
+  yet implemented"). Deliberate deviations from the spec's literal text, all flagged in code
+  comments where they land: no real `chatterbox-powerd` console script (this repo has no
+  packaging, so it's `python -m chatterbox.power.daemon`, matching the spec's own systemd
+  `ExecStart`); both systemd units' `ExecStart` was changed from the spec's `/usr/bin/python3` to
+  the venv `scripts/setup_pi.sh` actually creates (`~/chatterbox/venv/bin/python3`) — the bare
+  system interpreter has none of `requirements-pi.txt` installed; the spec's prose "settle 80ms +
+  silence pre-roll"/"tail" are implemented as configurable sleeps
+  (`amp.settle_ms`/`preroll_ms`/`tail_ms` in `user_prefs.yaml`, not in the spec's original YAML
+  schema) rather than literal silence-audio injection; EEPROM/`config.txt` changes are documented
+  in `INSTALL.md` only, never auto-applied (boot-config edits carry a brick-on-mistake risk this
+  repo's tooling avoids elsewhere too); the client does not auto-reconnect after a connection
+  drop (v0.1 scope — restart the GUI/CLI process). The companion `GUI_Power_Controller_Architecture`
+  doc and the switch-press→GUI-action input dispatcher this spec references are not part of this
+  session — `handle_power_input()` in `chatterbox/gui/app.py` is a logging stub for that boundary.
+
+---
+
+## 2026-07-20 — Fix silent --gui override by --benchmark/--p4-sweep, found via Part A verification
+
+- What: running `docs/research/history/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
+  --export-xlsx` into one command (rather than the separate commands the protocol actually lists)
+  and got the benchmark, not the GUI, with zero indication `--gui` had been ignored. Root cause:
+  `chatterbox/cli.py`'s mode dispatch is an `if args.benchmark: ... elif args.p4_sweep: ... elif
+  args.gui: ...` chain — pre-existing behavior, unchanged from the original pre-reorg `do_tts.py`,
+  not a reorg regression — but silent, so nothing told the user which mode actually ran.
+  - Added an explicit stderr warning, printed before dispatch, whenever `--gui` is combined with
+    `--benchmark` or `--p4-sweep`: `[do_tts] --gui has no effect together with --benchmark --
+    running --benchmark instead. Launch the interface on its own with \`do_tts.py --gui\`.`
+    Behavior (which mode wins) is unchanged; only the silence is fixed.
+  - Updated `--gui`'s `--help` text to document the precedence.
+  - Added a note to `docs/research/history/REORG_VERIFICATION.md` clarifying `--gui`/`--benchmark`/`--p4-sweep` are
+    mutually exclusive top-level modes, not composable flags — run each protocol step as its own
+    separate command.
+- Files: `chatterbox/cli.py`, `docs/research/history/REORG_VERIFICATION.md`.
+- Why: confusing, silent flag-precedence behavior that real testing (the exact purpose of Part A)
+  surfaced immediately — worth fixing even though it predates the reorg, since the reorg's own
+  verification protocol is what prompted testing this combination in the first place.
+- Verify: `pytest tests/` — 130 passed (no test covers CLI argument dispatch directly). Manually
+  reproduced the user's exact command (`do_tts.py --gui --benchmark --repeats 1`) — the new
+  warning now prints first, before any model loading, then the benchmark runs exactly as before.
+- Notes/gotchas: this is a UX fix (visibility), not a behavior change — `--benchmark` still wins
+  over `--gui` when both are given, matching the pre-existing, pre-reorg precedence order
+  (`--benchmark` > `--p4-sweep` > `--gui` > free-text). If that precedence itself is ever felt to
+  be wrong (e.g. `--gui` should instead error out, or the flags should be an argparse
+  mutually-exclusive group), that's a separate, larger decision — not made here.
+
+---
+
+## 2026-07-20 — Reorg §4 sign-off: delete graphify-out/ and the two deprecated requirements files
+
+- What: `docs/research/history/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather
+  than deciding unilaterally (Phase 4 CHANGELOG entry below); this session brought them back and
+  got answers:
+  - `git rm -r graphify-out/` (this AI-assistant tool's own knowledge-graph cache, a build
+    artifact, not project source) and added `graphify-out/` to `.gitignore` so it doesn't return.
+  - `git rm requirements.txt minimal_requirements.txt` — both fully superseded by
+    `requirements-dev.txt`/`requirements-pi.txt`, kept "for reference" only, now deleted per
+    explicit sign-off. Updated every doc that referenced them as present files: `CLAUDE.md`'s
+    "Install gotchas", `INSTALL.md`'s "Why not the old requirements.txt?" section,
+    `requirements-dev.txt`'s own header comment (also fixed stale `Waveglow/`/`FastSpeech2/` paths
+    in that comment to `assets/models/Waveglow/`/`assets/models/FastSpeech2/`, missed during
+    Phase 1 since it's a comment, not a functional import), and `README.md`'s French install
+    instructions, which were pointing at the now-deleted `requirements.txt` (a real, user-facing
+    break, not just a stale comment).
+  - The `profile/` experiment directories (17 MB, tracked only because of a shallow `.gitignore`
+    rule): decision was to move them to a separate data/results repo, but **that migration is
+    flagged as follow-up work, not executed in this pass** — extracting history and re-pointing
+    anything that reads these paths deserves its own deliberate session, not a drive-by move
+    bundled into this cleanup.
+  - Also fixed a second stale `.gitignore` entry found while touching this file:
+    `profiling/__pycache__/` (from before Phase 2 moved `profiling/` to
+    `research/profiling/`) → `research/profiling/__pycache__/`.
+- Files: `.gitignore`, `CLAUDE.md`, `INSTALL.md`, `README.md`, `requirements-dev.txt`,
+  `docs/research/history/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
+  `minimal_requirements.txt`.
+- Why: closing out `docs/research/history/REORG_PROPOSAL.md` §4's three explicitly-deferred sign-off items, the
+  last open piece of the reorg plan.
+- Verify: `pytest tests/` — 130 passed (none of these files were imported by code, so this was
+  never expected to affect tests — confirmed anyway).
+- Notes/gotchas: the `profile/` experiment-directory migration is a real, tracked follow-up, not
+  forgotten — see `docs/research/history/REORG_PROPOSAL.md` §4's table for the exact decision and reasoning. If you
+  ever need the deleted `requirements.txt`'s training-environment pins, they're recoverable from
+  git history (any commit before this one).
+
+---
+
+## 2026-07-20 — Reorg Phase 4: assets/docs cleanup — the four-phase reorg is functionally complete
+
+- What: Phase 4 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan, the last one.
+  - `git mv` the five root demo WAVs (reclassified from delete-candidates to kept reference assets
+    in an earlier review pass) into `assets/audio/reference/`.
+  - `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; updated
+    `chatterbox/config/paths.py`'s `AUDIO_KEYBOARDS_DIR` constant to the new location — no code
+    change needed in `chatterbox/gui/app.py` (the actual home of `play_prerecorded_phone()`,
+    correcting `docs/research/history/REORG_PROPOSAL.md`'s original text which said `keyboards.py`), since it
+    already read this path via `paths.py`.
+  - `git mv tts_gui.png docs/assets/tts_gui.png`; updated the README image link.
+  - Created `hardware/.gitkeep` (git doesn't track empty directories).
+  - Full rewrite of `docs/ARCHITECTURE.md` (deferred since Phase 0's stale-banner
+    workaround) — every module path, function name, and `profiling/`/`benchmark/`/`FastSpeech2/`
+    reference updated to the post-reorg `chatterbox/`/`tools/`/`assets/models/` layout, technical
+    substance (pipeline stages, control-tag mini-language, profiling/benchmark design) preserved
+    unchanged. `README.md`'s path-bearing lines fixed the same way (Google Drive install targets,
+    profiling/benchmark module paths, the image link). `CLAUDE.md` needed no further changes
+    (already rewritten in Phase 3, verified still accurate). `INSTALL.md` needed no changes at all
+    — it never hardcoded the paths that moved.
+  - Brought the three items `docs/research/history/REORG_PROPOSAL.md` §4 flagged but didn't resolve
+    (`graphify-out/`, the `profile/` experiment directories, the two deprecated requirements files)
+    back to the user for an explicit keep/delete decision rather than deciding unilaterally.
+- Files: `assets/audio/{reference,prompts}/` (new, via `git mv`), `chatterbox/config/paths.py`,
+  `docs/assets/tts_gui.png` (new, via `git mv`), `hardware/.gitkeep` (new),
+  `docs/ARCHITECTURE.md`, `README.md`, `docs/research/history/REORG_PROPOSAL.md`.
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 4 (Goal 1: 30-second clarity) — the last phase of the
+  four-phase reorg plan.
+- Verify: `pytest tests/` — 130 passed. Confirmed `paths.AUDIO_KEYBOARDS_DIR` resolves to the new
+  location and a sample phoneme WAV exists there. Real end-to-end synthesis smoke test on Windows,
+  unchanged from Phase 3.
+- Notes/gotchas: **the reorg described across all four phases is now functionally complete**, but
+  two things remain genuinely unverified because no session on this machine could ever check them:
+  real interactive GUI testing (only a non-interactive, no-display `--gui` launch was possible —
+  see the Phase 3 entry) and Pi 5 hardware verification (no Pi access at any point across all four
+  phases). Treat the whole reorg as implemented and Windows-verified, not field-verified, until a
+  real Pi 5 run happens — this is explicitly called out in `docs/research/history/REORG_PROPOSAL.md` §7 as the one
+  verification step that can't be waived.
+
+---
+
+## 2026-07-20 — Reorg Phase 3: chatterbox/ package, class-based Synthesizer, GUI leak fix
+
+- What: Phase 3 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
+  real behavioral refactor (module-level globals → class-owned state), not just file relocation,
+  executed in full (not scoped down) despite touching the Tkinter GUI code this session has no way
+  to test interactively (no display) — an explicit, disclosed risk tradeoff, not an oversight.
+  1. **New `chatterbox/` package.** `chatterbox/synthesis/base.py` defines two ABCs, `Synthesizer`
+     (acoustic model) and `VocoderBackend` (vocoder) — two, not one as originally sketched, because
+     `config_tts.yaml`'s `tts_models`/`vocoder_models` are independently selectable today (the
+     GUI's separate TTS/Vocoder buttons) and a single bundled `load()` would break that.
+     `chatterbox/synthesis/registry.py` exposes `BACKEND`, a singleton
+     `FastSpeech2HifiGanBackend` instance.
+  2. **`loading_modules.py` + `synthesis_modules.py` → `backend.py` + `text_pipeline.py`.**
+     `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s `FastSpeech2HifiGanBackend`
+     class owns `tts_model`/`configs`/`flaubert_model`/`flaubert_tokenizer`/`vocoder_model`/
+     `generator`/`h`/`vocoder_path` as instance attributes instead of module globals, but keeps its
+     pre-Phase-3 method names (`load_fastspeech2`, `syn_hifigan`, etc.) so `config_tts.yaml`'s
+     string-based dispatch needs zero changes. Does **not** literally subclass either ABC (Python
+     can't have one class implement two same-named `load()` methods with different signatures) —
+     the ABCs are the target shape for a future from-scratch backend (Matcha-TTS), documented in
+     `base.py`'s own docstring. `text_pipeline.py` turned out not to be purely stateless as
+     originally planned: `preprocess_styleTag()` needs the loaded FlauBERT model, and
+     `parse_params_from_text()` was **re-reading `preprocess.yaml` from disk on every
+     `<SPEAKER=name>` tag** instead of reusing the already-loaded config — the same leak
+     `gui_utils.py:355` had for the GUI's speaker list, undiscovered until this file was read in
+     full. Fixed identically in both places: pass the loaded config/model state in as explicit
+     parameters instead of re-fetching it.
+  3. **`audio_utils.py` → four files.** `chatterbox/audio/playback.py` (`play_audio()` +
+     `AUDIO_EXAMPLE`, kept as a module attribute rather than eliminated since the GUI's "Play"
+     button is a zero-argument Tkinter callback), `chatterbox/audio/denoise.py` (the inline
+     `nr.reduce_noise()` call, now a real function), `chatterbox/synthesis/subtitles.py` (the five
+     subtitle/alignment functions, unchanged), `chatterbox/cli.py` (`syn_audio()` orchestration +
+     `butter_lowpass_filter()`).
+  4. **`gui_utils.py` → `chatterbox/gui/app.py`, `keyboards.py` → `chatterbox/gui/keyboards.py`,
+     `tts_utils.py` → `chatterbox/state.py`, `audio_postprocess.py` →
+     `chatterbox/synthesis/audio_postprocess.py`.** `gui_utils.py:355`'s leak (see point 2) is
+     closed: `gui_fastspeech2()` now calls `registry.BACKEND.describe_controls()["speaker_list"]`
+     instead of re-parsing YAML.
+  5. **`do_tts.py` → `chatterbox/cli.py` + a 3-line root shim.** All argparse/dispatch logic now
+     lives in `chatterbox/cli.py:main()`; the CLI contract (every flag) is unchanged.
+  6. **`config_tts.yaml`, the three regex-rule CSVs, and `paths.py` itself** moved into
+     `chatterbox/config/` (paths.py) and `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`
+     (CSVs).
+  7. `git rm do_normalize_txt.pl` (confirmed dead, see the Phase 1 entry below / `docs/
+     REORG_PROPOSAL.md` Sec4).
+  8. Preventive fix before the big refactor started: `gui_utils.py`'s
+     `os.path.join("audio_keyboards", ...)` hardcode now routes through a new
+     `paths.AUDIO_KEYBOARDS_DIR`.
+  - **Two more gaps found while executing this phase, same failure classes as Phases 1-2:**
+    - `paths.py`'s own `ROOT = Path(__file__).resolve().parent` broke the moment `paths.py` moved
+      into `chatterbox/config/` (two levels deeper) — caught immediately after the `git mv`, before
+      it could break anything downstream, and fixed: `ROOT = Path(__file__).resolve().parents[2]`.
+    - Phase 2 left six stale `-m benchmark.*` / `import audio_utils` references in
+      `research/benchmark/{p4_sweep,export_to_xlsx}.py`'s own docstrings/comments/error
+      messages, plus a stale monkeypatch target (`runner.audio_utils`) in `tests/test_benchmark.py`
+      — missed because Phase 2's cleanup checked for `-m profiling.*` patterns but not
+      `-m benchmark.*`. Found via a repo-wide grep sweep done specifically because this session was
+      asked to close out remaining Phase 2 concerns before starting Phase 3.
+- Files: new `chatterbox/` package (synthesis/{base,registry}.py,
+  synthesis/backends/fastspeech2_hifigan/{backend,text_pipeline}.py, audio/{playback,denoise}.py,
+  synthesis/{subtitles,audio_postprocess}.py, gui/{app,keyboards}.py, state.py, cli.py,
+  config/{paths,config_tts.yaml}.py, synthesis/backends/fastspeech2_hifigan/rules/*.csv); removed
+  `loading_modules.py`, `synthesis_modules.py`, `audio_utils.py`, `gui_utils.py`, `keyboards.py`,
+  `tts_utils.py`, `audio_postprocess.py`, `do_normalize_txt.pl`; `do_tts.py` reduced to a 3-line
+  shim; `research/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
+  `tests/{test_benchmark,test_audio_postprocess,conftest}.py` updated for the new import paths.
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
+  GUI) — the interface boundaries §5 called for, plus closing out the config-reopening leaks found
+  while implementing them.
+- Verify: `pytest tests/` — 130 passed (the `SyntaxWarning`s from `synthesis_modules.py`'s non-raw
+  regex escapes are also gone, an incidental behavior-neutral cleanup from rewriting that file with
+  raw strings). Real end-to-end runs on Windows against the fully refactored backend: plain
+  synthesis, `--benchmark --repeats 1 --export-xlsx` (benchmark → profiling → join → xlsx export in
+  one pass), and a timed `--gui` launch — no display to see it, but the entire GUI creation path
+  (model loading via the GUI buttons, the `describe_controls()`-based speaker list, every slider/
+  radio-button widget, the on-screen keyboard) ran with zero tracebacks and reached
+  `window.mainloop()`, blocking as expected until the timeout killed it.
+- Notes/gotchas: this is the strongest GUI confirmation available without an interactive display,
+  but **not equivalent to actually clicking through it** — real interactive GUI testing is still
+  owed, on top of the standing no-Pi-5-access caveat from Phases 0-2. See `docs/research/history/REORG_PROPOSAL.md`
+  Sec5 for the two design deviations (two ABCs not one; text_pipeline.py needing model state) in
+  full, and Sec7/Phase 3 for the complete checklist. One known remaining gap, not yet fixed: a
+  from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
+  `chatterbox/cli.py`'s `syn_audio()` changed to not assume one unconditionally — flagged as future
+  work for whenever a second backend actually lands.
+
+---
+
+## 2026-07-20 — Reorg Phase 2: move benchmark/profiling into tools/, plus fixing Phase 1's open follow-up
+
+- What: Two pieces of work.
+  1. Closed the one open follow-up from Phase 1 (gitignored FastSpeech2 config YAMLs hardcoding
+     `"FastSpeech2/…"` paths): `loading_modules.py` gained
+     `_repoint_legacy_fastspeech2_config_paths()`, called right after `preprocess_config`/
+     `train_config` load in `load_fastspeech2()`. It rewrites `preprocessed_path`/
+     `output_syn_path`/`ckpt_path` in memory to `ROOT/assets/models/<value>` whenever the value
+     still carries the legacy `"FastSpeech2/"` prefix — fixes this for a fresh
+     `scripts/setup_pi.sh` download, a manual install, and this checkout alike, with no YAML
+     hand-editing needed. Chosen over patching `setup_pi.sh` with a `sed` step because that would
+     only cover the Pi provisioning path, not a manual install following the same README
+     instructions.
+  2. Phase 2 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
+     research/benchmark/`, `git mv profiling/ research/profiling/`, `git mv
+     pmic_calibrate.py research/`. Added `tools/__init__.py`,
+     `research/__init__.py`, `research/__init__.py`. Updated every
+     `import`/`from` reference to the new dotted paths across `do_tts.py`, `audio_utils.py`,
+     `synthesis_modules.py`, the moved packages' own cross-imports, and all four
+     `tests/test_*.py` files that import them (existing aliases like `as profiling`/`as p4` kept,
+     so only import lines changed).
+  3. Found and fixed a second gap of the exact same class as Phase 1's (a directory-depth
+     assumption baked into a path constant, broken by nesting the directory deeper):
+     `research/profiling/__init__.py`'s `_PACKAGE_ROOT = os.path.dirname(os.path.dirname(
+     os.path.abspath(__file__)))` assumed `profiling/` sat exactly one level under the repo root.
+     Nesting it three levels deep silently broke the `subprocess.Popen(cwd=_PACKAGE_ROOT, ...)`
+     call that launches the background sampler. Fixed: `_PACKAGE_ROOT = str(paths.ROOT)`.
+- Files: `loading_modules.py`; `do_tts.py`, `audio_utils.py`, `synthesis_modules.py`; the `git mv`
+  of `benchmark/` → `research/benchmark/` and `profiling/` → `research/profiling/`
+  and `pmic_calibrate.py` → `research/calibration/pmic_calibrate.py`; new `tools/__init__.py`,
+  `research/__init__.py`, `research/__init__.py`; the moved packages' own
+  cross-imports and self-referential usage strings; `tests/test_benchmark.py`,
+  `tests/test_p4_sweep.py`, `tests/test_export_xlsx.py`, `tests/test_profiling.py`;
+  `docs/research/history/REORG_PROPOSAL.md`.
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 2 (Goal 4, monitoring isolated as maintenance-only); the
+  config-path fix closes the one thing Phase 1 explicitly left unresolved.
+- Verify: `pytest tests/` — 130 passed. Re-verified the config-path fix by reverting the local
+  YAMLs to their original stale, as-downloaded content and re-running a synthesis — confirmed the
+  in-memory remap (not a lingering hand-edit) does the work. Exercised every Phase 2 code path
+  directly: plain synthesis, `--profile` (a real `research.profiling` run directory was
+  written with correct `per_sentence.jsonl`), `--benchmark --repeats 1` (all 11 sentences),
+  `--join`, and `--export-xlsx` (the trickiest cross-import, `profiling.join` →
+  `benchmark.export_to_xlsx`) — all succeeded. Deleted the test-generated `profile/run_*`
+  directories afterward rather than leaving them in the tree.
+- Notes/gotchas: no Pi 5 hardware access this round — the sampler subprocess launch string is the
+  one Phase 2 change Windows genuinely cannot exercise (the sampler no-ops off-Linux before
+  reaching that code), so it's the highest-risk item to merge blind, per
+  `docs/research/history/REORG_PROPOSAL.md`'s retired amendment #8 note. Flagging the general pattern for Phase 3
+  (nests files even deeper, under `chatterbox/synthesis/backends/fastspeech2_hifigan/...`): grep
+  for other `dirname(dirname(...))`/`Path(__file__).parents[N]`-style constants across the whole
+  tree before executing it, not just in the files being moved that phase — this is the second time
+  a directory move has broken one.
+
+---
+
+## 2026-07-20 — Reorg Phase 1: move vendored model repos + weights under `assets/models/`
+
+- What: Phase 1 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan.
+  - `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/` — all four vendored
+    dirs, including their gitignored weight files (~3.7 GB: FlauBERT `pytorch_model.bin`,
+    Waveglow's `waveglow_NEB.pt`, HiFi-GAN's `g_00570000`), which the directory rename carried
+    along automatically (confirmed present at the new paths after the move).
+  - Re-pointed `config_tts.yaml`'s `folder` values (both TTS/vocoder entries and the
+    commented-out Waveglow one), `scripts/setup_pi.sh`'s `fetch_and_unzip` targets/sentinels,
+    `paths.py`'s vendored-dir + FlauBERT constants, and `.gitignore`'s FastSpeech2/hifi-gan-master/
+    Waveglow/flaubert patterns to the new `assets/models/…` prefix.
+  - Found and fixed two gaps only visible by actually running the pipeline post-move (not caught
+    by the original static-analysis audit):
+    1. `synthesis_modules.py` had a fourth CWD-relative `sys.path.insert(1,
+       './Waveglow/tacotron2')` that Phase 0's checklist missed (it only named the three inserts
+       in `loading_modules.py`). Post-move this broke `pytest tests/` collection with
+       `ModuleNotFoundError: No module named 'audio_processing'` — the exact "same-named modules
+       / sys.path insertion order" fragility already flagged in the proposal's §6, tripped for
+       real. Fixed: routed through `paths.WAVEGLOW_DIR / "tacotron2"`.
+    2. `assets/models/FastSpeech2/config/ALL_corpus/preprocess.yaml`
+       (`path.preprocessed_path`, `path.output_syn_path`) and `train.yaml` (`path.ckpt_path`) each
+       hardcode a literal `"FastSpeech2/…"` string, read as CWD-relative by
+       `FastSpeech2/model/modules.py` / `utils/model.py`. These YAMLs are **gitignored**
+       (downloaded from the Google Drive archives in `README.md`, never committed) — patched on
+       this checkout only, to unblock verification. **Not a real fix**: a fresh
+       `scripts/setup_pi.sh` run re-downloads the same stale-path archive and will hit this again.
+       Left as an open follow-up in `docs/research/history/REORG_PROPOSAL.md` §6 (needs a decision: patch
+       `scripts/setup_pi.sh` to `sed` these keys post-unzip, or make the FastSpeech2 code resolve
+       them relative to `paths.FASTSPEECH2_DIR` instead of trusting them as full paths).
+- Files: `paths.py`, `synthesis_modules.py`, `config_tts.yaml`, `scripts/setup_pi.sh`,
+  `.gitignore`, plus the `git mv` of `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/`
+  into `assets/models/`. (Also two gitignored, untracked local edits — see above — that do not
+  show up in `git status` and are not part of this commit.)
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 1 — code vs. non-code separation (Goal 5), lowest
+  coupling-risk directory move in the reorg.
+- Verify: `pytest tests/` — 130 passed (after fix 1). Real end-to-end smoke test on this Windows
+  checkout (after fix 2): FlauBERT, FastSpeech2 (`assets/models/FastSpeech2/390000`), and HiFi-GAN
+  (`assets/models/hifi-gan-master/FR_V2/g_00570000`) all loaded via the moved paths;
+  `audio_file.wav` produced with normal per-stage timing.
+- Notes/gotchas: no Pi 5 hardware access this round — Windows-verified only, per
+  `docs/research/history/REORG_PROPOSAL.md`'s retired amendment #8 note. The config-YAML issue (gap 2 above) is the
+  one item in this phase that isn't actually resolved yet, just worked around locally — flag it
+  before Phase 4 closes the reorg out, since it will bite a fresh Pi provisioning run exactly the
+  same way it bit this one.
+
+---
+
+## 2026-07-20 — Reorg Phase 0: repo-root-anchored path resolution (`paths.py`)
+
+- What: Phase 0 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
+  directory moves. Added a temporary root-level `paths.py` module (`ROOT =
+  Path(__file__).resolve().parent`, i.e. anchored to the file's own location, not the process's
+  CWD) and routed every CWD-relative path through it:
+  - `loading_modules.py`'s three `sys.path.insert(1, "./FastSpeech2")` / `"./hifi-gan-master"` /
+    `"./Waveglow"` calls now use `paths.FASTSPEECH2_DIR` / `paths.HIFIGAN_DIR` /
+    `paths.WAVEGLOW_DIR`.
+  - `synthesis_modules.py`'s three regex-rule file constants (`regex_file`,
+    `symbols_regex_file`, `url_regex_file`) now resolve via `paths.CUSTOM_REGEX_RULES` /
+    `paths.SYMBOLS_REGEX_RULES` / `paths.URL_REGEX_RULES` instead of bare CWD-relative filenames.
+  - `FastSpeech2/utils/model.py`'s hardcoded `modelname = './flaubert/flaubert_large_cased'`
+    (bypassed `config_tts.yaml` entirely, CWD-relative) now uses `paths.FLAUBERT_DIR`.
+  No directories moved yet — this phase only changes how existing paths are computed, so
+  `do_tts.py` still must be run with the repo as the working directory today; the payoff is that
+  Phase 1+'s directory moves become a matter of updating `paths.py`'s constants instead of hunting
+  down scattered CWD-relative strings.
+- Files: `paths.py` (new), `loading_modules.py`, `synthesis_modules.py`,
+  `FastSpeech2/utils/model.py`.
+- Why: `docs/research/history/REORG_PROPOSAL.md` §6 flagged CWD-relative `sys.path.insert` as the highest-risk item
+  in the whole reorg — every subsequent phase that moves `FastSpeech2/`, `hifi-gan-master/`,
+  `Waveglow/`, `flaubert/`, or the regex-rule CSVs would silently break without this fix landing
+  first.
+- Verify: `pytest tests/` (130 passed, unchanged). Real end-to-end smoke test on this Windows
+  checkout (real weights present locally): `printf 'Bonjour, ceci est un test.\n' | python
+  do_tts.py` — FlauBERT, FastSpeech2 (`390000`), and HiFi-GAN (`FR_V2/g_00570000`) all loaded via
+  the new anchored paths, text normalization (which reads the regex-rule CSVs) ran correctly, and
+  `audio_file.wav` was produced with normal timing (TTS 0.291s / vocoder 0.507s / denoise 0.117s
+  for the one sentence).
+- Notes/gotchas: no Pi 5 hardware access for this session, so this phase is **Windows-verified,
+  Pi-unverified** — real hardware validation is still needed before this is considered fully safe,
+  per `docs/research/history/REORG_PROPOSAL.md`'s note on the retired "Pi-mandatory" amendment. `paths.py` is
+  intentionally a temporary root-level module (not yet under a `chatterbox/` package, which doesn't
+  exist until Phase 3) — see the proposal doc for the full phased plan.
+
+---
+
+## 2026-07-17 — Compare the two full P4 sweeps: reproducible P_idle, thermal-dependent k
+
+- What: ran a full 6-point P4 sweep twice back-to-back on real Pi 5 hardware
+  (`profile/P4 - First Full try/`, `profile/P4 - Second Full try/`, ~40 min apart, same
+  `calibration.json`/governor/brightness/duration/sentence set). Compared them point-by-point
+  to check the experiment is reproducible before trusting either fit.
+  - **Idle/low load (cadence 0, 1, 2/min) reproduces tightly**: `p_use_profiler_w` and
+    `p_use_meter_w` agree within ≤1.7% between the two runs — the protocol itself is solid.
+  - **A real thermal effect at higher load (cadence 5, 10, max)**: run 2 measured
+    consistently *cooler* (`peak_temp` −3.4% to −4.9%) and drew correspondingly *less* power
+    (`p_use_profiler_w`/`p_use_meter_w` −4% to −7.5%) than run 1 at the same cadence points,
+    with `mean_arm_freq_khz` essentially identical between runs (rules out frequency scaling
+    as the cause) and `amp_mean_w` barely moving (rules out the amplifier). Consistent with
+    CPU leakage current dropping with die temperature at a fixed clock/workload, not a
+    protocol or code fault — `n_utterances`/`duty_active` matched to 3 decimals between runs,
+    so the two runs drove genuinely identical workloads.
+  - Consequence: the fitted **intercept `P_idle` is reproducible** (profiler 5.549 W vs
+    5.590 W, meter 5.437 W vs 5.454 W — within ~1%), but the fitted **slope `k` is not**
+    (profiler 0.190 vs 0.139 W/(utt/min), meter 0.231 vs 0.177 W/(utt/min) — ~25-30% apart)
+    despite both individual fits reporting R² ≥ 0.996. A single sweep's R² does not capture
+    this run-to-run thermal variance.
+  - Pooled fit across all 12 points (both runs together):
+    **profiler P_idle=5.570 W, k=0.164 W/(utt/min), R²=0.955**;
+    **meter P_idle=5.446 W, k=0.204 W/(utt/min), R²=0.963** — still clears the 0.95 flag
+    threshold and matches each run's individual intercept closely; recommended as the working
+    number over either single run's `k`.
+  - Also noted (same sign pattern in both runs, so systematic not noise): `discrepancy_pct`
+    is positive (profiler > meter) at low cadence and negative (profiler < meter) at high
+    cadence in both runs — likely the 4-point static-load PMIC→meter calibration curve
+    mildly under/over-fitting outside its calibration range, not a bug.
+- Files: no code changes; analysis of `profile/P4 - First Full try/` and
+  `profile/P4 - Second Full try/` (`sweep_summary.csv`, `meta.json`, `per_sample.csv` row
+  counts). Both directories' `sweep_paste.xlsx` already use the fixed 16-column layout from
+  the entry below.
+- Why: before trusting a single sweep's `P_use = P_idle + k·N` formula for the daily energy
+  budget, wanted to confirm it's reproducible run-to-run rather than a one-off fit.
+- Verify: per-point diff table computed directly from both `sweep_summary.csv` files;
+  `mean_arm_freq_khz` cross-checked to rule out frequency scaling; pooled fit computed by
+  concatenating both runs' rows and reusing `benchmark.p4_sweep._linear_fit()` unmodified.
+  Sampler health double-checked (~6000 `per_sample.csv` rows at 10 Hz over 600 s, no dropped
+  samples, `throttled_any=False`) at every point in both runs.
+- Notes/gotchas: **the master `P4_Conversational` sheet's fixed 6-row template (one block per
+  sweep) can only hold one run's block as literal values at a time.** To merge both runs into
+  one more-robust estimate: either (a) stack both 6-row blocks (12 rows total) and re-point
+  the sheet's fit formulas at the combined range, or (b) if the sheet only accepts exactly 6
+  rows, average each matching cadence pair row-by-row before pasting — but (b) hides exactly
+  the signal that matters here (that `k` is thermal-state-dependent), so (a) is preferred if
+  the sheet can be adapted. Either way, the ~25-30% k spread should be flagged in the sheet
+  (e.g. a note on the cadence 5/10/max rows) rather than silently presenting a single run's
+  `k` as the final number. If a third sweep is run, record ambient/room temperature (not just
+  screen brightness) alongside each point, and consider randomizing cadence order across
+  sweeps to decorrelate within-sweep thermal soak from the cadence variable itself.
+
+---
+
+## 2026-07-17 — Fix `sweep_paste.xlsx` column layout (didn't match the master tracking workbook)
+
+- What: the first full real sweep (`--cadences 0,1,2,5,10,max --duration 600`, all 6 points,
+  ~1h on real Pi hardware) completed cleanly end-to-end with sane data throughout (peak temp
+  rising 49→79°C with load, `throttled_any` false at every point, `cadence_achieved` tracking
+  `cadence_requested` closely up to 5/min and visibly saturating at 10 and `max` as expected,
+  profiler/meter `p_use` agreeing within ±4.25%) — no bug in the measurement pipeline itself.
+  But `sweep_paste.xlsx` was unusable for its actual purpose: the user's pre-built master
+  "P4_Conversational" tracking sheet expects a 16-column block (`A:P` — `cadence_req`,
+  `cad_achiev`, `dur_h`, `n_utt`, `totalis_Wh`, `P_use_met_W`, `P_use_prof_W`, `discrep_%`,
+  `duty_synth`, `duty_play`, `duty_active`, `amp_mean_W`, `cpu_mean_W`, `mem_mean_W`, `peak_C`,
+  `throttled`), while `_write_paste_xlsx()` only ever wrote the 6-column
+  `["run", "cadence_achieved", "duration_h", "totaliser_wh", "p_use_w", "duty_active"]` layout
+  from the original implementation — a scope reduction I made during the initial `--p4-sweep`
+  build that never matched what the downstream master workbook actually needed. Not a data
+  problem, not user error: `sweep_summary.csv` already had every column needed, it just wasn't
+  the file being pasted.
+  Rewrote `PASTE_COLUMNS` and `_write_paste_xlsx()` to emit exactly the master sheet's 16
+  columns, in order, one-to-one off `sweep_summary.csv`'s fields (unit conversions only for
+  `dur_h`/`totalis_Wh`, same as before). Dropped the old merged `p_use_w`
+  meter-falls-back-to-profiler column — no longer needed now that `P_use_met_W` and
+  `P_use_prof_W` are separate columns matching the sheet, so a skipped totaliser reading now
+  correctly leaves only `P_use_met_W` blank instead of silently substituting the profiler
+  value into a column labeled "meter". Also dropped the `run` column (not present in the
+  master sheet at all).
+- Files: `benchmark/p4_sweep.py`, `tests/test_p4_sweep.py`
+- Why: `sweep_paste.xlsx` exists solely to be copy-pasted as one block into the master
+  workbook; a column mismatch makes every number land in the wrong field silently (no error,
+  just wrong data if pasted as-is), which is worse than a crash.
+- Verify: `python3 -m pytest tests/` (130 passed — `test_write_paste_xlsx_column_layout_matches_master_workbook`
+  rewritten for the 16-column layout, asserts the header row, column count, and the
+  no-fallback blank-totaliser behavior). Regenerated `sweep_paste.xlsx` for the real
+  `profile/P4 - First Full try/` run via `python -m benchmark.p4_sweep --refit "profile/P4 -
+  First Full try"` (the existing `--refit` re-entry point doubles as the "rebuild
+  sweep_paste.xlsx from already-collected results" tool — no new script needed) and confirmed
+  by hand: 16 columns, 6 data rows (`A2:P7`), values correctly split between `P_use_met_W` and
+  `P_use_prof_W`.
+- Notes/gotchas: the fitted `P_idle` from this first full sweep: profiler 5.549 W (k=0.190 W
+  per utt/min, R²=0.9995), meter 5.437 W (k=0.231 W per utt/min, R²=0.9994) — both series fit
+  well and agree with each other within ~2%, a good sign the additive model
+  `P_use = P_idle + k·N` holds for this system. No flags raised (R² well above 0.95, fitted
+  intercept within 5% of the direct cadence=0 measurement on both series).
+
+---
+
+## 2026-07-17 — Fix P4 sweep crash on the cadence=0 idle point
+
+- What: the first real dry run (`--p4-sweep --cadences 0,30 --duration 30`) crashed
+  immediately on the very first point:
+  `[join] profile/p4_sweep_.../cadence_00/per_sentence.jsonl not found - nothing to join.`
+  Root cause: `cadence=0` (the pure-idle anchor) synthesizes nothing at all, so
+  `per_sentence.jsonl` is never created (`Recorder` only writes it from `finalize()`, never
+  called with zero utterances) — but `run_p4_sweep()` unconditionally called `run_join()` for
+  every point, and `profiling/join.py`'s `load_sentences()` treats a missing
+  `per_sentence.jsonl` as a hard `SystemExit` by design (a deliberate choice from an earlier
+  session, correct for the *standalone* `python -m profiling.join` case where it really does
+  mean "nothing was profiled"). Uncaught, this killed the entire sweep on point 1 — before
+  cadence=30 (the actual thing under test in that dry run) ever ran.
+  Extracted the join-or-skip decision into `_join_cadence_point(cadence, cadence_dir)`:
+  skips the (sentence-only) join entirely for `cadence == 0` (expected, not an error —
+  `join_full_session()`, called separately right after, doesn't touch `per_sentence.jsonl` at
+  all, so the point's whole-session power/energy aggregates are unaffected), and wraps the
+  non-zero-cadence case in `try/except SystemExit` as a backstop — an hour-long unattended
+  sweep should degrade one point's `synth_time_total_s` to 0 with a printed warning rather
+  than crash and lose every point after it.
+- Files: `benchmark/p4_sweep.py`, `tests/test_p4_sweep.py`
+- Why: this exact crash would have hit every real sweep, since `0` is cadence #1 in the
+  documented example (`--cadences 0,1,2,5,10,max`) and in the dry-run recipe I gave after
+  implementing the feature — untested against real hardware from the dev machine, so this
+  surfaced on the first actual run rather than in review.
+- Verify: `python3 -m pytest tests/` (130 passed — 3 new:
+  `test_join_cadence_point_skips_join_for_cadence_zero` confirms no `SystemExit` and no
+  `per_sentence_results.csv` written for `cadence=0` with no data;
+  `test_join_cadence_point_still_raises_join_for_nonzero_cadence_with_no_data` confirms the
+  backstop still warns loudly for the *unexpected* case of a non-zero cadence somehow
+  producing zero utterances; `test_join_cadence_point_runs_normally_when_data_exists` confirms
+  normal joins are unaffected).
+- Notes/gotchas: **still not verified end-to-end on real hardware** — this fixes the specific
+  crash observed, but the `cadence=30` point (which never ran in the reported dry run) is
+  still unverified. Traced through it by hand: with real `benchmark/sentences_fr.jsonl`
+  sentences and a 2s slot (60/30), several sentences' synth+playback time will legitimately
+  exceed 2s, so the `warn_once` "cadence not achievable" message firing during that point is
+  *expected*, not a bug. Re-run the same dry run
+  (`--p4-sweep --cadences 0,30 --duration 30`) to confirm both points now complete and
+  `sweep_summary.csv`/`sweep_paste.xlsx` land correctly (2 points → `R²` will read exactly
+  1.0, per the note in the previous entry — expected for a 2-point fit, not a bug).
+
+**Follow-up, same session**: the re-run (`--cadences 0,30 --duration 30`) completed end to
+end on real Pi hardware — both points, the fit, and `sweep_paste.xlsx` all produced.
+Cross-checked the printed numbers independently (recomputed `p_use_meter_w`'s implied
+`duration_s` from the raw totaliser entries, recomputed `cadence_achieved` from
+`n_utterances`/`duration_s`, refit the line from the raw values) — everything reproduces
+exactly. One point header text was misleading rather than wrong: `"expected ~15
+utterances"` for the `cadence=30` point (which only reached 7, since 30/min was never
+achievable for this sentence set at ~4-5s synth+playback each — same fact the
+`cadence not achievable` warning already reported) read like a broken prediction rather than
+a best-case ceiling. Reworded to `"up to N utterances if fully achievable"` in
+`benchmark/p4_sweep.py`, with a comment explaining `cadence_achieved` (not this figure) is
+what actually gets fitted. No behavior change, no new test needed for a print string.
+
+---
+
+## 2026-07-16 — Add P4 cadence sweep (`--p4-sweep`)
+
+- What: new experiment measuring how average system power `P_use` varies with conversational
+  rate (utterances/minute), fitting `P_use(N) = P_idle + k·N`. Ran the design through a Plan
+  subagent review against the actual files before implementing; it found and this fixes four
+  real correctness gaps beyond the original spec:
+  1. **Calibration lookup would have silently gone uncalibrated.** `profiling/join.py`'s
+     `load_calibration()` only checks one directory up from wherever it's asked to join.
+     `profile/calibration.json` is two levels above a cadence dir
+     (`profile/p4_sweep_.../cadence_02/`), so it would have missed it entirely and silently
+     fallen back to identity scale/offset for every sweep point, with no error. Fixed by
+     copying `calibration.json` into the sweep root once at sweep start, not by touching
+     `join.py`'s lookup (kept `run_join()` fully unmodified).
+  2. **`mean_arm_freq_khz` (a spec'd summary column) was unparseable.** `load_samples()` never
+     read `arm_freq_hz` from `per_sample.csv` at all, despite the sampler always writing it.
+     Added as an additive, `None`-safe column parse alongside the existing ones.
+  3. **An hour-long, unattended, human-in-the-loop sweep must not lose completed points on a
+     later Ctrl-C.** `sweep_summary.csv` is now appended to after every point, not buffered to
+     a single write at the end; each point's profiling session is wrapped in its own
+     `try/finally` so `profiling.stop_session()` always runs even if a point is interrupted
+     mid-cycle.
+  4. **Meter-vs-profiler window mismatch is structural** (the totaliser is reset before the
+     sampler subprocess launches and read after it stops, so its bracket is always slightly
+     wider) — not fixable without fighting the "human reads an external meter" constraint;
+     documented in the README instead of engineered around.
+  - `profiling/__init__.py`: factored `_new_run_dir()`'s meta.json-writing into `_write_meta()`
+    and `start_session()`'s sampler-subprocess launch into `_launch_sampler()` (both reused,
+    behavior-preserving — existing `start_session()`/`_new_run_dir()` tests pass unchanged).
+    New `start_session_at(run_dir, ...)`: like `start_session()` but writes into a
+    caller-specified directory instead of auto-generating a `run_YYYYMMDD_HHMMSS` name, and
+    deliberately never touches `profile/latest` (that pointer means "the last single
+    benchmark/free-text run", not a sweep sub-point). `calibration_base_dir` is passed
+    explicitly to `_write_meta()` rather than derived from `run_dir`'s path — the fix for gap
+    #1's root cause at the `meta.json`-informational-field level.
+  - `profiling/join.py`: `load_samples()` now also parses `arm_freq_hz` (gap #2). New
+    `join_full_session(profile_dir)`: like `run_join()` but integrates the *whole*
+    `per_sample.csv` window (first to last `t_mono`) instead of per-sentence windows, reusing
+    the same calibration/integration helpers (`_integrate_energy_j`, `_mean_power_w`,
+    `_stat_or_none`, `_throttled_any`) — this is what makes `cadence=0` (zero sentences, no
+    `per_sentence.jsonl` at all) work uniformly with every other point.
+  - New `benchmark/p4_sweep.py` (mirrors `benchmark/runner.py`'s style): `parse_cadences()`,
+    `cadence_dir_name()`, `run_p4_sweep()` (the per-point cycle loop, prompts, summary-row
+    computation, linear fit + R² + flagging, `sweep_paste.xlsx` writer), plus a standalone
+    `--refit SWEEP_DIR` re-entry point (re-reads an existing `sweep_summary.csv` and redoes
+    only the fit + xlsx write, no hardware re-run — matches the same "expensive measurement
+    pass vs. re-runnable offline analysis pass" convention already used by `profiling/join.py`
+    and `benchmark/export_to_xlsx.py`'s own standalone `main()`s).
+  - `do_tts.py`: new `--p4-sweep`/`--cadences`/`--duration` flags, dispatched next to
+    `--benchmark`. `--cadences`/`--duration` are validated eagerly right after `argparse`
+    (same spot as the existing `--report-wav` early-exit) — a malformed value fails before
+    `load_models()` and the first interactive prompt, not deep into an unattended hour. The
+    existing top-level `profiling.start_session()` call is skipped for `--p4-sweep` (the sweep
+    manages its own per-point sessions via `start_session_at()`) but `profiling.enable()`/
+    `set_output_dir()` still run, since `start_session_at()` depends on both.
+  - `play_time_total_s` (not separately timestamped anywhere in the existing `Recorder`, and
+    intentionally not added there per "do not touch synthesis logic") is derived as
+    `sum(busy_i) - synth_time_total_s`, where `busy_i` is the sweep loop's own
+    `time.monotonic()` bracket around each whole `syn_audio(..., play=True)` call (confirmed
+    `play_audio()` blocks on every platform branch, so this genuinely covers synth+playback).
+    Guarded with a defensive length check against `per_sentence_results.csv`'s row count —
+    `None` + a printed warning on a mismatch, never a silent mis-sum.
+- Files: `profiling/__init__.py`, `profiling/join.py`, `benchmark/p4_sweep.py` (new),
+  `do_tts.py`, `tests/test_p4_sweep.py` (new), `tests/test_profiling.py`, `README.md`
+- Why: last power experiment in the measurement suite — no longer choosing a battery board
+  (decided: DFRobot FIT0992), now characterising each process's power contribution for later
+  optimisation and producing a formula that converts any usage model into a daily energy
+  budget.
+- Verify: `python3 -m pytest tests/` (full suite green — 24 new tests in `test_p4_sweep.py`
+  covering cadence parsing/naming, the synth/play time split, the linear fit + R² + flagging
+  against synthetic series, the `sweep_paste.xlsx` column layout and meter-vs-profiler
+  precedence, and the `--refit` round-trip; 9 new tests in `test_profiling.py` covering
+  `start_session_at()`'s calibration resolution two levels deep and that it never touches
+  `profile/latest`, plus `join_full_session()` against synthetic `per_sample.csv` including
+  the empty/single-sample edge cases). Manually verified end-to-end with real (non-hardware)
+  data: `parse_cadences`/`cadence_dir_name`/`_linear_fit` recover the spec's own sanity-check
+  formula (`P_use = 5.73 + 0.072·N`) exactly from synthetic points; `_build_summary_row` →
+  `_append_summary_row` → `_load_summary_rows` → `_refit_from_summary` round-trips correctly
+  through a real CSV + xlsx write. `do_tts.py --help` and eager `--cadences` validation
+  (`do_tts.py --p4-sweep --cadences 0,foo --duration 600`) both confirmed to fail fast with a
+  clear message, before any model loading.
+- Notes/gotchas: **cannot be verified against real hardware from this dev machine** (no I2C
+  bus, no Pi, no actual amplifier/meter) — the cycle loop, `profiling.start_session_at()`
+  launching the real sampler subprocess, and the full interactive prompt flow all still need a
+  real run on the Pi. Suggested first real test: a short `--duration 30 --cadences 0,30` dry
+  run (covers both the pure-idle and a numeric-cadence code path in under a minute) before
+  committing to a full multi-hour sweep.
+
+---
+
+## 2026-07-16 — Fix export_to_xlsx.py for per-run profile/ directories
+
+- What: `benchmark/export_to_xlsx.py` still defaulted `--profile-dir` to the base `profile`
+  and read `profile/per_sentence_results.csv` directly — missed when per-run output
+  isolation (`profile/run_YYYYMMDD_HHMMSS/`) was added, since that change only updated
+  `profiling/join.py`'s standalone entry point and `do_tts.py`'s in-process call, not this
+  script's own separate CLI. Standalone `python -m benchmark.export_to_xlsx` therefore raised
+  a raw `FileNotFoundError` (the file has never lived directly under `profile/` since that
+  change) instead of finding the actual run.
+  1. `load_per_sentence_rows()`: missing `per_sentence_results.csv` now raises a clear
+     `SystemExit` instead of a raw traceback.
+  2. `main()`'s `--profile-dir` now defaults to `None` and resolves via the new
+     `_resolve_profile_dir()`: follows `profile/latest` (symlink or the `latest.txt`
+     Windows-without-symlinks fallback) if it points at a run that actually has
+     `per_sentence_results.csv` (i.e. was `--join`'d, not just profiled).
+  3. If `profile/latest` isn't usable (missing, stale, or points at an unjoined run),
+     `_resolve_profile_dir()` lists every `profile/run_.../` directory that *does* have
+     results (most recent first, via the new `profiling.list_run_dirs()`) and interactively
+     prompts which one to export — the "ask for the name of the file" behavior requested,
+     rather than failing outright when there's more than one candidate or no usable default.
+     `export()` itself (the programmatic entry point `do_tts.py --export-xlsx` calls
+     in-process, always with an explicit resolved dir) is untouched and never prompts.
+- Files: `benchmark/export_to_xlsx.py`, `profiling/__init__.py` (new `list_run_dirs()`,
+  shared with the picker), `tests/test_export_xlsx.py`
+- Why: closes the same class of gap as the `profiling/join.py` fix from earlier today, in
+  the one standalone entry point that was missed at the time.
+- Verify: `python3 -m pytest tests/` (94 passed — 9 new: explicit-arg passthrough, following
+  both forms of the `latest` pointer, rejecting a `latest` that points at an unjoined run,
+  the interactive prompt (via `monkeypatch` on `builtins.input`) including its
+  most-recent-first default and skipping unjoined runs, the no-runs-at-all error, and the
+  missing-file `SystemExit`). `python -m benchmark.export_to_xlsx --help` shows the updated
+  flag description.
+- Notes/gotchas: `_resolve_profile_dir()` is only wired into `main()` (the CLI), not
+  `export()` — deliberately, since `export()` is also called in-process by `do_tts.py`
+  right after a benchmark run and must never block on `input()` there.
+
+---
+
+## 2026-07-16 — INA226 fix verified on real Pi hardware, both run modes
+
+- What: the register-read fix (two separate single-register reads instead of one combined
+  6-byte block read — see the entry directly below) confirmed working end-to-end on the Pi,
+  across two separate runs:
+  1. `python3 do_tts.py --profile` (idle, no synthesis): `ina_current_a` held at
+     0.0625/0.06375 A throughout ~2000 samples, `ina_bus_v` tracked load realistically
+     (5.00-5.19V), `ina_power_w` matched `ina226_logger.py`'s reference reading (~0.32 W)
+     almost exactly. Zero occurrences of the old stuck `-0.00025` (-1 LSB) value.
+  2. `python3 do_tts.py --benchmark --profile --join --repeats 1` (real synthesis, CPU
+     spiking to 90-100% repeatedly, no `--play`): same idle-band current throughout — correct,
+     since without `--play` the amp is never actually driven, so it's expected to stay flat
+     while `pmic_power_w`/`cpu_power_w` swing widely from the synthesis load. Spot-checked the
+     software power derivation directly against several rows: `5.045 * 0.065 = 0.327925`,
+     `5.055 * 0.065 = 0.328575`, `5.05875 * 0.06375 = 0.3224953125` — each matches the logged
+     `ina_power_w` exactly, confirming `bus_v * current_a` is wired correctly on real hardware,
+     not just in the `_FakeInaBus` unit tests.
+- Files: none (verification only, no code changes this entry)
+- Why: closes out the INA226 investigation started with Blocker 1 of the original profiler
+  prompt — three sessions (software power derivation, register read-back diagnostic, then the
+  actual root-cause fix) needed real hardware to confirm, which wasn't available from the dev
+  machine that wrote the fixes.
+- Verify: already done — see "What" above. No further action needed on the INA226 side.
+- Notes/gotchas: none outstanding. If amp-branch current/power ever looks wrong again, the
+  regression tests in `tests/test_profiling.py` (`_FakeInaBus`, asserting every INA226 read is
+  a single 2-byte transaction) should catch a reintroduction of the combined-block-read bug
+  before it reaches hardware again.
+
+---
+
+## 2026-07-16 — Actual INA226 root cause found: no cross-register auto-increment
+
+- What: root-caused by diffing `_read_ina226()` against `ina226_logger.py` (the standalone
+  reference script, user-provided, confirmed correct on real hardware -
+  `test_repair.csv` shows steady 0.0625 A / 0.319 W at idle). `ina226_logger.py` reads bus
+  voltage, current, and power as **three separate single-register transactions**, each its
+  own `read_i2c_block_data(addr, reg, 2)`. `_read_ina226()` instead did **one combined 6-byte
+  block read** starting at BUS_V (0x02), assuming the INA226 auto-increments its internal
+  register pointer across BUS_V -> POWER -> CURRENT within a single transaction. It doesn't.
+  That's the entire bug, in both this session's data and every prior session's: bus voltage
+  (the first, correctly-addressed register) always decoded fine and tracked load, because
+  it's the only register actually being read correctly; the bytes assumed to be POWER and
+  CURRENT are the chip's over-read filler, which happens to decode to exactly 0xFFFF,
+  regardless of actual current - explaining both the original "409.6 W constant" symptom
+  *and* the "current frozen at -1 LSB" symptom that survived the previous session's software
+  power-derivation fix (which only changed how an unread, always-0xFFFF current value got
+  turned into a power number). The write side was never the problem - both scripts write
+  CONFIG/CALIBRATION identically - so the read-back diagnostic added last session was a
+  reasonable diagnostic to add but wasn't pointing at the actual bug; left in place since it's
+  still a legitimate sanity check, just not the one that mattered here.
+  `_read_ina226()` now calls `_read_ina226_reg()` (added last session for the read-back check)
+  twice - once for BUS_V, once for CURRENT - instead of one combined block read. POWER is
+  still not read from hardware at all (software `bus_v * current_a`, from the prior session,
+  is still correct and cheaper than a third register read).
+- Files: `profiling/sampler.py`, `tests/test_profiling.py`
+- Why: the previous two sessions' fixes addressed real but secondary issues (power-register
+  reliability, diagnostic messaging) without touching the actual read-path bug, because
+  neither could be tested against real I2C hardware from this dev machine. Having the
+  known-working reference script to diff against made the real cause immediately visible.
+- Verify: `python3 -m pytest tests/` (85 passed - 2 new). Added
+  `test_read_ina226_reads_bus_voltage_and_current_as_separate_registers` and
+  `test_read_ina226_decodes_negative_current`, using a fake I2C bus
+  (`_FakeInaBus`) that serves each register independently and **asserts any read call has
+  length 2** - a regression back to a combined block read fails the test loudly instead of
+  silently reintroducing the bug. Confirmed the fake-bus call log shows exactly two
+  single-register reads, not one wider one.
+- Notes/gotchas: still needs confirmation on the Pi with real hardware - the fake-bus test
+  proves the *code* now does two separate reads and decodes them correctly, not that the
+  physical sensor responds as expected end-to-end. Run a short `--profile`-only session and
+  check `ina_current_a`/`ina_power_w` land near 0.0625 A / ~0.32 W at idle, matching
+  `ina226_logger.py` on the same rail.
+
+---
+
+## 2026-07-16 — INA226 still broken after the previous fix; add register read-back diagnostic
+
+- What: a real `--benchmark --profile --join` run on the Pi (the "7B" dry run, 11 records,
+  `profile/run_20260716_162448/`) confirmed the previous session's INA226 fix did **not**
+  resolve the root cause: `ina_current_a` is still frozen at exactly `-0.00025` (-1 LSB /
+  0xFFFF) on every one of ~2000 samples across the whole run, regardless of load, even though
+  `ina_bus_v` reads correctly and dynamically (5.03-5.19V, sags under load - that channel
+  genuinely works). The startup sanity check added last session did correctly fire (`[profiling]
+  WARNING: INA226 reads ~0 A ...`), which disproves the previous CHANGELOG entry's guess that
+  the Pi might have been running a stale pre-fix revision - this **is** the current code, and
+  the sensor communication issue is real. Also found and fixed a bug in that sanity-check
+  message itself: it passed 5 positional args to a 4-placeholder format string, so `.format()`
+  silently dropped the trailing `CAL` argument and the bare `{}` placeholder printed
+  `INA226_CONFIG` (0x4527) in **decimal** (17703), mislabeled as the calibration value at
+  register 0x05 - actively misleading for exactly the debugging this message exists for.
+  Fixed the message, and added a real diagnostic instead of more guessing: `_write_ina226_reg`/
+  `_read_ina226_reg` helpers, with a read-back of CONFIG and CALIBRATION immediately after
+  writing them, logging `[profiling] WARNING: INA226 register read-back mismatch ...` if what's
+  actually stored on the chip doesn't match what was intended. This turns "is the write even
+  taking effect?" from a guess into a directly observable fact on the next run.
+- Files: `profiling/sampler.py`
+- Why: the previous fix (software power derivation from bus_v*current_a) only changed how an
+  already-invalid current reading gets turned into a power number - it never addressed why
+  CURRENT itself never produces a valid conversion. Needed a way to actually see whether the
+  CONFIG/CALIBRATION writes are landing on the chip rather than continuing to guess between
+  read-timing, wrong smbus2 API framing for this device, bus contention, etc.
+- Verify: `python3 -m pytest tests/` (83 passed, unaffected - this is real-hardware-only code,
+  no unit coverage possible without an actual INA226). Manually reproduced the exact
+  malformed-message bug from the Pi's terminal output on this dev machine by replaying the same
+  `.format()` call with the same arguments - confirmed byte-for-byte match to the observed
+  "17703 @ reg 0x05" text, and confirmed the corrected messages render sensibly.
+- Notes/gotchas: **still unresolved, needs a short profiler-only run on the Pi** to read the new
+  read-back diagnostic. If it reports a mismatch, the write itself is the problem (candidates:
+  `write_i2c_block_data`'s exact wire framing for this device vs. what `ina226_logger.py` - the
+  known-working reference script - does; worth diffing the two directly). If CONFIG/CALIBRATION
+  *do* read back correctly and current is still frozen, the bug is downstream of configuration
+  entirely (e.g. conversion never actually triggering in continuous mode) and the read-back
+  check won't be enough on its own - would need scoping further with `ina226_logger.py`'s
+  working register sequence as the reference.
+
+---
+
+## 2026-07-16 — Fix INA226 power derivation, per-run profiling output isolation
+
+- What:
+  1. **INA226 power (`profiling/sampler.py`)**: `_read_ina226()` now computes `ina_power_w`
+     in software (`bus_v * current_a`) instead of decoding the hardware POWER register
+     (0x03). That register is unsigned and undefined when CURRENT is negative — the "409.6 W
+     constant, current pinned at -1 LSB" symptom is POWER/CURRENT both saturated at 0xFFFF.
+     Bus voltage and (signed) current are each independently well-defined, so their product
+     is trustworthy where the raw register isn't. **Note**: CONFIG (0x4527) and CALIBRATION
+     (10240) were already being written at sampler init in this codebase (`_init_ina226()`)
+     — exactly matching the values the source prompt suggested as the fix — so if the Pi is
+     still seeing garbage after pulling this, the most likely explanation is that the Pi was
+     running an older revision of `sampler.py` predating those writes, not a config/cal gap in
+     the current code. Added defense-in-depth regardless: a `INA226_SETTLE_S` (60ms) delay
+     after CONFIG+CALIBRATION before the first read (AVG=16 needs ~35ms for the first valid
+     conversion), and a startup sanity check (`abs(current_a) < 0.001` or `bus_v < 4.5`) that
+     prints a `[profiling] WARNING: ...` and disables the sensor for the rest of the run
+     instead of silently logging bad data.
+  2. **`throttled` column**: `sampler.py` now writes it as a hex string (`"0x50000"`, matching
+     `vcgencmd get_throttled`'s own format) instead of a plain decimal int; `join.py`'s
+     `load_samples()` parses it with `int(x, 0)` (auto-detects the `0x` prefix, still accepts
+     old plain-decimal files). `_throttled_any()`'s logic was already correct (`any(v != 0
+     ...)` on the parsed int) — the column just wasn't human-legible before.
+  3. **`phoneme_count`**: confirmed it was a duplicate of `char_count`, not a real phoneme
+     count — see `synthesis_modules.py:206`. `text_to_sequence()`
+     (`FastSpeech2/text/__init__.py`) maps one symbol per character for ordinary orthographic
+     text; there's no G2P front-end for French in this pipeline (only the opt-in `{phonetic
+     bracket}` syntax produces a token-per-phoneme sequence, and there's no way to tell from
+     the recording site whether a given input used it). Now reports `null`
+     (`profiling_rec.set(phoneme_count=None)`) instead of the misleading duplicate.
+  4. **Per-run output isolation**: every profiled session now gets its own
+     `profile/run_YYYYMMDD_HHMMSS/` directory (collision-disambiguated with a `_2`/`_3`
+     suffix if two sessions start in the same second), containing `per_sample.csv`,
+     `per_sentence.jsonl`, and (once `--join`/`--export-xlsx` run) `per_sentence_results.csv`,
+     `per_stage_results.csv`, `exports/chatterbox_paste.xlsx`. `profile/latest` points at the
+     most recent run (a symlink where supported, else a `latest.txt` pointer file — both
+     handled by `profiling/join.py`'s new default-dir resolution). Previously
+     `per_sample.csv` was overwritten every run while `per_sentence.jsonl` was appended to
+     forever, so after N runs the join only matched records from the last run against a
+     `per_sentence.jsonl` containing all N runs' records mixed together.
+     `profiling/__init__.py::start_session()` creates the run dir and writes its initial
+     `meta.json` (`sample_hz`, `pmic_hz`, `core`, `niceness`, `ina_requested`, `governor`
+     read from sysfs, a `calibration.json` snapshot, plus `meta_extra` — `do_tts.py` passes
+     `{"play": ..., "repeats": ...}` for `--benchmark`); `sampler.py`'s own process patches in
+     `ina_detected` and `profiler_pid` once it's actually probed the I2C bus (the only two
+     fields it alone knows). `calibration.json` itself stays a base-dir-level, cross-run file
+     (`load_calibration()` now checks the run dir first, then falls back to its parent).
+     `do_tts.py`'s end-of-benchmark `--join`/`--export-xlsx` calls now use
+     `profiling.get_run_dir()` instead of the base `output_dir`.
+  5. **Join safety net**: `run_join()` now drops any `per_sentence.jsonl` record whose
+     synthesis window falls entirely outside the sample stream's `t_mono` range before
+     building results, printing `[join] WARNING: N records outside the sample window (stale
+     data?) - skipped` instead of emitting rows with empty energy columns. With per-run
+     isolation this shouldn't normally trigger — it's a defense-in-depth backstop for
+     hand-mixed or pre-existing (pre-this-fix) logs.
+- Files: `profiling/sampler.py`, `profiling/__init__.py`, `profiling/join.py`, `do_tts.py`,
+  `synthesis_modules.py`, `tests/test_profiling.py`
+- Why: the 7B dry run found the INA226 columns reading constant, physically-impossible values
+  (power pegged at the register's all-ones value) and `profile/per_sentence.jsonl` holding 318
+  records from 9 separate runs against a `per_sample.csv` with only the last run's ~39s of
+  samples, so the join matched 11/318 records and the rest were emitted with empty energy.
+- Verify: `python3 -m pytest tests/` (83 passed — 12 new tests covering the run-dir
+  naming/collision handling, `meta.json` writing and patching, `profile/latest` resolution,
+  `calibration.json`'s parent-dir fallback, and the hex/legacy-decimal `throttled` parsing;
+  none of this needs real hardware). Manually exercised on this dev checkout (no Pi/I2C/PMIC
+  available here): `profiling._new_run_dir()` creates a real timestamped directory with a
+  correctly-populated `meta.json`; `Sampler._patch_meta_json()` correctly read-modify-writes
+  `ina_detected`/`profiler_pid` into an existing `meta.json` without clobbering other fields;
+  `join._resolve_default_profile_dir()` correctly follows both the symlink and `.txt`-pointer
+  forms of `profile/latest`; `join.load_calibration()` correctly finds `calibration.json` in a
+  run dir's parent; `int(x, 0)` correctly parses both `"0x50005"` and legacy `"327685"`.
+- Notes/gotchas: **the INA226 fix's actual effect on real hardware could not be verified from
+  this Windows PC** — no I2C bus, no INA226, no `vcgencmd`. On the Pi, after pulling this and
+  running a **short profiler-only session** (per the constraint: no need to re-run the full
+  benchmark) with the amp powered and idle, `ina_current_a` should read ≈0.0637 A and
+  `ina_power_w` ≈0.32 W in the new run's `per_sample.csv`, matching `ina226_logger.py` on the
+  same rail within a few percent — compare directly. If it's still garbage, check whether the
+  Pi had actually pulled the CONFIG/CALIBRATION-writing revision of `sampler.py` before this
+  session (see note above) — that would point at a different bug than the one fixed here.
+  Similarly, a real throttle event and the new per-run `profile/run_.../` layout (with
+  `profile/latest` resolving correctly) should be spot-checked on the Pi's real filesystem —
+  symlink creation in particular behaves differently across platforms and this was only
+  exercised via the `latest.txt` fallback path implicitly (symlinks did work in the ad hoc
+  check on this Windows dev machine, since Developer Mode is enabled here, but that isn't
+  guaranteed on every Windows setup and is moot on the Pi's Linux filesystem where symlinks
+  are unconditionally supported).
+
+---
+
+## 2026-07-16 — Fix NumPy 2.0 join crash, standalone join entry point, subtitle-split print explained
+
+- What:
+  1. `profiling/join.py::_integrate_energy_j`: `trapezoid = getattr(np, "trapezoid",
+     np.trapz)` crashes on NumPy versions where `np.trapz` has actually been removed,
+     because the default-argument expression `np.trapz` is evaluated eagerly (before
+     `getattr` runs) regardless of whether the lookup would've succeeded — the
+     "fallback" line is what raises `AttributeError`. Replaced with
+     `np.trapezoid if hasattr(np, "trapezoid") else np.trapz`, which short-circuits
+     before ever touching the possibly-missing attribute. Repo-wide search for the same
+     eager-`getattr` pattern and other removed-in-2.0 aliases (`np.float_`, `np.int_`,
+     `np.NaN`, `np.alltrue`, `np.product`, `np.cumproduct`, `np.round_`) found no other
+     occurrences. (This dev venv pins numpy 2.0.2, where `np.trapz` still exists — the
+     crash doesn't reproduce here, but the eager-evaluation bug is real regardless, and
+     `requirements-pi.txt`'s loose `numpy>=2.0.2` floor is exactly what let the Pi
+     resolve a newer numpy that already dropped it.)
+  2. `profiling/join.py::load_sentences`: missing `per_sentence.jsonl` now raises a
+     clear `SystemExit` message instead of a raw `FileNotFoundError` traceback.
+  3. `profiling/join.py::main`: added `--export-xlsx` (calls
+     `benchmark.export_to_xlsx.export` after the join, matching `do_tts.py
+     --benchmark --export-xlsx`'s behavior) and a description string. The module
+     already had `if __name__ == "__main__": main()` and a working `--profile-dir`
+     flag, so `python3 -m profiling.join [--profile-dir DIR] [--export-xlsx]` was
+     already usable standalone — verified by running it against local `profile/`
+     logs (no re-synthesis).
+- Files: `profiling/join.py`
+- Why: `python3 do_tts.py --benchmark --profile --join --repeats 3` completed the full
+  33-sentence benchmark on the Pi but crashed in the join step (NumPy 2.0 removed
+  `np.trapz`) — the raw per-sentence/per-sample logs were already written correctly,
+  only the post-processing failed, so the fix needed to be re-runnable against
+  existing logs rather than requiring a ~10-minute re-benchmark.
+- Verify: `python3 -m pytest tests/` (71 passed, unaffected — no test covers
+  `profiling/join.py` directly). Manually: `python3 -m profiling.join --help` shows
+  the new flag; `python3 -m profiling.join --profile-dir /nonexistent` exits 1 with
+  the clear message instead of a traceback; `python3 -m profiling.join` against this
+  checkout's local `profile/` (2 stray `EX1` records, no `per_sample.csv`) writes
+  `per_sentence_results.csv`/`per_stage_results.csv` with the timing columns
+  populated and the power columns empty (expected — no PMIC sampler data on this
+  machine) instead of crashing.
+- Notes/gotchas: **the real verification (33 records, populated `ina_power_w`/
+  `cpu_power_w`) still needs to be run on the Pi**, against the logs already sitting
+  in `~/chatterbox/profile/` from the crashed run — `profile/*.csv`/`*.jsonl` are
+  gitignored (never synced via git), and this dev checkout only has 2 unrelated stray
+  records with no `per_sample.csv` at all, so that specific check couldn't be
+  performed from here. On the Pi: `cd ~/chatterbox && git pull && python3 -m
+  profiling.join` (after pulling this fix) should produce the real
+  `per_sentence_results.csv` from the already-completed benchmark run without
+  re-synthesizing anything.
+
+  Also investigated (no code change, per the "explain, don't change behavior yet"
+  instruction): the debug print seen for inputs over ~58-60 characters (e.g. `[87,
+  102]` for the B2 benchmark sentence, `[39, 138, 138]` for C1 — reproduced exactly
+  by calling `audio_utils.find_separators_subtitles()` directly on those sentences)
+  is `print(separators_indexes)` at `audio_utils.py:390`, inside `write_subtitles()`
+  (only reached when `config_tts.yaml`'s `subtitles.create_file: True`, which is the
+  default, and only for text over `subtitles.max_nbr_char: 60` chars after
+  preprocessing). **This is not synthesis-time chunking** — it's a post-hoc split of
+  the *already-synthesized* subtitle text into ≤60-char `.vtt` cue lines, using the
+  per-symbol durations FastSpeech2 already produced, purely for subtitle display
+  timing. It runs after the full mel-spectrogram + vocoder pass for the whole
+  sentence has already completed, so it is **not** a usable hook for streaming
+  synthesis (chunking here doesn't reduce time-to-first-audio at all). The existing
+  `§` sub-utterance marker (`audio_utils.syn_audio()`'s `sub_utterance_separator`
+  handling, synthesizing each `§`-delimited piece separately then concatenating) is
+  the actual pre-synthesis chunking mechanism already in the pipeline, and would be
+  the real starting point for streaming synthesis if that's wanted later. The print
+  itself has no descriptive label (unlike every other print in the codebase, e.g.
+  `"Speaker: ..."`, `"TTS duration: ..."`) and reads as leftover debug output rather
+  than an intentional user-facing message, but this repo has no existing debug/
+  verbosity flag anywhere to gate it behind (`grep -r "debug\|verbose"` over the
+  active pipeline code found nothing) — left unchanged, since Task 5's instruction
+  to gate it was conditional on such a flag already existing, and inventing one
+  wasn't asked for.
+
+  Task 4 (benchmark warm-up) from the source prompt was intentionally skipped: an
+  equivalent warm-up already exists for free-text mode (see the entry directly
+  below), and `--benchmark` deliberately excludes it — its REF-first/REF-last
+  sentences exist specifically to *measure* the cold-start effect for this project's
+  power-profiling work, so adding a silent pre-benchmark warm-up would defeat that.
+
+---
+
+## 2026-07-16 — Background warm-up synthesis in free-text mode
+
+- What: `do_tts.py`'s free-text branch now fires a throwaway warm-up synthesis
+  ("Bonjour.", `play=False`, stdout suppressed) on a background daemon thread
+  right after `load_models()`, instead of paying first-call cost on the
+  user's first real sentence. The main thread immediately shows the `Input
+  Text` prompt, so the warm-up overlaps with the time spent typing. On the
+  *first* real submission only, the main thread `warmup_thread.join()`s
+  before calling `audio_utils.syn_audio()` — this serializes warm-up and the
+  first real synthesis (they'd otherwise both write the same fixed-path
+  FastSpeech2/HiFi-GAN output files and contend for the same CPU cores).
+  Subsequent inputs skip the join (thread is already finished by then).
+  Tagged `sentence_id="WARMUP"` / `complexity_tag="warmup"` so it's
+  identifiable if profiling happens to be enabled during interactive use.
+- Files: `do_tts.py`
+- Why: measured on the Pi 5 (see the two preceding sessions), the very first
+  synthesis in a process runs noticeably slower than steady-state even though
+  model *weights* are already loaded before the prompt appears — the
+  remaining cost is first-call setup (torch's CPU thread pool, the CPU
+  governor ramping up from idle, noisereduce's internal FFT setup), which
+  this pays for once, off the user's critical path.
+- Verify: `python3 do_tts.py`, type the first sentence somewhat slowly —
+  synthesis prints/timings should not appear until you press Enter (warm-up
+  output is suppressed), and the first real `TTS duration` / `Vocoder
+  duration` percentages should already be near steady-state instead of the
+  inflated first-call numbers seen previously.
+- Notes/gotchas: scoped to free-text (`do_tts.py`, no `--gui`, no
+  `--benchmark`) only. Deliberately *not* added to `--benchmark` mode — its
+  REF-first/REF-last sentences exist specifically to measure this exact
+  warm-up/drift effect for the power-profiling work, so pre-warming there
+  would corrupt what it's designed to capture. GUI mode (`--gui`) doesn't
+  block the same way `input()` does (Tkinter's loop isn't blocked by typing),
+  so the same background-thread approach wasn't added there — worth a
+  separate look if GUI first-synthesis latency turns out to matter too.
+  Correction to a claim made earlier in this session: HiFi-GAN's
+  `meldataset.py` `mel_basis`/`hann_window` lazy caches (mentioned as a
+  suspected warm-up cost) are **not** actually exercised by the active
+  `inference_e2e.py` runtime path — only `MAX_WAV_VALUE` is imported from
+  that module. The warm-up fix here doesn't depend on that specific
+  mechanism; running one real end-to-end call pays whatever the actual
+  first-call costs are, wherever they live.
+
+---
+
+## 2026-07-15 — Normalize curly apostrophes before symbol filtering
+
+- What: `parse_pronunciation_mistakes()` now replaces `’`/`‘` (U+2019/U+2018) with the straight
+  `'` as its first step, before URL/mail parsing and the `symbols_regex_rules.csv` loop.
+  FastSpeech2's symbol set (`FastSpeech2/text/symbols.py` `_punctuation`) only includes the
+  straight apostrophe, so curly ones (routinely produced by word processors/mobile keyboards)
+  were being silently dropped by `_should_keep_symbol()` (`FastSpeech2/text/__init__.py`),
+  printing `The Character: '...' is not in the symbols list` and losing the elision entirely
+  (e.g. "qu’il" synthesized as if written "quil"). Deliberately *not* added as a
+  `symbols_regex_rules.csv` row: that loop pads every replacement with spaces
+  (`" {} ".format(...)`), which would have turned "qu'il" into "qu ' il" and introduced an
+  audible gap — a direct, unpadded `str.replace` avoids that.
+- Files: `synthesis_modules.py`
+- Why: found by comparing two back-to-back CPU-timing runs on the Pi 5 that both logged
+  repeated "not in the symbols list" warnings for the same French fable text (rich in
+  apostrophe elisions typed with curly quotes).
+- Verify: `python3 do_tts.py` with text containing "qu’il"/"s’est"/etc. (curly apostrophe) no
+  longer prints the symbols-list warning, and `Input after pre-processing:` shows the straight
+  `'` in place.
+- Notes/gotchas: only U+2019/U+2018 are handled. Curly double quotes (`“`/`”`) have the same
+  underlying gap (also absent from `_punctuation`) but weren't hit by the observed input — same
+  fix pattern would apply if they come up.
+
+---
+
+## 2026-07-15 — Pin missing `librosa` dependency in requirements-pi.txt
+
+- What: `requirements-pi.txt` left `librosa` unpinned on the assumption that `noisereduce`
+  pulls it in transitively (true for the exact `noisereduce==3.0.2` pin in
+  `requirements-dev.txt`, per that file's own comment). On a real Pi 5 provisioning run, the
+  loose `noisereduce>=3.0.2` floor resolved to a newer noisereduce release whose dependency
+  metadata no longer requires librosa (moved to a torch-based STFT), so librosa was never
+  installed — even though it's a hard, direct import of the active vocoder code
+  (`hifi-gan-master/meldataset.py`: `from librosa.util import normalize`,
+  `librosa.filters.mel`). Surfaced as `ModuleNotFoundError: No module named 'librosa'` at
+  `import gui_utils` → ... → `inference_e2e` → `meldataset` on `python3 do_tts.py`, despite
+  `scripts/setup_pi.sh`'s own end-to-end smoke test having passed earlier in the same
+  provisioning run (presumably a slightly different noisereduce resolution at that moment, or
+  librosa was present then and removed/never-added by a later `pip` operation — exact trigger
+  unconfirmed, but the missing explicit pin is the root cause either way).
+- Files: `requirements-pi.txt`
+- Why: make librosa's dependency explicit and pinned instead of relying on an incidental
+  transitive resolution that isn't guaranteed to hold as noisereduce's own dependencies drift.
+- Verify: on the Pi, `pip install librosa` unblocks the immediate failure; re-running
+  `pip install -r requirements-pi.txt` (or a fresh `scripts/setup_pi.sh`) now installs librosa
+  directly regardless of what noisereduce resolves to.
+- Notes/gotchas: `requirements-pi-lock.txt` on already-provisioned Pi units won't reflect this
+  until `pip install -r requirements-pi.txt` (or `setup_pi.sh`) is re-run there.
+
+---
+
+## 2026-07-10 — Inference-time micro-optimizations (I/O caching + inference_mode)
+
+- What: Four targeted, code-only latency fixes identified by a hot-path review, no new
+  dependencies:
+  1. `audio_utils.syn_audio()`: the post-synthesis "write" stage (denoise → optional
+     postprocess → optional analyze → final `AudioSegment` for playback/duration) used to
+     read the wav back from disk at every step and re-read it a final time via
+     `AudioSegment.from_wav()`. Now the array is kept in memory across all steps, written to
+     disk exactly once, and `AudioSegment` is built directly from the in-memory samples.
+     `audio_postprocess.report_wav()` gained an optional `preloaded=(data, rate)` kwarg so the
+     `analyze` path can reuse the same in-memory samples instead of re-reading the file
+     (backward-compatible — the standalone `--report-wav` CLI path still reads from disk).
+  2. `synthesis_modules.py`: `parse_pronunciation_mistakes()`/`do_adr()` used to re-open and
+     `tqdm`-iterate `symbols_regex_rules.csv`/`custom_regex_rules.csv`/`url_regex_rules.csv`
+     (123 lines total) on *every* synthesis call. Now parsed once into module-level caches
+     (`_get_symbols_regex_rules()`/`_get_custom_regex_rules()`/`_get_url_regex_rules()`) —
+     the `tqdm` import is gone too, since the per-call iteration it wrapped no longer exists.
+  3. `synthesis_modules.py`: `syn_fastspeech2()` (and the `<SPEAKER=...>` text-tag path in
+     `parse_params_from_text()`) re-read+re-parsed `speakers.json` on every call just to print
+     the speaker's display name. Now cached per-path in `_get_speaker_list()`.
+  4. Swapped `torch.no_grad()` → `torch.inference_mode()` (strictly cheaper — skips autograd
+     view-tracking bookkeeping entirely) in the four hot forward-pass call sites:
+     `FastSpeech2/synthesize.py:process_per_batch`, `FastSpeech2/utils/model.py:vocoder_infer`,
+     `hifi-gan-master/inference_e2e.py:inference`, `FastSpeech2/dataset.py:load_FlauBERT_embedding_from_styleTag`.
+- Files: `audio_utils.py`, `audio_postprocess.py`, `synthesis_modules.py`,
+  `FastSpeech2/synthesize.py`, `FastSpeech2/utils/model.py`, `FastSpeech2/dataset.py`,
+  `hifi-gan-master/inference_e2e.py`.
+- Why: A code-only (no new deps) pass over the synthesis hot path for the Pi 5 embedded
+  target, requested to shave per-utterance latency without touching model architecture or
+  audio quality. Full options list (including ones *not* applied, e.g. reverting the denoiser
+  to its cheaper `stationary=True` mode — a quality/speed trade-off left for a separate
+  decision) was written up as a report before any change was made.
+- Verify: `tests/` (71 tests, all passing, unchanged pass count). Manual before/after
+  benchmark on the dev machine (`do_tts.py --benchmark --sentences <1-sentence file>
+  --repeats 10`, git-stashing the fix commit to get a clean A/B): output `audio_file.wav` is
+  **byte-identical** (same SHA-256) before and after across 40 total synthesis calls — zero
+  functional/quality regression. Console output confirms fix 2 structurally: the `tqdm`
+  progress-bar lines (40 of them across 20 baseline calls, from re-reading the two CSVs each
+  time) disappear entirely after the fix. `write`-stage per-sentence profiling timing (fix 1's
+  target) improved slightly (~-12% mean / ~-2% median) but within run-to-run noise on this
+  dev machine — small wav files mean the redundant reads mostly hit the OS page cache here;
+  expect a clearer win on the Pi 5's slower storage. `vocoder`/`acoustic` stage timings showed
+  no clean signal either way (a mid-run slowdown-then-recovery pattern in one A/B pass points
+  to host-machine noise, e.g. background scanning of just-modified files, not a code-caused
+  regression — `inference_mode` cannot add per-call overhead over `no_grad`).
+- Notes/gotchas: This Windows dev checkout is not the target platform and has enough
+  measurement noise (shared machine, no core pinning, small files fit in OS cache) that only
+  the structural fixes (3, and to a lesser extent 1) could be confirmed with clean evidence
+  here. Re-measure on an actual Pi 5 with `--benchmark --profile --join` (+ PMIC calibration)
+  for a trustworthy energy/latency read before drawing conclusions about the on-device impact.
+  The denoiser parameter question (non-stationary vs. the commented-out `stationary=True`
+  config) was flagged but deliberately left untouched — it's a quality/speed trade-off, not a
+  free win, and needs a listening comparison before deciding.
+
+---
+
+## 2026-07-10 — Per-rail PMIC power + paste-ready Excel export
+
+- What: Extended the profiler and offline join (not duplicated) with explicit per-rail PMIC power,
+  and added a new Excel exporter for the benchmark results.
+  1. `profiling/parsing.py`: `parse_pmic_rails()` (extracted from the old `parse_pmic_power_w()`
+     body) parses one `vcgencmd pmic_read_adc` call into a `{rail: {A, V}}` dict; `PMIC_RAILS` is
+     now an explicit list of the 12 internally-metered rails (excludes `EXT5V`/`BATT`, which are
+     voltage-only). New `rails_total_power_w()`/`rails_cpu_power_w()` (`VDD_CORE`)/
+     `rails_mem_power_w()` (`DDR_VDD2`+`DDR_VDDQ`+`1V1_SYS`)/`rails_ext5v_v()` derive all four
+     signals from one parse. `parse_pmic_power_w(text)` keeps its old signature as a thin wrapper.
+  2. `profiling/sampler.py`: `_read_pmic()` → `_read_pmic_all()`, one `vcgencmd` call per tick now
+     yields `pmic_power_w`/`cpu_power_w`/`mem_power_w`/`ext5v_v` together; `_interpolate_and_write()`
+     generalized from a single scalar to `PMIC_FIELDS` (a list of 4 keys), same interpolation
+     scheme as before. Three new `per_sample.csv` columns.
+  3. `profiling/join.py`: `load_samples()` parses `cpu_power_w`/`mem_power_w`; both result builders
+     gain `cpu_energy_wh`/`cpu_mean_w` and `mem_energy_wh`/`mem_mean_w` via the already-generalized
+     `_integrate_energy_j(window, power_key)`, plus a new `_mean_power_w()` helper (also used to
+     de-duplicate the existing `amp_mean_w` computation).
+  4. `benchmark/export_to_xlsx.py` (new): reads `per_sentence_results.csv`/`per_stage_results.csv`,
+     writes `profile/exports/chatterbox_paste.xlsx` — sheet `P2P3_Synthesis` (cols A-U, header row
+     1, data rows 2-12) matching the master workbook `Chatterbox_Power_Measurements_final.xlsx`'s
+     paste target exactly, plus a `per_stage` reference sheet. `--repeats N` runs (multiple
+     11-sentence passes in the CSVs) each get their own sheet (`P2P3_Synthesis`,
+     `P2P3_Synthesis_pass2`, ...) rather than only exporting the first pass — this was a deliberate
+     change from the original one-pass-only spec, per explicit request. Wired into `do_tts.py` via
+     `--export-xlsx` (opt-in, implies `--join`).
+- Files: `profiling/parsing.py`, `profiling/sampler.py`, `profiling/join.py`, `do_tts.py`,
+  `benchmark/export_to_xlsx.py` (new), `tests/test_profiling.py` (rail-parsing + join cpu/mem
+  tests), `tests/test_export_xlsx.py` (new), `requirements-dev.txt`/`requirements-pi.txt` (added
+  `openpyxl`), `.gitignore` (added `profile/exports/`), `README.md` ("Puissance par rail PMIC" +
+  "Export Excel" sections), `docs/ARCHITECTURE.md`.
+- Why: The PMIC's summed total conflates CPU and memory draw; splitting `VDD_CORE` (compute) from
+  the DDR/1V1 rails (memory) lets a per-stage view show whether a given pipeline stage is CPU-bound
+  or memory-bound. The Excel exporter removes a manual copy/reformat step before results can be
+  pasted into the lab's master power-measurement workbook.
+- Verify: `tests/` (71 tests, all passing) covers rail parsing (explicit list, missing-rail
+  robustness, `EXT5V`/`BATT` exclusion), the join's new `cpu_*`/`mem_*` columns, and
+  `export_to_xlsx`'s row-mapping/pass-splitting/REF-relabeling logic plus one real `openpyxl`
+  round-trip (skipped cleanly if `openpyxl` isn't installed). End-to-end smoke test: synthetic
+  `per_sample.csv` (11-sentence pass, all PMIC/rail/INA226 columns populated) through
+  `profiling.join.run_join()` → `benchmark.export_to_xlsx.export()` — confirmed correct A-U values,
+  `REF_start`/`REF_end` relabeling, and derived-column formulas (`RTF`, `synthP_W`, `E/s_Wh`,
+  `cpuP_W`). Also verified the exporter degrades gracefully (prints an install hint, returns `None`,
+  doesn't crash) with `openpyxl` uninstalled.
+- Notes/gotchas:
+  - `pmic_power_w`'s *value* is unchanged by making the rail list explicit — `EXT5V`/`BATT` were
+    already excluded implicitly (they never have a current channel to pair with their voltage
+    line). The explicit list guards against a future/unexpected rail silently joining the sum.
+  - The paste-ready sheet layout assumes exactly 11 rows per pass; a trailing partial pass
+    (interrupted run) is dropped with a printed warning rather than exported incomplete.
+  - Not tested against real Pi 5 hardware (no PMIC/INA226 available in this dev environment) —
+    `sampler.py`'s actual `vcgencmd`/I2C reads are excluded from the unit-tested surface, same as
+    the existing PMIC/sysfs reads.
+
+---
+
+## 2026-07-10 — INA226 amp-branch telemetry in the profiler
+
+- What: Extended the existing profiling subsystem (not a parallel logger) to capture the
+  amplifier's 5V branch power alongside system PMIC power, so one `--benchmark --play` run
+  measures both simultaneously, on the same shared `time.monotonic()` clock.
+  1. `profiling/sampler.py`: auto-detects an INA226 at `i2c-1 @ 0x40` on startup
+     (`_init_ina226()`, best-effort, never crashes the sampler); one 6-byte I2C block read per
+     10 Hz tick (`_read_ina226()`, contiguous bus-voltage/power/current registers `0x02`-`0x04`);
+     appends `ina_bus_v`, `ina_current_a`, `ina_power_w` to `profile/per_sample.csv`. New
+     `--ina`/`--no-ina` CLI flag (default on; absence of the sensor just leaves the columns empty).
+  2. `profiling/parsing.py`: pure, hardware-free INA226 register decode
+     (`decode_ina226_bus_voltage_v`/`_current_a`/`_power_w`) plus the register/constant map
+     (address `0x40`, `R_SHUNT=0.002`, `CURRENT_LSB=0.00025`, `CAL=10240`, config `0x4527`).
+  3. `profiling/join.py`: generalized `_integrate_energy_j()` to take a `power_key` parameter
+     (default `pmic_power_w`, unchanged for existing callers) and reused it for `ina_power_w`.
+     `per_sentence_results.csv`/`per_stage_results.csv` gain `amp_energy_j`, `amp_energy_wh`,
+     `amp_mean_w`, `amp_peak_w` alongside the untouched PMIC-derived system-energy columns.
+  4. `profiling/__init__.py` (`start_session(ina=...)`) and `do_tts.py` (`--ina`/`--no-ina`,
+     merged into `config_tts.yaml`'s new `profiling.ina226` key) wire the flag through, same
+     pattern as `--postprocess`.
+- Files: `profiling/sampler.py`, `profiling/parsing.py`, `profiling/join.py`,
+  `profiling/__init__.py`, `do_tts.py`, `config_tts.yaml`, `requirements-pi.txt` (added
+  `smbus2`, Pi-only, lazily imported inside `sampler.py`), `apt-packages-pi.txt` (added
+  `i2c-tools` for `i2cdetect`), `tests/test_profiling.py` (INA226 decode tests + join `amp_*`
+  column tests), `README.md` ("Profilage" section), `docs/ARCHITECTURE.md` (profiling
+  subsystem section).
+- Why: The PMIC (`vcgencmd pmic_read_adc`) only reports system-wide Pi power; a second INA226
+  sensor was wired directly on the Pi's own I2C bus to isolate the amplifier breadboard's 5V
+  branch draw, so compute cost and amplifier cost can be attributed separately per sentence.
+- Verify: `tests/test_profiling.py` (52 tests, all passing) covers the register decode math and
+  the join's `amp_*` aggregation with both present and absent INA226 samples. End-to-end smoke
+  test: ran `profiling.join.run_join()` against a synthetic `per_sample.csv` with both
+  `pmic_power_w` and `ina_power_w` populated — confirmed system and amp energies compute
+  correctly and independently, per sentence and per stage. Not tested against real INA226
+  hardware (no Pi/sensor available in this dev environment) — `sampler.py`'s actual I2C reads
+  are excluded from the unit-tested surface, same as its existing PMIC/sysfs reads.
+- Notes/gotchas:
+  - No standalone `ina226_logger.py` reference file existed in the repo to match scaling
+    against, despite an original task prompt assuming one did — implemented directly from the
+    prompt's own register spec instead.
+  - INA226 registers `0x02` (bus voltage), `0x03` (power), `0x04` (current) are contiguous, so a
+    single 6-byte block read covers all three — this is what keeps the added per-tick I2C work to
+    "one block read" as required, rather than three separate transactions.
+  - Must not collide with the IQaudio DAC at `0x4c` on the same `i2c-1` bus — verify with
+    `i2cdetect -y 1` before a session (documented in README).
+
+---
+
+## 2026-07-09 — Split PC/Pi5 dependencies + Pi5 provisioning script
+
+- What: Restructured dependency management into a PC/Pi5 split and added a repeatable Pi5
+  provisioning script.
+  1. `requirements-dev.txt` (PC exploration env) and `requirements-pi.txt` +
+     `apt-packages-pi.txt` (Raspberry Pi 5 CPU-only inference env), replacing the ambiguous
+     `requirements.txt` / `minimal_requirements.txt` pair (both kept, deprecated with a pointer
+     comment at the top of each — not deleted).
+  2. `scripts/setup_pi.sh`: idempotent, guards on Linux/aarch64, installs apt + pip deps, creates
+     `~/chatterbox/venv`, downloads the FastSpeech2/FlauBERT/HiFi-GAN weights (README's Drive
+     links) into the exact paths `docs/ARCHITECTURE.md` documents, runs a torch-CPU smoke
+     test (fatal) and a best-effort one-sentence end-to-end synthesis smoke test (non-fatal), then
+     writes `requirements-pi-lock.txt` via `pip freeze`.
+  3. `INSTALL.md`: PC vs Pi5 split, fresh-Pi5 setup steps, golden-image mass-deployment note,
+     `pip-tools`/`pip-compile` flagged as a future option (not implemented).
+- Files: `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`,
+  `scripts/setup_pi.sh`, `INSTALL.md` (all added); `requirements.txt`, `minimal_requirements.txt`
+  (deprecation header only, contents otherwise unchanged); `CLAUDE.md` (repo map entry + corrected
+  "Install gotchas"); `docs/ARCHITECTURE.md` (weights section now points at the script).
+- Why: PC and Pi5 need different dependency sets (`apex` mis-resolves on PyPI and is CUDA/Waveglow
+  training-only; several other pins are FastSpeech2 training-only), and there was no repeatable way
+  to provision a new Pi5 unit.
+- Verify: `bash -n scripts/setup_pi.sh` (syntax only — not run against real Pi5 hardware, per
+  constraints: this session only authors files, it doesn't SSH into or execute anything on a
+  physical Pi). Content of all three requirements files traced against actual imports (see
+  Notes/gotchas) rather than guessed.
+- Notes/gotchas:
+  - **Found and fixed a stale doc bug**: `CLAUDE.md`'s old "Install gotchas" said `requirements.txt`
+    was the lean runtime set and `minimal_requirements.txt` pulled training-only deps — reading
+    both files directly showed the opposite (`requirements.txt` has `apex`/`tensorflow`/
+    `tensor2tensor`/etc.; `minimal_requirements.txt` is the lean, working set). Corrected in
+    `CLAUDE.md`; `requirements-dev.txt` is built from `minimal_requirements.txt`'s contents.
+  - `apex` is only imported by `Waveglow/train.py`, `Waveglow/tacotron2/train.py`, and
+    `Waveglow/inference.py` — Waveglow's vocoder entry is commented out in `config_tts.yaml` and
+    not part of the active FastSpeech2+HiFi-GAN pipeline, so `requirements-pi.txt` excludes `apex`
+    entirely (flagged in a comment, not silently dropped) and `setup_pi.sh` skips downloading
+    Waveglow weights by default.
+  - `simpleaudio`/`sounddevice` are imported only under `if platform.system() == "Windows":` in
+    `audio_utils.py`/`gui_utils.py` — dead code on Linux, so excluded from `requirements-pi.txt`;
+    Pi playback goes through `pydub.playback.play()` → `ffplay` (hence `ffmpeg` in
+    `apt-packages-pi.txt`).
+  - `librosa` is not pinned directly anywhere but is a hard transitive dependency of `noisereduce`
+    (confirmed via `noisereduce`'s own `Requires-Dist`) — it still gets installed.
+  - `espeak-ng` was considered for `apt-packages-pi.txt` (the original task prompt suggested it
+    "if the phonemizer needs it") but this pipeline has no phonemizer — French text uses this
+    repo's own regex-based normalization and user-typed literal `{s y z i}` phonetic input, not
+    auto G2P — so it was left out, with the reasoning documented inline in the file.
+  - On this dev checkout, the already-downloaded weight archives show a one-level self-duplicated
+    directory artifact (e.g. `hifi-gan-master/FR_V2/FR_V2/...`,
+    `FastSpeech2/preprocessed_data/preprocessed_data/...`), consistent with the source zips having
+    a top-level folder matching the extraction target name. `setup_pi.sh`'s `fetch_and_unzip`
+    flattens that case automatically; not verified against a fresh real download since this
+    session had no network access to the Drive links.
+  - Placed the new files inside `embedded_tts/` (next to the existing `requirements.txt`/
+    `README.md`), not at the outer repo root, per this repo's own working-root/repo-root
+    distinction (see `CLAUDE.md` repo map) — the task prompt said "repo root" but the existing
+    requirements files already live one level down.
+
+## 2026-07-09 — Verify profiling + benchmark end-to-end; fix two bugs found doing so
+
+- What: Ran both features for real (weights are present in this checkout: FastSpeech2 `390000`,
+  HiFi-GAN `FR_V2/g_00570000`, FlauBERT), not just unit tests. `--profile` on a single sentence
+  produced a correct `per_sentence.jsonl` record (durations, RTF, audio metrics all sane). Found
+  and fixed two bugs in the process:
+  1. `audio_utils.syn_audio()` called `gui_utils.update_circle_color("gray", ...)` unconditionally
+     (not gated by `if use_gui:`, unlike the "yellow"/"green" calls) — this crashed with
+     `AttributeError: 'NoneType' object has no attribute 'itemconfig'` at the end of *every*
+     non-GUI synthesis call. Pre-existing bug (confirmed present in `HEAD` before this session's
+     changes), but it directly blocked `--benchmark` from getting past sentence 1 of 11, so fixed
+     it here rather than filing it separately: wrapped that call in `if use_gui:` too, matching the
+     existing pattern.
+  2. `profiling/join.py`'s `load_samples()` assumed `profile/per_sample.csv` always exists, but the
+     background sampler is optional and Linux-only — running `--join` on a machine without it (or
+     if the sampler didn't start) crashed with `FileNotFoundError` instead of degrading to
+     timing-only results. Fixed: returns `[]` with a printed note when the file is missing;
+     downstream aggregation already handles empty sample windows (all energy/CPU/temp fields come
+     out `None`, timing/RTF fields unaffected).
+  After both fixes, `do_tts.py --benchmark --repeats 1 --join` ran the full REF→A1..C2→REF
+  sequence and produced correct `per_sentence_results.csv`/`per_stage_results.csv` (11 sentence
+  rows, 44 stage rows; `sentence_id`/`complexity_tag` correctly labelled per entry; `energy_j`
+  empty since no PMIC sampler ran on this Windows dev box, as expected).
+- Files: `audio_utils.py` (one-line `if use_gui:` guard), `profiling/join.py`
+  (`load_samples()` missing-file guard), `tests/test_profiling.py` (2 new regression tests for the
+  `join.py` fix).
+- Why: User asked to verify both prompts' features actually work as specified, not just that they
+  compile/pass mocked unit tests.
+- Verify: `python -m pytest tests/` (45 passed). Manually: `printf "Bonjour, ceci est un
+  test.\n" | python do_tts.py --profile` (single-sentence, real synthesis + profiling record);
+  `python do_tts.py --benchmark --repeats 1 --join` (full 11-call sequence + join, real synthesis).
+- Notes/gotchas:
+  - This session generated `profile/per_sentence.jsonl` and result CSVs as verification artifacts;
+    deleted them afterwards (`profile/.gitkeep` is the only tracked file there) so a fresh clone
+    doesn't ship stale sample data.
+  - The circle-color bug means anyone running plain free-text CLI mode today (`do_tts.py` with no
+    `--gui`) already crashes after the *first* sentence synthesized in the process (looping back to
+    `input()` never happens) — this was true before this session's changes too, it just went
+    unnoticed until a multi-sentence non-GUI loop (the benchmark) exercised it.
+
+## 2026-07-08 — Add benchmark mode (fixed 10-sentence routine)
+
+- What: Added `do_tts.py --benchmark`, running a fixed 10-sentence French set through the exact
+  same synthesis call as free-text mode (`audio_utils.syn_audio()`), with profiling forced on, so
+  power/RTF are comparable across sentences of varying length/complexity and across runs.
+- Files: new `benchmark/` package (`__init__.py`, `sentences_fr.jsonl` — the 10 sentences,
+  `runner.py` — `load_sentences()`/`run_benchmark()`); new `tests/test_benchmark.py`; edited
+  `do_tts.py` (`--benchmark`/`--sentences`/`--play`/`--repeats`/`--join` flags, `load_models()`
+  factored out of the free-text branch and reused by the benchmark branch, `--join` calls
+  `profiling.join.run_join()` after `profiling.stop_session()`); edited `audio_utils.py`
+  (`syn_audio()` gained optional `sentence_id`/`complexity_tag`/`play` params, all
+  default-preserving); edited `profiling/__init__.py` (`begin_sentence()` accepts an explicit
+  `sentence_id` override instead of always auto-incrementing); refactored `profiling/join.py`
+  (`main()` split into a plain `run_join(profile_dir)` callable + a thin argparse `main()`, so
+  `do_tts.py` can call it without an `sys.argv` collision); README "Benchmark" section;
+  `docs/ARCHITECTURE.md` "Benchmark mode".
+- Why: Need a repeatable, labelled sentence set (varying length/liaisons/numbers/prosody/proper
+  nouns/homographs, one REF anchor at each end for drift) to compare compute/energy cost across
+  sentence types without hand-typing free text each time, while keeping exactly one synthesis path.
+- Verify: `python -m pytest tests/test_benchmark.py` (order REF→A1..C2→REF, `--repeats` behavior,
+  `play` propagation, empty-file error — `audio_utils.syn_audio` monkeypatched, no real models
+  needed). Full suite (`python -m pytest tests/`) green (43 passed). `python -m py_compile` on all
+  touched files.
+- Notes/gotchas:
+  - `--benchmark` forces `profiling.enabled = True` in the same CLI/env merge block `--profile`
+    already uses in `do_tts.py` — no separate start/stop logic was needed in `benchmark/runner.py`
+    itself, it just calls `audio_utils.syn_audio()` in a loop.
+  - `profiling/join.py`'s old `main()` parsed `sys.argv` directly; calling it from `do_tts.py` would
+    have collided with `do_tts.py`'s own args. Split into `run_join(profile_dir)` (no argv access)
+    plus a thin `main()` CLI wrapper around it.
+  - The prompt's sentence text had mis-encoded accents (UTF-8 bytes read as Latin-1, e.g. `Ã©`
+    for `é`); reconstructed each sentence from context and verified by round-tripping through
+    `json.load` and checking Unicode codepoints (0xe9=é, 0xe7=ç, 0xe0=à, 0xe8=è, 0xfb=û,
+    0x2026=…) rather than trusting a terminal echo (Git Bash's codepage renders them as `�`
+    even when the file bytes are correct UTF-8).
+  - `sentence_id` in `per_sentence.jsonl` is a free-text-mode auto-incrementing int by default but
+    now an explicit string (`"REF"`, `"A1"`, ...) when the benchmark passes one — `profiling/join.py`
+    treats it as an opaque label either way, so no changes were needed there.
+
+## 2026-07-08 — Add optional profiling subsystem
+
+- What: Added an opt-in profiling subsystem to measure per-sentence, per-stage CPU/energy/timing
+  cost of synthesis on the Pi 5 target, using the PMIC (`vcgencmd pmic_read_adc`) as the only
+  available continuous power source (no external current sensor on the 5V rail). Off by default,
+  zero overhead when disabled.
+- Files: new `profiling/` package (`__init__.py` public API/session control, `recorder.py`
+  per-sentence `Recorder`/`NullRecorder`, `sampler.py` background 10 Hz CPU/PMIC/thermal subprocess,
+  `parsing.py` pure text parsing for `/proc/stat`/PMIC/throttled output, `join.py` offline
+  energy/CPU aggregation, `calibrate.py` PMIC→external-meter calibration helper); new
+  `tests/test_profiling.py`; new `profile/` output dir (gitignored contents, `.gitkeep` tracked);
+  edited `do_tts.py` (`--profile` flag, session start/stop), `audio_utils.py` (recorder creation +
+  `vocoder`/`write` stage marks + audio metrics capture), `synthesis_modules.py` (`front_end`/
+  `acoustic` stage marks + phoneme count, inside `syn_fastspeech2()`); added `profiling:` section to
+  `config_tts.yaml`; added README "Profilage" section; `.gitignore` updated.
+- Why: Need per-sentence, per-pipeline-stage power/timing data to analyse compute and energy cost
+  on the Pi 5, without perturbing the synthesis it measures (profiler runs on the same machine).
+- Verify: `python -m pytest tests/test_profiling.py` (19 tests, pure-Python parsing/recorder/join
+  logic only — `sampler.py`'s actual sysfs/vcgencmd reads need a real Pi to exercise). Full suite
+  (`python -m pytest tests/`) still green (38 passed). `python -m py_compile` on all touched files.
+- Notes/gotchas:
+  - The FlauBERT front-end has no separate boundary in `audio_utils.py` — it's nested inside
+    `synthesis_modules.syn_fastspeech2()` (the `preprocess_styleTag()` call), so `front_end`/
+    `acoustic` marks had to go there, reached via `profiling.current()` (a contextvar) rather than
+    threading a parameter through `tts()` → `syn_fastspeech2()`.
+  - The "§" sub-utterance loop in `syn_audio()` calls `synthesis_modules.tts()` once per
+    sub-utterance, so `Recorder.stage()` *accumulates* durations across repeated calls (see
+    `durations` dict) instead of overwriting — a single per-sentence record still comes out
+    correct whether or not the input contains "§".
+  - `t_audio_write_end` is marked *before* `play_audio()` deliberately — including playback would
+    inflate `total_synth_ms`/RTF with real-time audio duration, which isn't compute cost.
+  - Background sampler is gated to Linux only (checks `platform.system()`); this dev checkout is
+    Windows, so the sampler subprocess itself is untested end-to-end here — only its parsing logic
+    (`profiling/parsing.py`) and the per-sentence recorder path are exercised by the test suite.
+  - Unrelated discovery while reading `requirements.txt`/`minimal_requirements.txt`: their actual
+    contents are the *opposite* of both this doc's and the previous changelog entry's claim —
+    `requirements.txt` currently contains the heavy training deps (`apex`, `tensorflow`,
+    `tensor2tensor`, `librosa`), and `minimal_requirements.txt` has the lean runtime set. Flagged to
+    the user; not fixed in this session since it's unrelated to profiling — worth a follow-up pass
+    on `CLAUDE.md`'s "Install gotchas" section.
+
+## 2026-07-08 — Add persistent project-context docs
+
+- What: Ran `/init` to generate a baseline `CLAUDE.md`, then split it into a lean root `CLAUDE.md` +
+  detailed `docs/ARCHITECTURE.md` + this changelog, per the three-file context design (short
+  file loaded every session vs. on-demand detail).
+- Files: `CLAUDE.md` (rewritten), `docs/ARCHITECTURE.md` (new), `docs/research/CHANGELOG.md`
+  (new, this file).
+- Why: Keep every-session context budget small while letting modification history and deep
+  architecture notes grow indefinitely without re-exploring the codebase each session.
+- Verify: n/a (docs only, no code changed).
+- Notes/gotchas: A draft prompt for this task described a benchmark mode (`--benchmark`), a 10 Hz
+  profiling subsystem, and an inverted claim about `requirements.txt` vs. `minimal_requirements.txt`
+  (that `apex` lives in `requirements.txt` — it actually lives in `minimal_requirements.txt`, which
+  also pulls `tensorflow`/`librosa`/`tensor2tensor`, i.e. full training deps not needed for the demo
+  pipeline). None of that benchmark/profiling code exists in this checkout — confirmed by grepping
+  the whole tree for `benchmark|profile|profiling` outside `.venv`. Left out of these docs
+  deliberately; add it here (and to `CLAUDE.md`'s run-modes section) once it's actually implemented.

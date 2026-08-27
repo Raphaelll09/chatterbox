@@ -1,0 +1,520 @@
+# Architecture
+
+**How the subsystems work internally.** For *where* code lives, which language governs which
+aspect, and a task index, read [`CODEMAP.md`](CODEMAP.md) first — this document assumes you already
+know your way around.
+
+Current as of the 2026-08 release reorganisation (`docs/release/REORG_PLAN.md`), which introduced
+the enforced L1/L3 layer boundary (below), renamed `tools/` to `research/`, and removed Waveglow and
+the unused `synthesis/base.py` ABCs. The earlier 2026-07-20 reorganisation is documented in
+`docs/research/history/REORG_PROPOSAL.md`.
+
+Where this document and the code disagree, the code wins — then fix this document. Two claims here
+were false for months (`base.py` described as the operative backend contract; `§` as the
+sub-utterance separator, which is actually `|`).
+
+## Repository layout
+
+The repo root (where `CLAUDE.md` lives) is the working root for running scripts, tests, and
+installing dependencies — there is no nested `embedded_tts/` subfolder inside it.
+
+- `chatterbox/` — the daily-use application package (synthesis, audio, GUI, config).
+- `research/` — research/maintenance tooling, **never imported by `chatterbox/`** (see "The layer
+  boundary" below): `research/benchmark/`, `research/profiling/`,
+  `research/calibration/pmic_calibrate.py`, and `research/data/archive/` (committed historical
+  run data).
+- `assets/models/` — vendored model repos, each with its own README/LICENSE:
+  - `FastSpeech2/` — TTS acoustic model (text → mel-spectrogram + visual/AU params).
+    Vendored FastSpeech2 fork with custom style/GST (Global Style Token) and StyleTag
+    (FlauBERT-based free-text emotion) conditioning, plus per-phoneme prosody "control bias" vectors.
+  - `hifi-gan-master/` — vocoder (mel-spectrogram → waveform). Default vocoder is
+    `FR_V2` (French, fine-tuned on multi-speaker FastSpeech2 mel spectrograms).
+  - `flaubert/` — pretrained FlauBERT-large model/tokenizer. Tokenizer loads eagerly at model-load
+    time whenever the active TTS model's `styleTag_encoder.use_styleTag_encoder` is `True` (it is,
+    in the shipped `ALL_corpus` config); the ~1.4 GB model checkpoint itself is wrapped in a
+    `_LazyFlaubertModel` proxy (`assets/models/FastSpeech2/utils/model.py`) and only actually
+    loaded from disk on the first per-utterance call where a `<STYLE_TAG=...>` free-text tag is
+    present in the input — deferred since that's the dominant cost of a fresh startup and the tag
+    is rarely used (see `docs/research/CHANGELOG.md` 2026-07-22 "Lazy-load FlauBERT").
+- `assets/audio/prompts/` — on-screen keyboard phoneme WAVs, read by `chatterbox/gui/app.py`. The
+  post-processing before/after reference WAVs moved to `docs/research/reference-audio/` in the
+  release reorganisation: they are research material, not loaded at runtime.
+
+Pretrained checkpoints are **not** in git — they're downloaded separately per `README.md`
+(Google Drive links in `README.fr.md`) and unzipped into `assets/models/FastSpeech2/{config,output,preprocessed_data}`,
+`assets/models/flaubert/flaubert_large_cased`, and `assets/models/hifi-gan-master/FR_V2`. Do not
+expect the app to run end-to-end without these. `scripts/setup_pi.sh` automates this download/unzip
+step on a fresh Raspberry Pi 5 (see `INSTALL.md`).
+
+## The layer boundary
+
+The repository is split in two, and the split is enforced by a test rather than by convention:
+
+```
+chatterbox/   L1 RUN     must NEVER import research/
+research/     L3 STUDY   may import chatterbox/ freely
+tests/        L3
+```
+
+Deleting `research/` and `tests/` must leave a working demonstrator. `scripts/check_layers.py`
+(AST walk over `chatterbox/`) and `tests/test_layer_boundary.py` (which additionally blocks the
+`research` package on `sys.meta_path` and imports each runtime module for real) enforce it.
+
+**Why it needed enforcing.** Before the release reorganisation, four L1 modules imported the
+profiling package at module scope — `chatterbox/synth.py`, `chatterbox/cli.py` and both synthesis
+backends. Removing the research tree therefore did not disable profiling, it made
+`chatterbox.synth`, `chatterbox.cli`, `chatterbox.synthesis.registry` and the Piper backend
+**unimportable**. `research/profiling/__init__.py` also imports `chatterbox.config.paths`, so the
+two packages were mutually entangled across the boundary.
+
+**How it is resolved: `chatterbox/instrumentation.py`.** L1 imports only this module (conventionally
+as `profiling`). Every function in it is an inert no-op returning a `NullRecorder` that mirrors the
+real recorder's surface, so call sites stay branch-free and never test whether profiling is on —
+which is also the shipped default (`config_tts.yaml`: `profiling.enabled: false`).
+
+`research/profiling/__init__.py` ends by calling `instrumentation.install(sys.modules[__name__])`
+on itself. From that point the seam delegates to the real implementation. The dependency therefore
+runs L3 → L1 only, the permitted direction:
+
+```
+L1   chatterbox.synth  ──►  chatterbox.instrumentation            (always)
+L3   research.profiling ──► chatterbox.instrumentation.install()  (when present)
+```
+
+The surface is nine module functions (`enable`, `is_enabled`, `set_output_dir`, `start_session`,
+`start_session_at`, `stop_session`, `get_run_dir`, `begin_sentence`, `set_current`, `current`) plus
+three recorder methods (`set`, `stage`, `finalize`). Adding a profiling call in L1 means adding a
+passthrough here — never an `import research.*` under `chatterbox/`.
+
+**Ordering matters.** `chatterbox/cli.py` imports `research.profiling` inside its existing
+`if profiling enabled:` gate, *before* calling `profiling.enable()`. Enabling an unarmed seam is a
+silent no-op that would produce an empty `per_sentence.jsonl` rather than an error. A missing
+research package there raises a `SystemExit` pointing at the `[research]` extra.
+
+The four mode-gated imports in `cli.py` (`--benchmark`, `--p4-sweep`, `--join`, `--export-xlsx`)
+are the only other crossings, whitelisted by name in `scripts/check_layers.py` — and at function
+scope only, so promoting one to a module-level import still fails the check.
+
+## Synthesis pipeline — four stages
+
+`do_tts.py` (a 3-line shim) calls `chatterbox.cli.main()`, which reads `config_tts.yaml`, picks one
+entry from `tts_models` and one from `vocoder_models` (by index, `--default_tts`/
+`--default_vocoder`), and dispatches to loader methods named in each entry's `load_script`, resolved
+via `getattr(registry.BACKEND, load_script)` — `registry.BACKEND` is a singleton
+`FastSpeech2HifiGanBackend` instance (`chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`).
+Everything below is orchestrated per-utterance by `chatterbox.cli.syn_audio()`.
+
+1. **FlauBERT front-end** (optional, per-utterance) — `text_pipeline.parse_params_from_text()`
+   pulls a `<STYLE_TAG=...>` free-text tag out of the input if present, then
+   `text_pipeline.preprocess_styleTag()` embeds it via the backend's already-loaded
+   `flaubert_model`/`flaubert_tokenizer` instance attributes (passed in explicitly by
+   `backend.py`'s `syn_fastspeech2()`, using `assets/models/FastSpeech2/dataset.py:
+   load_free_styleTags_embedding`). If no styleTag is given, this returns `None` and the model
+   instead uses the GST emotion-token vector (`gst_token_index` / `style_intensity`) selected via
+   `<STYLE=...>` / `<STYLE_INTENSITY=...>` or GUI controls.
+2. **FastSpeech2 acoustic** — `FastSpeech2HifiGanBackend.syn_fastspeech2()` builds the
+   control-value / control-bias arrays, resolves speaker/style/styleTag from text tags vs. GUI
+   controls (text tags win — see "Contest with text-tags" in that method), then calls
+   `assets/models/FastSpeech2/synthesize.py:synthesize()` against the backend's own `tts_model`
+   attribute. Output is a mel-spectrogram plus `.AU` (37-parameter facial/visual animation) file
+   written to disk under `assets/models/FastSpeech2/output/audio`.
+3. **HiFi-GAN vocoder** — `FastSpeech2HifiGanBackend.vocoder()` calls the model-specific
+   `syn_script` (default `syn_hifigan`, which wraps
+   `assets/models/hifi-gan-master/inference_e2e.py:inference()` against the backend's own
+   `generator` attribute) to turn the mel file into a `.wav`. Skipped entirely for a monolithic
+   backend (`needs_vocoder: false`), which produced a finished wav in stage 2.
+4. **Audio write / post-process / playback** — back in `chatterbox.cli.syn_audio()`: denoise via
+   `chatterbox.audio.denoise.denoise()` (if `use_denoiser`), optional loudness post-processing
+   (`chatterbox.synthesis.audio_postprocess.normalize_and_limit`, if `postprocess.enabled`),
+   low-pass filter the first 6 (head-movement) `.AU` channels for `visual_smoothing`, write
+   subtitle/alignment files (`chatterbox.synthesis.subtitles`), then play the result back
+   (`chatterbox.audio.playback.play_audio()`).
+
+Models are swapped from disk files, never held resident as multiple simultaneous instances — this
+keeps memory low enough for CPU-only, embedded-style deployment (see "Performances" in
+`README.md`: inference ≈ 20% of audio duration on CPU with recommended settings).
+
+## Class-owned state (was: global-state loading pattern)
+
+Before the 2026-07-20 reorg, loaded models were stashed as module-level globals on
+`loading_modules`/`tts_utils`, fetched everywhere via `getattr(loading_modules, "...")`. Phase 3 of
+the reorg converted this into a single `FastSpeech2HifiGanBackend` instance
+(`chatterbox.synthesis.registry.BACKEND`) that owns `tts_model`/`configs`/`flaubert_model`/
+`flaubert_tokenizer`/`vocoder_model`/`generator`/`h`/`vocoder_path` as **instance attributes**, plus
+`chatterbox.state` (was `tts_utils.py`) for the tiny `TTS_INDEX`/`VOCODER_INDEX` selection globals.
+The backend keeps its pre-reorg method names (`load_fastspeech2`, `syn_hifigan`, etc.) so
+`config_tts.yaml`'s `load_script`/`syn_script`/`gui_script` string-based dispatch needed zero
+changes — only what those strings resolve *against* changed (an object instead of a flat module).
+The acoustic model and the vocoder stay independently swappable (separate GUI pickers), so their
+loading is deliberately not bundled into one call. A `chatterbox/synthesis/base.py` once declared
+`Synthesizer`/`VocoderBackend` ABCs for this, but nothing ever subclassed, imported or constructed
+them; it was deleted in the release reorganisation and replaced by
+`chatterbox/synthesis/README.md`, which documents the contract the code actually enforces — a
+`(output_dir, processed_text)` tuple plus three YAML capability flags.
+
+Switching models at runtime (from the GUI) means re-running the loader method, which overwrites
+those instance attributes — same semantics as the old globals, just owned by an object instead of a
+module. Keep this in mind before assuming per-request isolation: this is still one shared backend
+instance, not one object per synthesis call.
+
+## Inline control-tag mini-language
+
+Input text can carry synthesis controls inline, parsed by
+`chatterbox.synthesis.backends.fastspeech2_hifigan.text_pipeline.parse_params_from_text()`:
+- `<SPEAKER=name>` — override the speaker for the whole utterance (or sub-utterance).
+- `<STYLE=NAME>` — select a GST emotion token (e.g. `COLERE`, `ENTHOUSIASTE`, `NARRATION`, ...; full
+  list in `README.md`).
+- `<STYLE_INTENSITY=0.0-1.0>` — blend weight between the selected style and neutral.
+- `<STYLE_TAG=...>` (free text adjectives) — only honored when the model's `styleTag_encoder` is
+  enabled; embedded via FlauBERT instead of a fixed GST index (see stage 1 above).
+- `#word#` — adds emphasis on a word.
+- `{s y z i}` — literal phonetic input for a word (phonetic alphabet documented in
+  `README.md`, linked to a Zenodo reference).
+- `§` — sub-utterance separator: text is split, each part synthesized independently (as a "linking
+  utterance" so prosody/duration matches training), then the mel/`.AU` outputs are concatenated in
+  `chatterbox.cli.syn_audio()` before vocoding as a single file.
+
+Text tags override the GUI/CLI control values (`gui_control` positional list in
+`FastSpeech2HifiGanBackend.syn_fastspeech2`) when both are present.
+
+`parse_params_from_text()` takes the backend's already-loaded `configs` tuple as an explicit
+parameter (added in the Phase 3 reorg) rather than re-reading `preprocess.yaml` from disk on every
+`<SPEAKER=name>` tag, as the pre-reorg code did — the same class of leak `gui_utils.py:355` had for
+the GUI's speaker list (see next section), found and fixed in both places at once.
+
+## Config-driven model registry (config_tts.yaml)
+
+`tts_models` and `vocoder_models` are lists of dicts, not a schema with a fixed shape — each entry
+names its own `load_script`/`syn_script` (methods on `registry.BACKEND`, dynamically looked up via
+`getattr`), its own `folder`, and its own `default_args`. Adding a new TTS or vocoder backend that
+reuses the existing `FastSpeech2HifiGanBackend` class means adding a config entry plus a
+`load_*`/`syn_*` method pair on that class; adding a genuinely new *kind* of backend (e.g.
+Matcha-TTS) means a new class satisfying the contract in `chatterbox/synthesis/README.md`, a new
+`chatterbox/synthesis/backends/<name>/` package, and an entry in `registry.py`'s
+`_BACKENDS_BY_NAME`. `chatterbox/gui/app.py` reads `gui_script` similarly to render model-specific
+controls (e.g. `gui_fastspeech2`), and calls `registry.BACKEND.describe_controls()` for the speaker
+list instead of re-parsing config YAML directly (the leak mentioned above, now closed).
+
+## Audio post-processing (chatterbox/synthesis/audio_postprocess.py)
+
+Standalone, dependency-light module (numpy + scipy only) with no globals — safe to unit test in
+isolation (see `tests/test_audio_postprocess.py`), unchanged internally by the reorg (moved as a
+whole file). Two independent operations:
+- `analyze()` — read-only loudness/crest-factor/clipping report.
+- `normalize_and_limit()` — peak-normalizes and applies a feedforward soft limiter (look-ahead min +
+  one-pole attack/release smoothing) to hit a target crest factor and peak level, then asserts its
+  own invariants (`_verify`) before returning. It iterates the threshold up to 3 times to converge
+  crest factor within ±1 dB.
+
+This module is opt-in (`postprocess.enabled: false` by default in `config_tts.yaml`) and wired into
+the pipeline only in `chatterbox.cli.syn_audio()`; `do_tts.py --report-wav` also calls it standalone
+for analysis without touching the synthesis pipeline.
+
+`report_wav()` takes an optional `preloaded=(data, rate)` kwarg (added 2026-07-10) so
+`chatterbox.cli.syn_audio()` can pass it the in-memory samples it already has mid-pipeline instead
+of making it re-read the wav from disk; the standalone `--report-wav` CLI path (no samples in
+memory yet) omits it and reads from disk as before.
+
+`chatterbox.cli.syn_audio()`'s "write" stage (denoise → optional postprocess → optional analyze →
+final `AudioSegment` for playback/duration) keeps the waveform in memory across all of those steps
+and writes it to disk exactly once, instead of round-tripping the wav file through disk at each
+step (a change made 2026-07-10 for latency, not correctness — see CHANGELOG).
+
+## Platform-specific playback
+
+Audio playback branches on `platform.system()` in `chatterbox/audio/playback.py` (was
+`audio_utils.py`) and `chatterbox/gui/app.py` (was `gui_utils.py`): Windows prefers `simpleaudio`,
+falling back to `sounddevice`/`soundfile` if unavailable; other platforms invoke `ffplay` directly
+via `subprocess.Popen` (landscape-refactor plan, input-row phase -- was `pydub.playback.play`,
+whose internal `subprocess.call()` blocks with no handle to interrupt it; the direct `Popen` gives
+the GUI's Stop button (`playback.stop_audio()`) something to `.terminate()`). When editing playback
+code, keep both paths in sync.
+`chatterbox.audio.playback.AUDIO_EXAMPLE` holds the most recently synthesized clip as a module
+attribute (not eliminated in the reorg) so `play_audio()` can still be called with no arguments —
+needed because the GUI's "Play" replay button is wired as a zero-argument Tkinter callback.
+
+## Weights and config locations
+
+- FastSpeech2 checkpoint: `assets/models/FastSpeech2/output/ckpt/<checkpoint_file>` (config value
+  `checkpoint_file: "390000"` by default), configs under
+  `assets/models/FastSpeech2/config/ALL_corpus/{preprocess,model,train}.yaml`, preprocessed speaker
+  list at `<preprocessed_path>/speakers.json`.
+- HiFi-GAN checkpoint: `assets/models/hifi-gan-master/FR_V2/g_00570000`, config
+  `assets/models/hifi-gan-master/FR_V2/config.json`.
+- FlauBERT: `assets/models/flaubert/flaubert_large_cased/`.
+
+`chatterbox/config/paths.py` anchors all of the above to its own file location
+(`Path(__file__).resolve().parents[2]`, i.e. two levels up — this file lives at
+`chatterbox/config/paths.py`, so `parents[2]` is the repo root; **check this parent count first if
+the file ever moves again**, since an off-by-one here breaks every path in the module silently —
+this has already happened twice during the reorg, see `docs/research/history/REORG_PROPOSAL.md` §6), not the
+process's current working directory. `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s
+two `sys.path.insert` calls (`FastSpeech2/` and `hifi-gan-master/`, both under `assets/models/`), the same file's three regex-rule CSV paths (now under
+`chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`), and
+`assets/models/FastSpeech2/utils/model.py`'s FlauBERT path all resolve through it, instead of bare
+CWD-relative strings — see `docs/research/history/REORG_PROPOSAL.md` §6/Phase 0 for why (a future package move only
+needs `paths.py`'s constants updated, not every scattered path string). It also anchors
+`assets/audio/prompts/` (the on-screen keyboard's phoneme WAVs, `chatterbox/gui/app.py`'s
+`AUDIO_KEYBOARDS_DIR`). `do_tts.py` must still be launched with the repo as the working directory
+today; `paths.py` only removes the *hidden* CWD dependency in the vendored-import machinery, it
+doesn't make the entry point location-independent.
+
+Two config files inside `assets/models/FastSpeech2/config/ALL_corpus/` (`preprocess.yaml`,
+`train.yaml`) are **gitignored** (downloaded from the Google Drive archives in `README.fr.md`, never
+committed) and historically hardcoded their own `"FastSpeech2/..."`-prefixed paths, predating the
+reorg's move to `assets/models/`. `backend.py`'s `_repoint_legacy_fastspeech2_config_paths()`
+remaps these in memory at load time, so a fresh download (from the unchanged archive) still works
+without hand-editing — see `docs/research/history/REORG_PROPOSAL.md` §6 for the full story.
+
+## Profiling subsystem (research/profiling/)
+
+Added 2026-07-08; moved from `profiling/` to `research/profiling/` in the 2026-07-20 reorg
+(Phase 2 — Goal 4, monitoring isolated as maintenance-only). Optional, off by default
+(`CHATTERBOX_PROFILE=1` env var, `do_tts.py --profile`, or `profiling.enabled: true` in
+`config_tts.yaml`) — zero files written and near-no-op marks when disabled. Three components share
+one `time.monotonic()` clock:
+
+- `research/profiling/sampler.py` — background 10 Hz CPU/PMIC/thermal sampler, run as its
+  own OS subprocess (`python -m research.profiling.sampler`) via `profiling.start_session()`/
+  `stop_session()` (called from `chatterbox/cli.py`), pinned to one core (`os.sched_setaffinity`)
+  and de-prioritised (`os.nice`). Reads `/proc/stat`, `/sys/.../scaling_cur_freq`,
+  `/sys/class/thermal/thermal_zone0/temp`, `/proc/meminfo`, and `vcgencmd
+  pmic_read_adc`/`get_throttled`. Writes `profile/per_sample.csv`. Linux-only; on other platforms
+  (e.g. this Windows dev checkout) it no-ops with a warning while per-sentence marks still work.
+  Pure-text parsing (`/proc/stat`, PMIC output, throttled bitmask) lives in
+  `research/profiling/parsing.py`, unit-tested without needing real hardware.
+  - **Per-rail PMIC power** (added 2026-07-10): `pmic_read_adc` exposes a current *and* voltage
+    channel per internally-metered rail, but `EXT5V_V`/`BATT_V` are voltage-only (no current) — so
+    there is no single "input power" reading; `pmic_power_w` sums V×I over an *explicit* rail list
+    (`parsing.PMIC_RAILS`), which is Pi-internal power (excludes regulator losses and anything
+    drawn off the 5V GPIO pins — the external USB-C meter remains ground truth for total power).
+    `research.profiling.parsing.parse_pmic_rails()` parses one `vcgencmd` call into a
+    `{rail: {A, V}}` dict; `rails_total_power_w()`/`rails_cpu_power_w()` (`VDD_CORE`)/
+    `rails_mem_power_w()` (`DDR_VDD2`+`DDR_VDDQ`+`1V1_SYS`)/`rails_ext5v_v()` all derive from that
+    single parse, so one `vcgencmd pmic_read_adc` call per tick yields all four
+    `per_sample.csv` columns (`pmic_power_w`, `cpu_power_w`, `mem_power_w`, `ext5v_v`).
+    `Sampler._read_pmic_all()` + `_interpolate_and_write()` (generalized from a single scalar to
+    `sampler.PMIC_FIELDS`, a list of 4 keys) carry all four through the same
+    slower-than-10Hz-tick interpolation the PMIC total already used.
+  - **INA226 amp-branch monitor** (optional, added 2026-07-10): a separate current/power sensor
+    wired on the Pi's own `i2c-1` bus at address `0x40` (2 mΩ shunt), measuring the 5V branch that
+    feeds the amplifier breadboard — distinct from the PMIC's system-wide reading. Auto-detected at
+    `Sampler.run()` startup (`_init_ina226()`); absent sensor or a failed read never raises, it just
+    leaves `ina_bus_v`/`ina_current_a`/`ina_power_w` empty for that row. One 6-byte I2C block read
+    per tick (registers `0x02`–`0x04` are contiguous: bus voltage, power, current), decoded by pure
+    functions in `research/profiling/parsing.py` (`decode_ina226_*`, unit-tested without
+    hardware). Gated by `profiling.ina226` in `config_tts.yaml` / `--ina`/`--no-ina` on `do_tts.py`
+    and `research/profiling/sampler.py`, threaded through `profiling.start_session(ina=...)`.
+    Requires `smbus2` (Pi-only dependency, `requirements-pi.txt`; imported lazily inside
+    `sampler.py` so a PC dev checkout without it is unaffected).
+- `research/profiling/recorder.py` — `Recorder`/`NullRecorder`, holding one `Recorder` per
+  top-level input line. `chatterbox.cli.syn_audio()` creates it (`profiling.begin_sentence()`) and
+  publishes it via `profiling.set_current()` (a `contextvars.ContextVar`) so
+  `FastSpeech2HifiGanBackend.syn_fastspeech2()` can reach it with `profiling.current()` without
+  threading a parameter through every call in the chain. `Recorder.stage(name)` is a context
+  manager wrapping the four pipeline stages (`front_end`, `acoustic` — both marked inside
+  `syn_fastspeech2()`; `vocoder`, `write` — marked in `chatterbox.cli.syn_audio()`); durations
+  *accumulate* across repeated calls so the "§" sub-utterance loop in `syn_audio()` (which calls
+  `registry.BACKEND.tts()` once per sub-utterance) still yields one correct per-sentence record.
+  Appends one JSON line per sentence to `profile/per_sentence.jsonl`.
+- `research/profiling/join.py` — offline, not time-critical. Joins `per_sample.csv` +
+  `per_sentence.jsonl` into `profile/per_sentence_results.csv` and `profile/per_stage_results.csv`
+  (trapezoidal energy integration per sentence/stage window, mean/peak CPU, peak temp,
+  throttled-any), applying a PMIC→external-meter linear calibration from `profile/calibration.json`
+  if present (identity otherwise, produced by `research/calibration/pmic_calibrate.py` — see
+  README "Profilage"). `_integrate_energy_j()` takes a `power_key` parameter (default
+  `pmic_power_w`) so the same trapezoidal integration is reused for the INA226 amp-branch reading:
+  each row also gets `amp_energy_j`/`amp_energy_wh` (integrated `ina_power_w`, no calibration
+  applied — it's a direct reading) and `amp_mean_w`/`amp_peak_w`, and again for the per-rail PMIC
+  signals: `cpu_energy_wh`/`cpu_mean_w` (from `cpu_power_w`) and `mem_energy_wh`/`mem_mean_w` (from
+  `mem_power_w`) — all alongside the unchanged PMIC-total-derived system-energy columns.
+  `_mean_power_w(window, power_key)` factors out the repeated mean-of-a-power-column pattern shared
+  by `amp_mean_w`/`cpu_mean_w`/`mem_mean_w`.
+
+Tests: `tests/test_profiling.py` covers `parsing.py`, `recorder.py`, and `join.py`'s pure functions
+(not `sampler.py`'s actual sysfs/vcgencmd/I2C reads, which need a real Pi).
+
+## Excel export (research/benchmark/export_to_xlsx.py)
+
+Added 2026-07-10; moved from `benchmark/` to `research/benchmark/` in the 2026-07-20
+reorg. Reads the join's own output (`per_sentence_results.csv`/`per_stage_results.csv`) — no
+synthesis/profiling logic of its own — and writes `profile/exports/chatterbox_paste.xlsx`
+(dedicated output subfolder, gitignored like the rest of `profile/`'s generated files), formatted
+to paste directly into the master workbook `Chatterbox_Power_Measurements_final.xlsx`, sheet
+`P2P3_Synthesis`, cell `A12` (columns A-U, header row 1, one 11-row data block per benchmark pass
+in rows 2-12). `--repeats N` produces `N` back-to-back 11-sentence passes in the CSVs (in recorded
+order, no re-sorting anywhere in the pipeline); `export_to_xlsx._split_into_passes()` chunks them
+and `write_workbook()` gives each its own sheet (`P2P3_Synthesis`, `P2P3_Synthesis_pass2`, ...,
+all with the same `A2:U12` layout so any one of them can be pasted individually). A trailing
+partial pass (interrupted run) is dropped with a warning rather than written incomplete.
+
+`runner.py`'s `REF` anchor sentence shares its literal id (`"REF"`) between the first and last
+entry of each pass — `_relabel_ref(sentence_id, position)` distinguishes them by **position**
+within the pass (`0` → `REF_start`, `10` → `REF_end`), not by id.
+
+Derived columns (`RTF`, `synthP_W`, `E/s_Wh`, `cpuP_W`) are computed directly in Python from the
+join's columns per the formulas in the original spec (e.g. `synthP_W = pmicE_Wh*3.6e6/synth_ms`)
+so the pasted block is self-contained (plain values, no Excel formulas). `openpyxl` is imported
+lazily inside `write_workbook()`; if missing, `export()` prints an install hint and returns `None`
+without touching the CSVs — never crashes a `--benchmark` run. Wired into `do_tts.py` via
+`--export-xlsx` (opt-in, implies `--join`, matching the existing "every profiling feature is an
+explicit switch" convention — nothing runs automatically).
+
+Tests: `tests/test_export_xlsx.py` covers the pure row-mapping/pass-splitting/REF-relabeling logic,
+plus one `openpyxl` round-trip (`pytest.importorskip`'d — skips cleanly if `openpyxl` isn't
+installed, since it's an optional dependency).
+
+## Benchmark mode (research/benchmark/)
+
+Added 2026-07-08, on top of the profiling subsystem above; moved from `benchmark/` to
+`research/benchmark/` in the 2026-07-20 reorg. `do_tts.py --benchmark` runs a fixed
+10-sentence French set (`research/benchmark/sentences_fr.jsonl`, one JSON object per
+line: `id`, `text`, `tag`, `word_count`) through the exact same synthesis call as free-text mode —
+`chatterbox.cli.syn_audio()` — via `research/benchmark/runner.py:run_benchmark()`. No
+parallel synthesis path; `chatterbox.cli.main()` just loads models once (factored into a local
+`load_models()` closure shared with the free-text branch) then calls `run_benchmark()` instead of
+the `input()` loop.
+
+Order: REF, then the file's remaining entries in file order, then REF again (anchors both ends —
+a drift check across one run), repeated `--repeats N` times, with a fixed 2 s `time.sleep()`
+between every synthesis call so `profile/per_sample.csv` has clear idle baselines to slice around.
+`--benchmark` forces `profiling.enabled` on in `chatterbox.cli.main()`'s existing CLI/env merge
+(same code path `--profile` uses); `--play` (default off) toggles `syn_audio()`'s `play` parameter
+— default `play=True` in `syn_audio()` keeps free-text/GUI behavior unchanged, benchmark defaults
+to `play=False` to isolate compute cost. `--join` calls `profiling.join.run_join()` (a plain
+callable, not `join.py`'s own argparse `main()` — that would collide with `do_tts.py`'s own
+`sys.argv`) after `profiling.stop_session()` so `per_sample.csv` is fully flushed first.
+
+`chatterbox.cli.syn_audio()` has three optional, default-preserving parameters to support this:
+`sentence_id`/`complexity_tag` (passed to `profiling.begin_sentence()`, which accepts an explicit
+`sentence_id` override instead of always auto-incrementing — so per-sentence records in
+`per_sentence.jsonl` are labelled `"REF"`/`"A1"`/... instead of a meaningless counter) and `play`.
+Existing call sites (`chatterbox/cli.py`'s free-text loop, `chatterbox/gui/app.py`,
+`chatterbox/gui/keyboards.py`) all use keyword args already and don't pass these, so their
+behavior is untouched.
+
+Tests: `tests/test_benchmark.py` covers sentence loading and call ordering
+(`chatterbox.cli.syn_audio` monkeypatched — real synthesis needs loaded models).
+
+## Power daemon (chatterbox/power/)
+
+Added 2026-07-21, per `chatterbox-powerd_spec_v0.1.md` (repo root) — full design/rationale there;
+day-to-day running/config/testing in `docs/POWERD.md`. Optional, Pi/Linux-only, a **separate
+process** from `do_tts.py` (unlike everything else in this file) communicating over a unix socket
+(`/run/chatterbox/powerd.sock`, newline-delimited JSON — `chatterbox/power/ipc.py`).
+
+- `fsm.py` — `PowerFSM`: the ACTIVE→DIM→DARK→DEEP state machine. Descent is time-driven (1 Hz
+  `on_tick()`, descent-only — never re-ascends on its own); ascent is event-driven (`on_activity()`
+  jumps straight to ACTIVE from any state). DEEP is terminal: `systemctl halt`. Pure and
+  dependency-injected (backlight/amp/broadcast/halt passed in as objects/callables) — no
+  hardware/asyncio imports, fully unit-tested with fakes (`tests/test_power_fsm.py`).
+- `backlight.py` / `amp.py` — sysfs `bl_power`/`brightness` writes, and the amplifier SD-line
+  GPIO (via `gpiozero`'s lgpio backend — not `RPi.GPIO`, which doesn't support the Pi 5's RP1 chip)
+  with a watchdog that force-offs an amp left on too long (crashed-playback backstop). Both
+  guard their hardware imports (`gpiozero` inside `amp.py`, plain file I/O in `backlight.py`) so
+  the modules import cleanly, and degrade to logged no-ops, on a checkout without the hardware.
+- `inputs.py` — evdev (touch/keyboard, the primary activity source) + optional `gpiozero.Button`
+  physical switches; gpiozero's own callback thread is bridged onto the daemon's asyncio loop via
+  `call_soon_threadsafe`.
+- `ipc.py` — `PowerdServer` (asyncio unix-socket server) + the wire protocol
+  (`chatterbox-powerd_spec_v0.1.md` §6: `activity`/`amp_on`/`amp_off`/`put_away`/`get_state`/
+  `reload` from clients; `input`/`state`/`amp_ack` broadcast to them).
+- `client.py` — `PowerdClient` / `get_client()`: the single shared client both
+  `chatterbox/audio/playback.py` (wraps `play_audio()` in an amp-on→ack→settle+preroll→play→tail→
+  amp-off handshake) and `chatterbox/gui/app.py` (sends `activity`, a "put away" button, receives
+  forwarded switch presses) use. Runs its own background thread + asyncio loop (Tkinter's mainloop
+  isn't asyncio-aware). **Degrades to a permanent silent no-op if powerd isn't reachable** (no
+  auto-reconnect in v0.1) — this is what keeps every non-Pi dev checkout, and any Pi before powerd
+  is set up, behaving exactly as before this daemon existed.
+- `config.py` — loads/validates `chatterbox/config/user_prefs.yaml` field-by-field; a missing
+  file, malformed YAML, or one bad value falls back to that field's default and logs a warning,
+  never raises (reliability requirement — an unattended kiosk must not fail to boot on a config
+  typo).
+- `daemon.py` — `python3 -m chatterbox.power.daemon` entry point (no `chatterbox-powerd` console
+  script — this repo has no `setup.py`/`pyproject.toml`; every subsystem here is `-m`-invoked).
+  Single-threaded asyncio: socket server, evdev read loops, and the 1 Hz tick task share one loop.
+
+Tests: `tests/test_power_{fsm,config,backlight,amp,ipc}.py` — all pure-logic/fake-injected and
+platform-independent except one live-socket loopback test in `test_power_ipc.py`, `skipif`'d on
+Windows. GPIO/backlight/evdev/systemd/halt behavior itself needs real Pi 5 hardware to verify
+(spec §10) — not exercised by any automated test in this repo.
+
+## GUI refactor (chatterbox/gui/, chatterbox/synth.py)
+
+Added 2026-07-21, per `chatterbox_gui_spec_v0.1.md` (repo root) — full design there; day-to-day
+detail in `docs/GUI.md`. Fixes the pre-refactor GUI running synthesis+playback directly on the
+Tk thread (freezing the window for the whole call, no `try/except` around it).
+
+- **Threading**: `chatterbox/gui/app.py`'s `on_speak()` (Tk thread) snapshots text/model-indices/
+  slider values, then runs synthesis+playback on a daemon worker thread (`_work()`, no Tk calls).
+  A `ui_queue`/`post()`/`_pump()` marshaling queue (the *same* one used for powerd-forwarded switch
+  input, not a separate mechanism) is the only path back onto the Tk thread. A `busy` flag (mutated
+  only on the Tk thread) makes overlapping Speak triggers a no-op.
+- **`chatterbox/synth.py`**: the Tk-free compute path extracted from the old
+  `cli.py:syn_audio()` — `synthesize(text, tts_idx, voc_idx, tts_config, ...) -> AudioResult |
+  None`. Both `cli.syn_audio()` (CLI/benchmark, unchanged signature/behavior) and the GUI's worker
+  call it; only `cli.syn_audio()` still touches the console, only the GUI still touches Tk.
+- **`chatterbox/gui/input.py`**: `Action` enum (shares member names with powerd's `switches:`
+  config) + `dispatch()` (dependency-injected, no import of `app.py`) + a small `NavRing`. The
+  Speak button, `<Return>`, and the on-screen keyboard all route through `dispatch()` now.
+- **`chatterbox/gui/settings.py`**: edits `chatterbox/config/user_prefs.yaml`'s power-timer/
+  brightness fields (same schema powerd reads), range-validated, atomic write, `powerd.reload()`
+  on save.
+
+Tests: `tests/test_gui_{input,worker,settings}.py`, `tests/test_synth.py` — all headless/no-models
+(fake widgets, monkeypatched `synth.synthesize`/`playback.play_audio`). Unlike the power daemon
+task, this checkout has real pretrained weights, so two real-weights checks were actually run
+(not just written) while building this — see `docs/GUI.md` "Testing": `synth.synthesize()`
+called directly against loaded models, and a scripted `create_gui()` run with a `window.after(50,
+tick)` responsiveness probe running through a real synthesis+playback call (138 ticks, max gap
+77ms across a 5.37s call — direct, quantitative proof the Tk thread never blocked). Neither script
+is checked into `tests/`.
+
+## Kiosk finalization (scripts/kiosk_finalize.sh)
+
+Added 2026-07-21, step 3 of `README_power_gui_workstream.md`'s build sequence — gated on
+`Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passing on real hardware first (they have).
+The compositor was originally **cage** (Wayland, XWayland for Tk), driven by a
+`deploy/systemd/chatterbox-gui.service` unit.
+
+**Superseded 2026-07-31** (real Pi5 hardware bring-up, `docs/research/CHANGELOG.md`): a
+reproducible `libwlroots` SIGSEGV with no fixed package available ruled cage out. The current
+default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/KIOSK.md`), started by a console
+autologin. **`chatterbox-gui.service` was deleted in the release reorganisation** — the only unit
+shipped now is `chatterbox-powerd.service`. The description below is the historical record of the
+2026-07-21 decision, not the current mechanism.
+
+`scripts/kiosk_finalize.sh` is the one opt-in script (not part of `setup_pi.sh`'s default run —
+that stays scoped to "get the app runnable") that commits a verified Pi to unattended kiosk boot:
+disables `getty@tty1.service` (the deleted `chatterbox-gui.service` used `TTYPath=/dev/tty1`+
+`PAMName=login` to *become* the tty1 session directly, which a stock getty would race; the Xorg
+mechanism that replaced it uses its own `agetty --autologin` drop-in instead), tunes `config.txt`/`cmdline.txt`
+(backed up per-file, idempotent per-line append, auto-detecting `/boot/firmware/` vs `/boot/`),
+and enables+starts both systemd units. Deliberately does **not** write EEPROM (`rpi-eeprom-config`
+is read-only-checked, never edited by tooling — same "boot-config edits carry brick risk" posture
+`INSTALL.md` already established for the powerd task). See `docs/KIOSK.md`.
+
+## Not yet implemented
+
+- A from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
+  `chatterbox/synth.py`'s `synthesize()` changed to not assume one unconditionally (reading
+  `audio_file.AU`, visual smoothing, subtitle timing from `audio_file_duration.npy`) — flagged
+  during the Phase 3 reorg, not attempted speculatively; see `docs/research/history/REORG_PROPOSAL.md` §5.
+- The GUI's nav ring / `Action.NEXT`/`PREV`/`SELECT`/`BACK` — implemented and unit-tested, but
+  nothing currently drives them interactively: `chatterbox/config/user_prefs.yaml`'s `switches: []`
+  is empty (no physical switches wired/configured yet). `Action.KEY` similarly has nothing but the
+  existing on-screen keyboard driving it today.
+- The companion `GUI_Power_Controller_Architecture` doc referenced by both the powerd and GUI specs
+  is not written.
+- `scripts/hw_check.py`, referenced by `Bring-up_Integration_Test_Protocol_v0.1.md` as optional
+  tooling for its T1/T2 steps — not built; those steps were done manually instead.
+- Wake→interactive boot-time measurement (needs an actual reboot with a stopwatch) to set a
+  real, measured `power.t_deep_s` rather than a placeholder.
+
+Otherwise nothing tracked here as unverified — `chatterbox-powerd`'s hardware behavior (GPIO/
+backlight/evdev/halt) and the GUI's non-blocking worker-thread refactor have now both been
+verified on real Pi 5 hardware via `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 (all
+green, per the user), superseding this doc's earlier "unverified on hardware" notes. Free-text
+(`--gui` optional), the profiling subsystem, benchmark mode, chatterbox-powerd, the GUI refactor,
+and kiosk finalization above are all implemented. Update this section if a future session adds
+something new and unfinished.
