@@ -44,7 +44,7 @@ The script:
 - Installs `requirements-pi.txt`.
 - Downloads the FastSpeech2, FlauBERT, and HiFi-GAN pretrained weights (links from
   `README.md`) into the paths the code expects (`docs/ARCHITECTURE.md` "Weights and
-  config locations"). Waveglow is skipped by default (not part of the active pipeline).
+  config locations").
 - Smoke-tests a CPU torch matmul (fatal if this fails) and, best-effort, one end-to-end sentence
   through `do_tts.py` (non-fatal — a missing microphone/speaker or a slow first run on a fresh Pi
   shouldn't fail provisioning on its own).

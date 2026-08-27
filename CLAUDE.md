@@ -18,9 +18,19 @@ Python 3 (tested on 3.8/3.10, repo has a 3.11 `.venv`), PyTorch, PyYAML config, 
 ## Repo map
 
 This file lives at the repo root, alongside the code below — run all commands below from here.
-**Reorganized in Phase 3 of `docs/research/history/REORG_PROPOSAL.md` (2026-07-20)** — see that doc's §2 tree and §7
-for the full rationale/history; `docs/ARCHITECTURE.md`'s module-level detail still
-describes the pre-reorg layout and is flagged stale pending that doc's own Phase 4 rewrite.
+**Reorganized twice**: Phase 3 (`docs/research/history/REORG_PROPOSAL.md`, 2026-07-20), then the
+release reorganisation (`docs/release/REORG_PLAN.md`, 2026-08). `docs/ARCHITECTURE.md`'s
+module-level detail predates both in places — cross-check against this file.
+
+**The layer rule, which is enforced, not aspirational:**
+
+> `chatterbox/` (L1 RUN) must never import `research/` (L3 STUDY). `research/` may import
+> `chatterbox/` freely. Deleting `research/` and `tests/` must leave a working demonstrator.
+
+`scripts/check_layers.py` and `tests/test_layer_boundary.py` enforce it. The one thing L1 needs
+from profiling reaches it through `chatterbox/instrumentation.py`, an inert seam that
+`research.profiling` installs itself into at import time. Every top-level directory has its own
+`README.md`; read those first.
 
 - `do_tts.py` — entry point, now a 3-line shim calling `chatterbox.cli.main()` (CLI contract
   unchanged: same flags, same `--gui`).
@@ -36,9 +46,11 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (`"vocoder"` simply
     absent in that case), not fixed named fields. No Tk import, no playback call — both `cli.py`
     and the GUI's worker thread call it directly. See `docs/GUI.md`.
-  - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs, `SynthesisRequest`/`SynthesisResult`
-    dataclasses (the latter's `wav_path` vs `mel_path` is how a monolithic backend signals "already
-    a finished wav, no vocoding needed" — see "Interchangeable backends" below); `registry.py` —
+  - `synthesis/README.md` — **the backend contract**, and the place to start for anything backend-
+    related. Replaced the former `synthesis/base.py`, whose `Synthesizer`/`VocoderBackend` ABCs and
+    `SynthesisRequest`/`SynthesisResult` dataclasses nothing ever subclassed, imported or
+    constructed (deleted in the release reorganisation). The real contract is a
+    `(output_dir, processed_text)` tuple plus three YAML capability flags; `registry.py` —
     `BACKEND`, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script`/`gui_script`
     strings, resolved via `getattr(registry.BACKEND, name)`, same as before the Piper integration).
     `BACKEND` is now a small resolving proxy (`_BackendProxy`), not a bare singleton instance —
@@ -163,30 +175,30 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
     DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
     `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
-- `deploy/systemd/` — `chatterbox-powerd.service` (installed by `scripts/setup_pi.sh`, see
-  `INSTALL.md` "chatterbox-powerd") + `chatterbox-gui.service`, which ran the GUI under `cage`
-  (the *originally* finalized kiosk compositor choice) — **legacy, not installed by default**:
-  real Pi5 hardware bring-up (2026-07-31) found a reproducible SIGSEGV deep inside Raspberry Pi
-  Foundation's own `libwlroots` build, with no fixed package available — see
-  `deploy/xorg-kiosk/README.md` for the full writeup and `docs/KIOSK.md` for the plain-Xorg
-  mechanism (`deploy/xorg-kiosk/` + a real console `agetty --autologin` session, installed by
-  `setup_pi.sh`'s own step 9) that replaced it as the current default.
-- `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
-  - `measurement/benchmark/` — fixed 10-sentence French benchmark set + runner (was `benchmark/`).
-  - `measurement/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
-  - `monitoring/profiling/` — background PMIC/CPU/thermal sampler, per-sentence timing recorder,
-    offline join/calibration scripts; off by default (was `profiling/`).
-- `assets/models/` — vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`,
-  `flaubert/`; weights not in git — see Install below).
-- `tests/` — pytest suite: `test_audio_postprocess.py`, `test_profiling.py`, `test_benchmark.py`,
-  `test_p4_sweep.py`, `test_export_xlsx.py`, `test_power_{fsm,config,backlight,amp,ipc}.py`,
-  `test_synth.py`, `test_gui_{input,worker,settings,keyboards,letter_layout}.py`,
-  `test_backend_describe_controls.py`, `test_i18n.py`.
+- `deploy/` — Pi deployment; see `deploy/README.md`. `systemd/chatterbox-powerd.service` plus
+  `xorg-kiosk/`, the current kiosk mechanism (plain Xorg + `agetty --autologin`, installed by
+  `setup_pi.sh` step 9). The former `chatterbox-gui.service` ran the GUI under `cage` and was
+  deleted in the release reorganisation: real Pi5 bring-up (2026-07-31) hit a reproducible SIGSEGV
+  inside Raspberry Pi Foundation's own `libwlroots` build with no fixed package available. Full
+  writeup in `deploy/xorg-kiosk/README.md` and `docs/KIOSK.md`.
+- `research/` — **L3 STUDY**, never imported by `chatterbox/`; see `research/README.md`:
+  - `benchmark/` — fixed 10-sentence French benchmark set, runner, P4 cadence sweep, xlsx export,
+    cross-run comparison.
+  - `profiling/` — background PMIC/CPU/thermal sampler, per-sentence timing recorder, offline join;
+    off by default.
+  - `calibration/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
+  - `data/archive/` — committed historical run data (was `profile/`; `profile/` is now gitignored
+    live scratch).
+- `assets/models/` — vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `flaubert/`; weights
+  not in git — see Install below). Waveglow was removed in the release reorganisation: unreachable
+  by config, yet load-bearing through a module-level import. See `assets/README.md`.
+- `tests/` — pytest suite (L3); see `tests/README.md`, which documents what it does *not* cover.
+  `test_layer_boundary.py` enforces the layer rule above.
 - `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
   vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
 - `scripts/kiosk_finalize.sh` — **opt-in**, run once a Pi has passed
-  `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7: disables `getty@tty1` (which would race
-  `chatterbox-gui.service` for the tty), tunes `config.txt`/`cmdline.txt` (backed up, idempotent),
+  `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 (note: that document is NOT in this
+  repository — see `docs/README.md` "Missing documents"): disables `getty@tty1`, tunes `config.txt`/`cmdline.txt` (backed up, idempotent),
   enables+starts both systemd units. Never touches EEPROM beyond a read-only check. Not part of
   `setup_pi.sh`'s default run. See `docs/KIOSK.md`.
 
@@ -222,8 +234,8 @@ existed) plus a stale-Tk-variable bug in `gui/app.py`'s `gui_generic_controls()`
 documented in full in `docs/research/INTERCHANGEABLE_BACKENDS.md` §3, neither required touching
 `synth.py`. The contract described below is what actually held up under that test:
 
-- **Model-options panel**: `Synthesizer.describe_controls()` (`chatterbox/synthesis/base.py`,
-  docstring has the full return shape) returns `speaker_list`/`default_speaker` plus an ordered
+- **Model-options panel**: each backend's `describe_controls()` (`chatterbox/synthesis/README.md`
+  has the full return shape) returns `speaker_list`/`default_speaker` plus an ordered
   `controls` list of `chip_grid`/`slider`/`text` descriptors — `gui/app.py:gui_generic_controls()`
   renders one widget per entry generically (no per-backend GUI code) and collects values into a
   dict `get_gui_controls()` returns, keyed by each control's declared `"key"`. FastSpeech2's own
@@ -231,8 +243,7 @@ documented in full in `docs/research/INTERCHANGEABLE_BACKENDS.md` §3, neither r
   declares today's style chip grid / 9 sliders / StyleTag entry, reading the same
   `config_tts.yaml` keys (`gst_token_list`, `default_args.*`, `gui_control_bias`, etc.) it always
   has, just translated into the generic schema instead of hand-built widgets.
-- **Two-stage vs. monolithic pipeline**: `SynthesisResult.wav_path` (set) vs. `mel_path` (set) is
-  how a backend signals "already a finished wav" vs. "still needs vocoding"; the static per-model
+- **Two-stage vs. monolithic pipeline**: the static per-model
   `needs_vocoder` flag (`config_tts.yaml`) tells `chatterbox.synth.synthesize()` whether to call
   `BACKEND.vocoder()` at all, and tells `gui/app.py`'s Settings → Advanced whether to show a
   Vocodeur picker. Denoising/postprocess/subtitles stay universal regardless of pipeline shape.

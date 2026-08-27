@@ -2,6 +2,39 @@
 
 Cette interface permet de générer des synthèses en temps réel en combinant un TTS et un vocodeur à l'état de l'art. Par défaut, cette interface combine un FastSpeech2 avec Hifi-GAN.
 
+# Organisation du dépôt
+
+Le dépôt est séparé en deux couches, et cette séparation est **vérifiée automatiquement** :
+
+| Couche | Répertoire | Contenu |
+|---|---|---|
+| **RUN** | `chatterbox/`, `assets/`, `deploy/`, `scripts/` | Tout ce qui est nécessaire pour faire parler le démonstrateur sur un Raspberry Pi 5. |
+| **STUDY** | `research/`, `tests/`, `docs/research/` | Ce qui existe parce que c'est un projet de recherche : profilage, bancs d'essai, mesure de puissance, journal de développement. |
+
+> `chatterbox/` (RUN) n'importe **jamais** `research/` (STUDY). L'inverse est autorisé.
+> Supprimer `research/` et `tests/` doit laisser un démonstrateur fonctionnel.
+
+Cette règle est imposée par `scripts/check_layers.py` et `tests/test_layer_boundary.py`, et non
+simplement documentée. Le seul point de contact — les marqueurs de temps du profilage sur le chemin
+de synthèse — passe par `chatterbox/instrumentation.py`, une couture inerte que `research.profiling`
+vient remplir au moment de son import.
+
+```
+chatterbox/     le paquet applicatif (RUN)        -> chatterbox/README.md
+  synthesis/      backends + le contrat de backend -> chatterbox/synthesis/README.md
+  gui/            interface Tkinter
+  power/          chatterbox-powerd (Pi uniquement, optionnel)
+  config/         config_tts.yaml, user_prefs.yaml, paths.py
+assets/         code de modèle vendorisé + audio du clavier -> assets/README.md
+deploy/         unités systemd + démarrage kiosque Xorg      -> deploy/README.md
+scripts/        provisionnement Pi, téléchargement des voix  -> scripts/README.md
+research/       profilage, bancs d'essai, données archivées  -> research/README.md
+tests/          suite pytest                                 -> tests/README.md
+docs/           documentation, index par public              -> docs/README.md
+```
+
+Chaque répertoire de premier niveau possède son propre `README.md`.
+
 # Installation
 
 L'installation a été testée dans les environnements python 3.8 et 3.10. Le document compressé contient déjà les modèles pré-entrainés. Le fichier de configuration est adapté à ces modèles.
@@ -37,11 +70,10 @@ pip3 install python3-tk
 ```
 
 ## Modèles pré-entrainés et configuration
-Pour utiliser les modèles pré-entrainés FastSpeech2, FlauBERT, HiFi-GAN et Waveglow, téléchargez les depuis les liens Google Drive suivants :
+Pour utiliser les modèles pré-entrainés FastSpeech2, FlauBERT et HiFi-GAN, téléchargez les depuis les liens Google Drive suivants :
 - [FastSpeech2](https://drive.google.com/drive/folders/13kLu5UwwTRH3hCyD8EcTwkl4aHosffy4?usp=sharing) : Téléchargez et dézippez les trois archives (config, output et preprocessed_data) dans le dossier assets/models/FastSpeech2
 - [FlauBERT](https://drive.google.com/drive/folders/1yJ7jMCbP0fstVrCar7bKAO3uTBAgjCel?usp=sharing) : Téléchargez et dézipper le modèle et les fichiers de configuration dans assets/models/flaubert/flaubert_large_cased
 - [HiFi-GAN](https://drive.google.com/drive/folders/1q4-gRK0QqIYT7PImVczYhi9yN4YG7OYC?usp=sharing) : Téléchargez et dézippez l'archive FR_V2 dans assets/models/hifi-gan-master
-- [Waveglow](https://drive.google.com/drive/folders/1XhpZDhUWTw3EzKxclAnFMfAp9ZQ4NV8t?usp=sharing) : Téléchargez le modèle et placez le dans assets/models/Waveglow
 
 
 # Quickstart
