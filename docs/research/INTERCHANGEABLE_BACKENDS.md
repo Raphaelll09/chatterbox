@@ -1,5 +1,23 @@
 # The Chatterbox GUI: refactor history and the interchangeable-backend contract
 
+> ### ⚠ Historical record — parts of this are no longer true
+>
+> This is the write-up of the GUI/backend refactor *as it was designed and carried out*. Kept for
+> its rationale and process, not as a current reference. Two things it describes were later found
+> not to match the code, and were changed in the 2026-08 release reorganisation:
+>
+> - **`chatterbox/synthesis/base.py` no longer exists.** Its `Synthesizer`/`VocoderBackend` ABCs
+>   and `SynthesisRequest`/`SynthesisResult` dataclasses were never subclassed, imported or
+>   constructed by anything. The file was deleted.
+> - **§2's "`SynthesisResult.wav_path` vs. `mel_path` is how a backend signals a finished wav" is
+>   wrong** — and was wrong when written. `chatterbox/synth.py` has always branched on the
+>   `needs_vocoder` flag in `config_tts.yaml`; no `SynthesisResult` is ever constructed.
+>
+> **The contract as the code actually enforces it is
+> [`chatterbox/synthesis/README.md`](../../chatterbox/synthesis/README.md).** Read that for anything
+> current. See `docs/release/STRUCTURE_AUDIT.md` §5.1 for how the discrepancy was found.
+
+
 This document exists to hand off full context — not just *what* changed, but *why* and *how* it
 was approached — to another assistant/session picking this work up (it was written for a
 Claude Desktop handoff, but is kept here as permanent project documentation since the same

@@ -22,7 +22,7 @@ The backend contract lives next to the code it governs:
 | Document | Contents |
 |---|---|
 | [research/CHANGELOG.md](research/CHANGELOG.md) | The development log. Long, detailed, and the authoritative record of why things are the way they are. |
-| [research/INTERCHANGEABLE_BACKENDS.md](research/INTERCHANGEABLE_BACKENDS.md) | Write-up of the backend abstraction and what the Piper integration proved about it. |
+| [research/INTERCHANGEABLE_BACKENDS.md](research/INTERCHANGEABLE_BACKENDS.md) | How the backend abstraction was designed and what the Piper integration proved about it. **Historical** — parts describe a contract that no longer exists; the current one is [`chatterbox/synthesis/README.md`](../chatterbox/synthesis/README.md). |
 | [research/PIPER_INTEGRATION_SUMMARY.md](research/PIPER_INTEGRATION_SUMMARY.md) | The Piper backend integration. |
 | [research/reference-audio/](research/reference-audio/) | Reference recordings used for crest-factor and operating-level comparison. Not loaded at runtime. |
 | [research/history/](research/history/) | Superseded planning documents, kept for provenance. |

@@ -5,7 +5,8 @@ procedure and `docs/KIOSK.md` for how the kiosk actually boots.
 
 | Path | What it is |
 |---|---|
-| `systemd/chatterbox-powerd.service` | Unit for the power daemon (`python3 -m chatterbox.power.daemon`). `setup_pi.sh` installs and enables it, but does not start it. |
+| `systemd/chatterbox-powerd.service` | Unit for the power daemon (`python3 -m chatterbox.power.daemon`). `setup_pi.sh` installs and enables it, but does not start it. **The only unit shipped** — the GUI autostarts via console login, not systemd. |
+| `audio/asound.conf` | Pins ALSA's system-default output to the IQaudio DAC. Copied to `/etc/asound.conf` by `setup_pi.sh` step 10. Without it, ALSA's bare `default` resolves to the onboard HDMI/headphone output and nothing comes out of the real speaker. **Hardcodes the card name `IQaudIODAC`** — edit it for a different DAC. |
 | `xorg-kiosk/` | The **current** kiosk autostart mechanism: plain Xorg, no compositor. |
 | `xorg-kiosk/xinitrc` | Launches the GUI as the X session. |
 | `xorg-kiosk/bash_profile_snippet.sh` | Starts X on tty1 login. |

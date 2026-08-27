@@ -49,7 +49,7 @@ two models from the same bigger model" when siwis/jessica/pierre are all just Pi
 and dropping upmc to simplify would have meant losing the only male voice for no quality gain.
 `PiperBackend.describe_controls()` builds an ordinary `{name: index}` `speaker_list` from this
 list (Siwis=0, Jessica=1, Pierre=2), the exact same shape the GUI already renders generically for
-any other multi-speaker voice — no `gui/app.py` changes needed. Selecting Siwis vs. Jessica/Pierre
+any other multi-speaker voice — no `chatterbox/gui/app.py` changes needed. Selecting Siwis vs. Jessica/Pierre
 costs a checkpoint (re)load the first time in a session (`PiperBackend._voices`, cached per
 `checkpoint_file` afterward, same mechanism as before); Jessica↔Pierre is instant, same loaded
 checkpoint. The reload happens inside `PiperBackend.tts()`, on the synthesis worker thread, never
@@ -73,7 +73,7 @@ the contract-gap writeup) for the full detail. In short:
 - Monolithic (`needs_vocoder: false`) — `tts()` writes a finished `audio_file.wav` directly to
   `<folder>/<output_location>/`, no separate mel/vocoder stage.
 - No style dimension — `describe_controls()` declares no `"style"` control, which is also what
-  keeps `gui/app.py`'s `gst_token_selection` compat global at `None` while Piper is active (the
+  keeps `chatterbox/gui/app.py`'s `gst_token_selection` compat global at `None` while Piper is active (the
   Emmanuelle keyboard's mood-shortcut keys correctly no-op instead of touching a style control
   that doesn't exist here).
 - `accepts_phoneme_input: false` — the Emmanuelle keyboard's phone-code syntax is FastSpeech2-

@@ -87,7 +87,7 @@ This tuple is the load-bearing part of the contract:
   on hardware during the Piper integration, not a hypothetical.
 - `processed_text` is the text after the backend's own cleanup, used for subtitles and console
   output.
-- `gui_control` is the dict `gui/app.py` collected from `describe_controls()`, keyed by each
+- `gui_control` is the dict `chatterbox/gui/app.py` collected from `describe_controls()`, keyed by each
   control's `"key"`. May be `None`.
 - `linking_utt` is `True` for the second and later parts of a `|`-separated multi-utterance input.
 
@@ -157,9 +157,9 @@ which is why they are config rather than `describe_controls()` output.
 - **`syn_script` is FS2-internal.** `FastSpeech2HifiGanBackend.tts()` self-dispatches on it.
   `PiperBackend.tts()` ignores it entirely; its entries' `syn_script: "syn_piper"` names a method
   that does not exist and would raise if anything resolved it.
-- **`gui_script` does not go through the registry.** `gui/app.py` resolves it against its *own*
+- **`gui_script` does not go through the registry.** `chatterbox/gui/app.py` resolves it against its *own*
   module globals (`globals()[...]`), so a backend cannot ship its own GUI function.
-- **The phoneme keyboard is FS2-specific.** `gui/keyboards.py`'s phone-symbol alphabet and mood
+- **The phoneme keyboard is FS2-specific.** `chatterbox/gui/keyboards.py`'s phone-symbol alphabet and mood
   shortcuts belong to the FS2 checkpoint. There is no G2P step anywhere in this repository.
 
 ---

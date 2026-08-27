@@ -91,10 +91,10 @@ activity/put-away wiring) degrades to a no-op if powerd isn't running.
 `/etc/systemd/system/`, creates a `chatterbox` group, adds the user running the script to it
 (needed for the GUI to connect to powerd's socket at `/run/chatterbox/powerd.sock`), and
 `systemctl enable`s the unit — but does **not** `start` it. The same script's step 9 separately
-installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/KIOSK.md`) —
-**not** `deploy/systemd/chatterbox-gui.service` (cage/Wayland), which real Pi5 hardware bring-up
-ruled out (a reproducible `libwlroots` SIGSEGV with no fixed package available; see
-`deploy/xorg-kiosk/README.md`). Step 10 pins ALSA's system-default output to the IQaudio DAC
+installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/KIOSK.md`). The GUI
+is **not** run from a systemd unit: a cage/Wayland unit existed once, but real Pi5 bring-up ruled
+it out (a reproducible `libwlroots` SIGSEGV with no fixed package available) and it was deleted in
+the release reorganisation — see `deploy/xorg-kiosk/README.md`. Step 10 pins ALSA's system-default output to the IQaudio DAC
 (`deploy/audio/asound.conf`) — real-hardware bug report: with no override, ALSA's bare `default`
 device (what `chatterbox/audio/playback.py`'s `ffplay` call uses) resolved to the onboard
 `vc4-hdmi` output instead of the DAC actually wired to the amp/speaker, so audio played but never

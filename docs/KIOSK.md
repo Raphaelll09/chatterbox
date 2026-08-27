@@ -28,9 +28,11 @@ sidesteps `wlroots` entirely. Full mechanism, exact files, and every real bug fo
 (a `Toplevel.grab_set()` crash, a fullscreen-sizing gap, a relative-config-path crash, output
 buffering hiding a traceback): `deploy/xorg-kiosk/README.md`.
 
-`deploy/systemd/chatterbox-gui.service` (the cage unit) is untouched in the repo, not deleted —
-see its own header comment for what reverting looks like if a fixed `libwlroots` package ever
-lands.
+`deploy/systemd/chatterbox-gui.service` (the cage unit) **was deleted** in the 2026-08 release
+reorganisation — it had been retained for a while as a revert path in case a fixed `libwlroots`
+package landed, but shipping a unit that must never be enabled was a trap for anyone reading
+`deploy/systemd/`. Recover it from git history (`git log --diff-filter=D -- deploy/systemd/`) if
+that package ever appears.
 
 ## `scripts/kiosk_finalize.sh`
 
@@ -52,7 +54,7 @@ backed-up-before-write (never a blind rewrite of a boot-config file):
 | 2. `config.txt` | Backs up, then appends (only if missing) `dtoverlay=disable-wifi`, `dtoverlay=disable-bt`, `arm_freq_min=500`. Auto-detects `/boot/firmware/config.txt` vs `/boot/config.txt`. | Restore the printed `.bak.<timestamp>` file |
 | 3. `cmdline.txt` | Same backup+idempotent-append approach: adds `quiet`, `loglevel=1`, `logo.nologo` tokens if not already present. | Restore the printed `.bak.<timestamp>` file |
 | 4. `getty@tty1.service` | **Verified** enabled with the autologin override (**inverted** from this step's cage-era behavior, which used to *disable* it) — the plain-Xorg mechanism (`deploy/xorg-kiosk/`) needs a real `agetty --autologin` session on tty1 to launch the GUI via `.bash_profile` → `startx` → `.xinitrc`; `scripts/setup_pi.sh`'s own step 9 is what actually installs this, this step just confirms it didn't drift. | Re-run `scripts/setup_pi.sh`, or see `deploy/xorg-kiosk/README.md` |
-| 5. Services | `chatterbox-powerd` enabled **and started** (`setup_pi.sh` already enables it but deliberately doesn't start it). `chatterbox-gui.service` is **not** touched — see step 4, the GUI autostarts via the console login instead of a systemd unit. | `sudo systemctl disable --now chatterbox-powerd` |
+| 5. Services | `chatterbox-powerd` enabled **and started** (`setup_pi.sh` already enables it but deliberately doesn't start it). It is the only unit shipped — see step 4, the GUI autostarts via the console login, not via systemd. | `sudo systemctl disable --now chatterbox-powerd` |
 
 Exits non-zero (with a `RESULT: FAIL` summary) if the getty-autologin check or service-start step
 failed — review the warnings before rebooting unattended in that case. Safe to re-run: every step
