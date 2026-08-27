@@ -1,7 +1,17 @@
-# Install / Deployment
+# Deployment guide
 
-This file covers the PC (development) vs Raspberry Pi 5 (deployment) split. For the pipeline
-itself — control tags, profiling, benchmark mode — see `README.md`.
+**This is the operator's guide: building, hardening and maintaining actual devices.** For getting
+the software running on your own machine or a first Pi, `README.md` §3 is the quickstart and is
+enough on its own.
+
+| Read | For |
+|---|---|
+| [`README.md`](README.md) §3 | Install it and make it speak — desktop or a first Pi |
+| **this file** | Deploy it properly: manual hardware steps, the bring-up gate, unattended kiosk boot, golden images, mass deployment |
+
+The two do overlap on the Pi quickstart, deliberately: the three commands appear in `README.md` so
+a newcomer is not immediately sent to a second document. Everything past those three commands lives
+here.
 
 ## PC vs Pi 5
 
@@ -52,31 +62,20 @@ The script:
 - Installs and enables (but does not start) the `chatterbox-powerd` systemd units (below) —
   non-fatal if this step fails; it's an optional appliance-mode feature.
 
-## Optional: Piper (fr_FR + en_US) backend
+## Optional: Piper backend
 
-A second TTS backend (`chatterbox/synthesis/backends/piper/`) alongside FastSpeech2+HiFi-GAN —
-not installed by `scripts/setup_pi.sh` and not in `requirements-pi.txt`: it's a whole optional
-*backend* selected by `config_tts.yaml`, licensed GPL-3.0-or-later (the OHF-voice/piper1-gpl fork),
-not a runtime-guarded optional import like `smbus2`/`gpiozero`. Skip this section entirely if you
-only want the default FastSpeech2+HiFi-GAN pipeline.
+Install steps are in [`README.md`](README.md) §3.4. Deployment-relevant points only:
 
-```bash
-source ~/chatterbox/venv/bin/activate   # or your PC .venv
-pip install piper-tts==1.5.0
-./scripts/fetch_piper_voices.sh
-```
-
-Installs a single prebuilt wheel (aarch64 on the Pi 5; a Windows wheel exists too, for local PC
-dev/testing) — no source build, no separate `espeak-ng` system dependency (1.5.0 bundles its own
-phonemizer). The fetch script downloads and sha256-verifies 3 voices — 2 fr_FR
-(`fr_FR-siwis-medium`/`upmc-medium`) and 1 en_US (`en_US-lessac-medium`) — into
-`assets/models/Piper/` (gitignored, same "weights not in git" policy as every other vendored
-model). See `chatterbox/synthesis/backends/piper/README.md` for voice provenance/licence and
-`docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for the backend's own design notes. Select any voice with
-`do_tts.py --default_tts <piper-voice-index>` or via the GUI's Settings → Advanced picker; the
-English voice is also reachable live from the GUI's "Langue" app-bar menu, which switches both the
-UI language and the active model together (`chatterbox/gui/i18n.py`, `config_tts.yaml`'s
-`GUI_config.languages`).
+- **Not installed by `scripts/setup_pi.sh` and not in `requirements-pi.txt`.** It is a whole
+  optional *backend*, licensed GPL-3.0-or-later (the OHF-voice/piper1-gpl fork), not a
+  runtime-guarded optional import like `smbus2`/`gpiozero`. Keeping it unvendored and
+  separately-installed is what leaves this project's own licensing unconstrained.
+- One prebuilt wheel, aarch64 on the Pi 5 — no source build, and no separate `espeak-ng` system
+  dependency (1.5.0 bundles its own phonemizer). Nothing to add to `apt-packages-pi.txt`.
+- `./scripts/fetch_piper_voices.sh` downloads and sha256-verifies 3 voices into
+  `assets/models/Piper/` (gitignored, same "weights not in git" policy as every other model). If
+  you build a golden image, run it **before** imaging so the voices are baked in.
+- Provenance and per-voice licence: `chatterbox/synthesis/backends/piper/README.md`.
 
 ## chatterbox-powerd (kiosk power management)
 

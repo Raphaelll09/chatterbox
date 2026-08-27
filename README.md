@@ -107,17 +107,15 @@ cd ~/chatterbox
 ./scripts/setup_pi.sh
 ```
 
-`setup_pi.sh` is idempotent — safe to re-run if a step fails (a flaky weight download, say). It
-skips completed work and prints a PASS/FAIL summary. It:
+That is the whole first-run path: `setup_pi.sh` installs the apt packages, creates a venv at
+`~/chatterbox/venv`, installs the Python requirements, downloads the weights, smoke-tests the
+install, and sets up the kiosk autostart and the powerd unit. It is idempotent — safe to re-run
+if a step fails — and prints a PASS/FAIL summary.
 
-- refuses to run anywhere but Linux/aarch64;
-- installs `apt-packages-pi.txt`;
-- creates a venv at `~/chatterbox/venv` and installs `requirements-pi.txt`;
-- downloads the FastSpeech 2, FlauBERT and HiFi-GAN weights into the expected paths;
-- smoke-tests a CPU torch matmul (fatal) and one end-to-end sentence (non-fatal);
-- writes `requirements-pi-lock.txt` — the authoritative record of what actually installed;
-- installs and enables, but does not start, the `chatterbox-powerd` systemd unit;
-- installs the Xorg kiosk autostart (step 9).
+> **Building a device rather than trying it out?** [`INSTALL.md`](INSTALL.md) is the deployment
+> guide: what each step does, the manual hardware steps `setup_pi.sh` deliberately leaves to you
+> (amplifier pin polarity, backlight node, unit paths), the bring-up protocol that gates
+> unattended boot, and how to mass-produce units from a golden image.
 
 ### 3.2 Windows or Linux desktop (development)
 
