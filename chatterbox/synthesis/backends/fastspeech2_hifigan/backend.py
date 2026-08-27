@@ -22,7 +22,7 @@ import yaml
 from scipy.io import loadmat
 
 import chatterbox.config.paths as paths
-import tools.monitoring.profiling as profiling
+import chatterbox.instrumentation as profiling
 from chatterbox.synthesis.backends.fastspeech2_hifigan import text_pipeline
 
 sys.path.insert(1, str(paths.FASTSPEECH2_DIR))

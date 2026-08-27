@@ -28,7 +28,7 @@ import chatterbox.audio.denoise as denoise
 import chatterbox.audio.playback as playback
 import chatterbox.synthesis.registry as registry
 import chatterbox.synthesis.subtitles as subtitles
-import tools.monitoring.profiling as profiling
+import chatterbox.instrumentation as profiling
 
 
 @dataclass

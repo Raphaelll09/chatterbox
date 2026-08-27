@@ -19,7 +19,7 @@ import logging
 import os
 import wave
 
-import tools.monitoring.profiling as profiling
+import chatterbox.instrumentation as profiling
 from chatterbox.synthesis.backends.piper import text_frontend
 
 logger = logging.getLogger(__name__)

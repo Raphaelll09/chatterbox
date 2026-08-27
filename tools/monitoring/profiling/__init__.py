@@ -298,3 +298,22 @@ def set_current(recorder):
 
 def current():
     return _current_recorder.get()
+
+
+# ---- Register with the runtime package's instrumentation seam --------------
+#
+# chatterbox/instrumentation.py is the L1-owned seam every profiling call site in the runtime
+# package goes through. It is inert until something installs a real implementation here -- which is
+# what this line does, using this module itself as the implementation (its public functions above
+# mirror the seam's API one-for-one).
+#
+# This is the ONLY direction the dependency is allowed to run: L3 (research) -> L1 (chatterbox).
+# The runtime package never imports research.*, so deleting research/ disables profiling instead of
+# breaking the demonstrator. See docs/release/STRUCTURE_AUDIT.md Sec4 and
+# chatterbox/instrumentation.py's module docstring.
+#
+# Importing this package is therefore a side-effecting act: chatterbox/cli.py imports it (inside its
+# `if profiling enabled:` branch) precisely to arm the seam before calling profiling.enable().
+import chatterbox.instrumentation as _seam
+
+_seam.install(sys.modules[__name__])

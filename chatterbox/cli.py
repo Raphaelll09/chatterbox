@@ -22,7 +22,7 @@ import chatterbox.state as state
 import chatterbox.gui.app as app
 import chatterbox.audio.playback as playback
 import chatterbox.synth as synth
-import tools.monitoring.profiling as profiling
+import chatterbox.instrumentation as profiling
 
 device = torch.device("cpu")
 
@@ -276,10 +276,25 @@ def main():
     if args.ina is not None:
         prof_cfg["ina226"] = args.ina
     if prof_cfg.get("enabled", False):
+        # Profiling lives in the research package (L3), which the runtime package (L1) must never
+        # import at module scope -- chatterbox/instrumentation.py is the seam, inert until a real
+        # implementation registers itself. Importing research.profiling here is what performs that
+        # registration (its module body calls instrumentation.install()), so it MUST happen before
+        # the profiling.enable() call below: enabling an uninstalled seam is a silent no-op that
+        # would produce an empty per_sentence.jsonl rather than an error. This import is
+        # mode-gated -- it only runs when profiling was actually requested.
+        try:
+            import research.profiling  # noqa: F401 -- imported for its install() side effect
+        except ImportError as exc:
+            raise SystemExit(
+                "Profiling was requested (--profile/--benchmark/--p4-sweep/CHATTERBOX_PROFILE=1) "
+                "but the research package is not available: {}\n"
+                "Install it with:  pip install -e '.[research]'".format(exc)
+            )
         profiling.enable()
         profiling.set_output_dir(prof_cfg.get("output_dir", "profile"))
         # --p4-sweep manages its own per-cadence-point sessions via
-        # profiling.start_session_at() (tools/measurement/benchmark/p4_sweep.py) -- it still
+        # profiling.start_session_at() (research/benchmark/p4_sweep.py) -- it still
         # needs enable()/set_output_dir() above, just not this single
         # top-level session.
         if not args.p4_sweep:
