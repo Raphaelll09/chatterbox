@@ -1,12 +1,17 @@
 # Architecture
 
-Read this when you need module-level detail beyond what's in the root `CLAUDE.md`. Not loaded
-automatically — read on demand.
+**How the subsystems work internally.** For *where* code lives, which language governs which
+aspect, and a task index, read [`CODEMAP.md`](CODEMAP.md) first — this document assumes you already
+know your way around.
 
-Reflects the repo layout after the 2026-07-20 reorganization (`docs/research/history/REORG_PROPOSAL.md`, Phases
-0–4). See that doc for the full rationale, the phase-by-phase history, and what's still owed
-(real interactive GUI testing, Pi 5 hardware verification — no Pi access was available during the
-reorg itself).
+Current as of the 2026-08 release reorganisation (`docs/release/REORG_PLAN.md`), which introduced
+the enforced L1/L3 layer boundary (below), renamed `tools/` to `research/`, and removed Waveglow and
+the unused `synthesis/base.py` ABCs. The earlier 2026-07-20 reorganisation is documented in
+`docs/research/history/REORG_PROPOSAL.md`.
+
+Where this document and the code disagree, the code wins — then fix this document. Two claims here
+were false for months (`base.py` described as the operative backend contract; `§` as the
+sub-utterance separator, which is actually `|`).
 
 ## Repository layout
 
@@ -14,16 +19,16 @@ The repo root (where `CLAUDE.md` lives) is the working root for running scripts,
 installing dependencies — there is no nested `embedded_tts/` subfolder inside it.
 
 - `chatterbox/` — the daily-use application package (synthesis, audio, GUI, config).
-- `tools/` — research/maintenance tooling, not daily-use (`measurement/benchmark/`,
-  `measurement/pmic_calibrate.py`, `monitoring/profiling/`).
-- `assets/models/` — three vendored model repos, each with its own README/LICENSE:
+- `research/` — research/maintenance tooling, **never imported by `chatterbox/`** (see "The layer
+  boundary" below): `research/benchmark/`, `research/profiling/`,
+  `research/calibration/pmic_calibrate.py`, and `research/data/archive/` (committed historical
+  run data).
+- `assets/models/` — vendored model repos, each with its own README/LICENSE:
   - `FastSpeech2/` — TTS acoustic model (text → mel-spectrogram + visual/AU params).
     Vendored FastSpeech2 fork with custom style/GST (Global Style Token) and StyleTag
     (FlauBERT-based free-text emotion) conditioning, plus per-phoneme prosody "control bias" vectors.
   - `hifi-gan-master/` — vocoder (mel-spectrogram → waveform). Default vocoder is
     `FR_V2` (French, fine-tuned on multi-speaker FastSpeech2 mel spectrograms).
-  - `Waveglow/` — alternative vocoder, currently disabled in `config_tts.yaml` (commented
-    out under `vocoder_models`).
   - `flaubert/` — pretrained FlauBERT-large model/tokenizer. Tokenizer loads eagerly at model-load
     time whenever the active TTS model's `styleTag_encoder.use_styleTag_encoder` is `True` (it is,
     in the shipped `ALL_corpus` config); the ~1.4 GB model checkpoint itself is wrapped in a
@@ -31,16 +36,64 @@ installing dependencies — there is no nested `embedded_tts/` subfolder inside 
     loaded from disk on the first per-utterance call where a `<STYLE_TAG=...>` free-text tag is
     present in the input — deferred since that's the dominant cost of a fresh startup and the tag
     is rarely used (see `docs/research/CHANGELOG.md` 2026-07-22 "Lazy-load FlauBERT").
-- `assets/audio/` — `reference/` (postprocessing before/after demo WAVs) and `prompts/` (on-screen
-  keyboard phoneme WAVs, read by `chatterbox/gui/app.py`).
+- `assets/audio/prompts/` — on-screen keyboard phoneme WAVs, read by `chatterbox/gui/app.py`. The
+  post-processing before/after reference WAVs moved to `docs/research/reference-audio/` in the
+  release reorganisation: they are research material, not loaded at runtime.
 
 Pretrained checkpoints are **not** in git — they're downloaded separately per `README.md`
-(Google Drive links) and unzipped into `assets/models/FastSpeech2/{config,output,preprocessed_data}`,
-`assets/models/flaubert/flaubert_large_cased`, `assets/models/hifi-gan-master/FR_V2`, and
-`assets/models/Waveglow/`. Do not expect the app to run end-to-end without these.
-`scripts/setup_pi.sh` automates this download/unzip step on a fresh Raspberry Pi 5 (see
-`INSTALL.md`); Waveglow is skipped by that script since it's not part of the active pipeline (see
-below).
+(Google Drive links in `README.fr.md`) and unzipped into `assets/models/FastSpeech2/{config,output,preprocessed_data}`,
+`assets/models/flaubert/flaubert_large_cased`, and `assets/models/hifi-gan-master/FR_V2`. Do not
+expect the app to run end-to-end without these. `scripts/setup_pi.sh` automates this download/unzip
+step on a fresh Raspberry Pi 5 (see `INSTALL.md`).
+
+## The layer boundary
+
+The repository is split in two, and the split is enforced by a test rather than by convention:
+
+```
+chatterbox/   L1 RUN     must NEVER import research/
+research/     L3 STUDY   may import chatterbox/ freely
+tests/        L3
+```
+
+Deleting `research/` and `tests/` must leave a working demonstrator. `scripts/check_layers.py`
+(AST walk over `chatterbox/`) and `tests/test_layer_boundary.py` (which additionally blocks the
+`research` package on `sys.meta_path` and imports each runtime module for real) enforce it.
+
+**Why it needed enforcing.** Before the release reorganisation, four L1 modules imported the
+profiling package at module scope — `chatterbox/synth.py`, `chatterbox/cli.py` and both synthesis
+backends. Removing the research tree therefore did not disable profiling, it made
+`chatterbox.synth`, `chatterbox.cli`, `chatterbox.synthesis.registry` and the Piper backend
+**unimportable**. `research/profiling/__init__.py` also imports `chatterbox.config.paths`, so the
+two packages were mutually entangled across the boundary.
+
+**How it is resolved: `chatterbox/instrumentation.py`.** L1 imports only this module (conventionally
+as `profiling`). Every function in it is an inert no-op returning a `NullRecorder` that mirrors the
+real recorder's surface, so call sites stay branch-free and never test whether profiling is on —
+which is also the shipped default (`config_tts.yaml`: `profiling.enabled: false`).
+
+`research/profiling/__init__.py` ends by calling `instrumentation.install(sys.modules[__name__])`
+on itself. From that point the seam delegates to the real implementation. The dependency therefore
+runs L3 → L1 only, the permitted direction:
+
+```
+L1   chatterbox.synth  ──►  chatterbox.instrumentation            (always)
+L3   research.profiling ──► chatterbox.instrumentation.install()  (when present)
+```
+
+The surface is nine module functions (`enable`, `is_enabled`, `set_output_dir`, `start_session`,
+`start_session_at`, `stop_session`, `get_run_dir`, `begin_sentence`, `set_current`, `current`) plus
+three recorder methods (`set`, `stage`, `finalize`). Adding a profiling call in L1 means adding a
+passthrough here — never an `import research.*` under `chatterbox/`.
+
+**Ordering matters.** `chatterbox/cli.py` imports `research.profiling` inside its existing
+`if profiling enabled:` gate, *before* calling `profiling.enable()`. Enabling an unarmed seam is a
+silent no-op that would produce an empty `per_sentence.jsonl` rather than an error. A missing
+research package there raises a `SystemExit` pointing at the `[research]` extra.
+
+The four mode-gated imports in `cli.py` (`--benchmark`, `--p4-sweep`, `--join`, `--export-xlsx`)
+are the only other crossings, whitelisted by name in `scripts/check_layers.py` — and at function
+scope only, so promoting one to a module-level import still fails the check.
 
 ## Synthesis pipeline — four stages
 
@@ -68,8 +121,8 @@ Everything below is orchestrated per-utterance by `chatterbox.cli.syn_audio()`.
 3. **HiFi-GAN vocoder** — `FastSpeech2HifiGanBackend.vocoder()` calls the model-specific
    `syn_script` (default `syn_hifigan`, which wraps
    `assets/models/hifi-gan-master/inference_e2e.py:inference()` against the backend's own
-   `generator` attribute) to turn the mel file into a `.wav`. `syn_waveglow` is the alternate path,
-   currently disabled in config.
+   `generator` attribute) to turn the mel file into a `.wav`. Skipped entirely for a monolithic
+   backend (`needs_vocoder: false`), which produced a finished wav in stage 2.
 4. **Audio write / post-process / playback** — back in `chatterbox.cli.syn_audio()`: denoise via
    `chatterbox.audio.denoise.denoise()` (if `use_denoiser`), optional loudness post-processing
    (`chatterbox.synthesis.audio_postprocess.normalize_and_limit`, if `postprocess.enabled`),
@@ -92,10 +145,12 @@ the reorg converted this into a single `FastSpeech2HifiGanBackend` instance
 The backend keeps its pre-reorg method names (`load_fastspeech2`, `syn_hifigan`, etc.) so
 `config_tts.yaml`'s `load_script`/`syn_script`/`gui_script` string-based dispatch needed zero
 changes — only what those strings resolve *against* changed (an object instead of a flat module).
-See `docs/research/history/REORG_PROPOSAL.md` §5 for the full interface design, including why there are two ABCs
-(`Synthesizer` for the acoustic model, `VocoderBackend` for the vocoder — `chatterbox/synthesis/
-base.py`) rather than one: TTS and vocoder are independently swappable today (separate GUI
-buttons), so a single bundled `load()` would break that.
+The acoustic model and the vocoder stay independently swappable (separate GUI pickers), so their
+loading is deliberately not bundled into one call. A `chatterbox/synthesis/base.py` once declared
+`Synthesizer`/`VocoderBackend` ABCs for this, but nothing ever subclassed, imported or constructed
+them; it was deleted in the release reorganisation and replaced by
+`chatterbox/synthesis/README.md`, which documents the contract the code actually enforces — a
+`(output_dir, processed_text)` tuple plus three YAML capability flags.
 
 Switching models at runtime (from the GUI) means re-running the loader method, which overwrites
 those instance attributes — same semantics as the old globals, just owned by an object instead of a
@@ -134,9 +189,9 @@ names its own `load_script`/`syn_script` (methods on `registry.BACKEND`, dynamic
 `getattr`), its own `folder`, and its own `default_args`. Adding a new TTS or vocoder backend that
 reuses the existing `FastSpeech2HifiGanBackend` class means adding a config entry plus a
 `load_*`/`syn_*` method pair on that class; adding a genuinely new *kind* of backend (e.g.
-Matcha-TTS) means a new class implementing `chatterbox.synthesis.base.Synthesizer` and a new
-`chatterbox/synthesis/backends/<name>/` package — see `docs/research/history/REORG_PROPOSAL.md` §5 "How Matcha-TTS
-would slot in". `chatterbox/gui/app.py` reads `gui_script` similarly to render model-specific
+Matcha-TTS) means a new class satisfying the contract in `chatterbox/synthesis/README.md`, a new
+`chatterbox/synthesis/backends/<name>/` package, and an entry in `registry.py`'s
+`_BACKENDS_BY_NAME`. `chatterbox/gui/app.py` reads `gui_script` similarly to render model-specific
 controls (e.g. `gui_fastspeech2`), and calls `registry.BACKEND.describe_controls()` for the speaker
 list instead of re-parsing config YAML directly (the leak mentioned above, now closed).
 
@@ -187,7 +242,6 @@ needed because the GUI's "Play" replay button is wired as a zero-argument Tkinte
 - HiFi-GAN checkpoint: `assets/models/hifi-gan-master/FR_V2/g_00570000`, config
   `assets/models/hifi-gan-master/FR_V2/config.json`.
 - FlauBERT: `assets/models/flaubert/flaubert_large_cased/`.
-- Waveglow (disabled by default): `assets/models/Waveglow/waveglow_NEB.pt`.
 
 `chatterbox/config/paths.py` anchors all of the above to its own file location
 (`Path(__file__).resolve().parents[2]`, i.e. two levels up — this file lives at
@@ -195,8 +249,7 @@ needed because the GUI's "Play" replay button is wired as a zero-argument Tkinte
 the file ever moves again**, since an off-by-one here breaks every path in the module silently —
 this has already happened twice during the reorg, see `docs/research/history/REORG_PROPOSAL.md` §6), not the
 process's current working directory. `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s
-three `sys.path.insert` calls (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, all under
-`assets/models/`), the same file's three regex-rule CSV paths (now under
+two `sys.path.insert` calls (`FastSpeech2/` and `hifi-gan-master/`, both under `assets/models/`), the same file's three regex-rule CSV paths (now under
 `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`), and
 `assets/models/FastSpeech2/utils/model.py`'s FlauBERT path all resolve through it, instead of bare
 CWD-relative strings — see `docs/research/history/REORG_PROPOSAL.md` §6/Phase 0 for why (a future package move only
@@ -207,7 +260,7 @@ today; `paths.py` only removes the *hidden* CWD dependency in the vendored-impor
 doesn't make the entry point location-independent.
 
 Two config files inside `assets/models/FastSpeech2/config/ALL_corpus/` (`preprocess.yaml`,
-`train.yaml`) are **gitignored** (downloaded from the Google Drive archives in `README.md`, never
+`train.yaml`) are **gitignored** (downloaded from the Google Drive archives in `README.fr.md`, never
 committed) and historically hardcoded their own `"FastSpeech2/..."`-prefixed paths, predating the
 reorg's move to `assets/models/`. `backend.py`'s `_repoint_legacy_fastspeech2_config_paths()`
 remaps these in memory at load time, so a fresh download (from the unchanged archive) still works
@@ -421,20 +474,21 @@ is checked into `tests/`.
 
 Added 2026-07-21, step 3 of `README_power_gui_workstream.md`'s build sequence — gated on
 `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 passing on real hardware first (they have).
-Compositor decision (open in the workstream README) is finalized: **cage** (Wayland, XWayland for
-Tk), matching `deploy/systemd/chatterbox-gui.service`. `apt-packages-pi.txt` gained `cage`+
-`xwayland`.
+The compositor was originally **cage** (Wayland, XWayland for Tk), driven by a
+`deploy/systemd/chatterbox-gui.service` unit.
 
 **Superseded 2026-07-31** (real Pi5 hardware bring-up, `docs/research/CHANGELOG.md`): a
-reproducible `libwlroots` SIGSEGV with no fixed package available ruled cage back out — current
-default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/KIOSK.md`). The description
-below is left as the historical record of that 2026-07-21 decision, not the current mechanism.
+reproducible `libwlroots` SIGSEGV with no fixed package available ruled cage out. The current
+default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/KIOSK.md`), started by a console
+autologin. **`chatterbox-gui.service` was deleted in the release reorganisation** — the only unit
+shipped now is `chatterbox-powerd.service`. The description below is the historical record of the
+2026-07-21 decision, not the current mechanism.
 
 `scripts/kiosk_finalize.sh` is the one opt-in script (not part of `setup_pi.sh`'s default run —
 that stays scoped to "get the app runnable") that commits a verified Pi to unattended kiosk boot:
-disables `getty@tty1.service` (since `chatterbox-gui.service`'s `TTYPath=/dev/tty1`+
-`PAMName=login` makes it *become* the tty1 session directly — the standard systemd kiosk pattern,
-which a stock getty on the same tty would otherwise race), tunes `config.txt`/`cmdline.txt`
+disables `getty@tty1.service` (the deleted `chatterbox-gui.service` used `TTYPath=/dev/tty1`+
+`PAMName=login` to *become* the tty1 session directly, which a stock getty would race; the Xorg
+mechanism that replaced it uses its own `agetty --autologin` drop-in instead), tunes `config.txt`/`cmdline.txt`
 (backed up per-file, idempotent per-line append, auto-detecting `/boot/firmware/` vs `/boot/`),
 and enables+starts both systemd units. Deliberately does **not** write EEPROM (`rpi-eeprom-config`
 is read-only-checked, never edited by tooling — same "boot-config edits carry brick risk" posture

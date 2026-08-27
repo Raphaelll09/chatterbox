@@ -27,6 +27,7 @@ CODEMAP = REPO_ROOT / "docs" / "CODEMAP.md"
 # the tree as it was at the time and are supposed to contain paths that no longer exist.
 PATH_CHECKED_DOCS = [
     "docs/CODEMAP.md",
+    "docs/ARCHITECTURE.md",
     "docs/README.md",
     "chatterbox/README.md",
     "research/README.md",
@@ -48,22 +49,53 @@ _SYMBOL_ROW = re.compile(
 # Referenced but deliberately absent from the repository (documented as missing, see
 # docs/README.md "Missing documents"). Listing them here keeps the test honest about why.
 KNOWN_ABSENT = {
-    # Lives inside the FastSpeech2 config archive, which is downloaded, not committed
-    # (see assets/README.md). Real on a provisioned machine, absent from a fresh clone.
+    # --- Downloaded, not committed. Real on a provisioned machine, absent from a fresh clone.
     "config/ALL_corpus/preprocess.yaml",
+
+    # --- Generated at runtime into the gitignored profile/ scratch directory.
+    "profile/per_sample.csv",
+    "profile/per_sentence_results.csv",
+    "profile/per_stage_results.csv",
+    "profile/calibration.json",
+    "profile/exports/chatterbox_paste.xlsx",
+
+    # --- Deliberately referenced as REMOVED. A document explaining that something was deleted has
+    # to be able to name it; these appear only in sentences saying exactly that.
+    "chatterbox/synthesis/base.py",
+    "synthesis/base.py",
+    "deploy/systemd/chatterbox-gui.service",
+
+    # --- Documented under "Not yet implemented" as never built.
+    "scripts/hw_check.py",
 }
+
+
+# A backticked token containing "/" is only treated as a repo path if it either ends in a known
+# file extension or starts with a real top-level directory. Without this, prose like `try/except`
+# and unit expressions like `E/s_Wh` get mistaken for paths -- and padding an exclusion list with
+# them would slowly turn this test into a rubber stamp.
+_PATH_EXTENSIONS = (
+    ".py", ".md", ".yaml", ".yml", ".csv", ".json", ".jsonl", ".sh", ".txt",
+    ".xlsx", ".service", ".conf", ".png", ".wav", ".onnx", ".cff", ".toml",
+)
+_TOP_LEVEL_DIRS = (
+    "chatterbox/", "research/", "tests/", "docs/", "assets/", "deploy/", "scripts/", "profile/",
+)
+
+
+def _looks_like_a_repo_path(candidate):
+    if candidate.startswith(("http", "/run/", "/dev/", "/etc/", "/home/", "~/")):
+        return False
+    if candidate.endswith(_PATH_EXTENSIONS):
+        return True
+    return candidate.startswith(_TOP_LEVEL_DIRS)
 
 
 def _iter_paths(text):
     for match in _PATH_IN_BACKTICKS.finditer(text):
         candidate = match.group(1)
-        # Skip things that are clearly not repo paths.
-        if candidate.startswith(("http", "/run/", "/dev/", "/etc/", "/home/", "~/")):
-            continue
-        if candidate.endswith("/") and candidate.count("/") == 1 and "." not in candidate:
-            # bare top-level dir like `gui/` used as shorthand; resolve against repo root anyway
-            pass
-        yield candidate
+        if _looks_like_a_repo_path(candidate):
+            yield candidate
 
 
 @pytest.mark.parametrize("doc", PATH_CHECKED_DOCS)
