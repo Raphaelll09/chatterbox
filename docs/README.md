@@ -8,6 +8,7 @@ Split by who needs it.
 
 | Document | Read it when |
 |---|---|
+| [CODEMAP.md](CODEMAP.md) | **Start here if you are going to change code.** Which language governs which aspect, where everything lives, the invariants, and a task index. Verified by `tests/test_codemap.py`. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | You want the whole picture: pipeline stages, model registry, state handling. Note its module paths predate the release reorganisation in places. |
 | [GUI.md](GUI.md) | Working on the Tkinter interface — threading model, worker contract, manual smoke tests that need real weights. |
 | [KIOSK.md](KIOSK.md) | Setting up the Pi as a kiosk: the plain-Xorg autostart mechanism and why cage/wlroots was abandoned. |

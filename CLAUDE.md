@@ -1,337 +1,79 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-## Project
+This file used to duplicate the repository's structure and architecture. It no longer does — that
+material drifted out of date twice, which is exactly the failure this split avoids. **Structure now
+lives in one place**, and this file holds only what an agent needs *in addition* to it.
 
-This repo is a fork of `embedded_tts`, the TTS engine for **Chatterbox**: an embedded neural TTS
-demonstrator for AAC (augmentative and alternative communication) users, targeting a **Raspberry
-Pi 5 (16 GB)**. It's a French text-to-speech pipeline: FlauBERT-large (optional free-text style
-conditioning) + FastSpeech 2 (acoustic model, custom GST/StyleTag fork) + HiFi-GAN (vocoder),
-running fully on CPU.
+## Read these first
 
-## Tech stack
+| Read | For |
+|---|---|
+| **[`docs/CODEMAP.md`](docs/CODEMAP.md)** | **Start here.** Where the code for X lives, which language governs which aspect, the invented syntaxes, the invariants, the "I want to change X" index, the key-symbol table |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How a subsystem works internally |
+| [`chatterbox/synthesis/README.md`](chatterbox/synthesis/README.md) | The backend contract — required before touching any backend |
+| [`README.md`](README.md) | Install, run modes, CLI flags, the GUI, maintenance |
+| [`docs/research/CHANGELOG.md`](docs/research/CHANGELOG.md) | Why something is the way it is. Grep it; do not read it front to back |
 
-Python 3 (tested on 3.8/3.10, repo has a 3.11 `.venv`), PyTorch, PyYAML config, Tkinter GUI
-(optional). No GPU required or targeted — inference runs on CPU by design, for the Pi 5 target.
+`docs/CODEMAP.md` is verified by `tests/test_codemap.py` — its paths and symbol names are checked
+against the code, so trust it over any recollection.
 
-## Repo map
+## The one rule that must not break
 
-This file lives at the repo root, alongside the code below — run all commands below from here.
-**Reorganized twice**: Phase 3 (`docs/research/history/REORG_PROPOSAL.md`, 2026-07-20), then the
-release reorganisation (`docs/release/REORG_PLAN.md`, 2026-08). `docs/ARCHITECTURE.md`'s
-module-level detail predates both in places — cross-check against this file.
-
-**The layer rule, which is enforced, not aspirational:**
-
-> `chatterbox/` (L1 RUN) must never import `research/` (L3 STUDY). `research/` may import
-> `chatterbox/` freely. Deleting `research/` and `tests/` must leave a working demonstrator.
-
-`scripts/check_layers.py` and `tests/test_layer_boundary.py` enforce it. The one thing L1 needs
-from profiling reaches it through `chatterbox/instrumentation.py`, an inert seam that
-`research.profiling` installs itself into at import time. Every top-level directory has its own
-`README.md`; read those first.
-
-- `do_tts.py` — entry point, now a 3-line shim calling `chatterbox.cli.main()` (CLI contract
-  unchanged: same flags, same `--gui`).
-- `chatterbox/` — the daily-use application package:
-  - `cli.py` — argparse/dispatch (was `do_tts.py`'s body) + `syn_audio()`, now a thin CLI/benchmark
-    wrapper around `synth.synthesize()` (below) + console reporting + playback; also `warmup()`
-    (module-level, called by both the free-text loop and the GUI's own startup warm-up).
-  - `synth.py` — **Tk-free** synthesis compute path (chatterbox_gui_spec_v0.1.md §2.3), extracted
-    from `cli.py:syn_audio()` in the GUI refactor: `synthesize(text, tts_idx, voc_idx, tts_config,
-    ...) -> AudioResult | None` (TTS → vocoder → denoise/post-process → subtitles →
-    `audio/playback.py`'s `AUDIO_EXAMPLE` set). The vocoder call is skipped for a monolithic TTS
-    model (`tts_models[i].needs_vocoder: false`) — see "Interchangeable backends" below;
-    `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (`"vocoder"` simply
-    absent in that case), not fixed named fields. No Tk import, no playback call — both `cli.py`
-    and the GUI's worker thread call it directly. See `docs/GUI.md`.
-  - `synthesis/README.md` — **the backend contract**, and the place to start for anything backend-
-    related. Replaced the former `synthesis/base.py`, whose `Synthesizer`/`VocoderBackend` ABCs and
-    `SynthesisRequest`/`SynthesisResult` dataclasses nothing ever subclassed, imported or
-    constructed (deleted in the release reorganisation). The real contract is a
-    `(output_dir, processed_text)` tuple plus three YAML capability flags; `registry.py` —
-    `BACKEND`, config-driven dispatch (`config_tts.yaml`'s `load_script`/`syn_script`/`gui_script`
-    strings, resolved via `getattr(registry.BACKEND, name)`, same as before the Piper integration).
-    `BACKEND` is now a small resolving proxy (`_BackendProxy`), not a bare singleton instance —
-    added when a second backend (Piper) proved the original bare-singleton design couldn't
-    disambiguate `tts()`/`describe_controls()` (identically named on every backend by design) once
-    more than one was registered; `activate_tts_backend(name)`, called by `cli.py`/`gui/app.py`
-    immediately before resolving a `tts_models[i]` entry's `load_script` (per that entry's new
-    `backend` field, e.g. `"piper"` — omitted defaults to `"fastspeech2_hifigan"`), tells the proxy
-    which concrete backend colliding names should resolve against. See
-    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for the full contract-gap writeup.
-  - `synthesis/backends/fastspeech2_hifigan/` — `backend.py` (was `loading_modules.py` +
-    `synthesis_modules.py`'s model-calling functions, now a `FastSpeech2HifiGanBackend` class owning
-    loaded-model state as instance attributes) + `text_pipeline.py` (was `synthesis_modules.py`'s
-    text-processing functions: control-tag parsing, pronunciation/punctuation cleanup) +
-    `rules/*.csv` (the regex rule files — heavily FS2-`{phonetic}`-syntax-specific despite the
-    substitution mechanism itself being generic regex replace; see `synthesis/backends/piper/`'s
-    own note on why it doesn't reuse `parse_pronunciation_mistakes()` unconditionally).
-  - `synthesis/backends/piper/` — the second backend (`backend.py`'s `PiperBackend`: `load_piper`,
-    `tts`, `describe_controls`, `_resolve_speaker` (speaker/checkpoint resolution — see below);
-    `text_frontend.py`'s own tag-parsing (text cleanup + `<SPEAKER=...>` extraction only, not
-    resolution), deliberately not routed through `fastspeech2_hifigan/text_pipeline.py`'s
-    FS2-specific machinery beyond the genuinely orthographic `trim_punctuation_mistakes()`).
-    Monolithic (`needs_vocoder: false`), no style dimension, `piper-tts` (optional,
-    GPL-3.0-or-later — install manually, not in `requirements-pi.txt`) does its own espeak-ng-based
-    phonemization internally. 3 voice files (`fr_FR-siwis-medium`/`upmc-medium`,
-    `en_US-lessac-medium`, fetched by `scripts/fetch_piper_voices.sh` into `assets/models/Piper/`,
-    not committed — a 4th, `fr_FR-tom-medium`, was evaluated and removed after real-hardware
-    listening found it noticeably lower quality and slower than the other fr_FR voices), presented
-    as **2** selectable `tts_models[i]` entries: `"Piper-tts (Français)"` unifies siwis (single
-    speaker) and upmc (`jessica`/`pierre`) via a `speakers:` list (`{name, checkpoint_file,
-    speaker_id}` per entry) — landscape-refactor session, per the user's own framing ("it doesn't
-    make sense to select two models from the same bigger model" when they're all just Piper-tts,
-    French) — `describe_controls()` builds an ordinary `speaker_list`/`default_speaker` from it, so
-    `gui/app.py` needs no changes; picking a speaker backed by a different checkpoint than the one
-    currently loaded costs a (cached-after-first-time) reload inside `tts()`, on the worker thread,
-    never blocking the GUI. `"Piper en_US (lessac, medium)"` stays a separate, ordinary
-    single-speaker entry (no `speakers:` key — `describe_controls()` falls back to the legacy
-    per-voice `speaker_id_map` path for any model config without one). Each `tts_models[i]` entry
-    also carries a `language` field (defaults to `"fr"` when absent) — lessac is the first entry
-    with `language: "en"`, letting the GUI's "Langue" menu (below) find it. Both Piper entries also
-    carry a shared `menu_group: "Piper-tts"` (real-hardware feedback round 2 — "you can choose
-    either french piper or US piper, it would make more sense that you choose [it] once"):
-    `gui/app.py`'s top-level "TTS Model" menu collapses every entry sharing a `menu_group` into
-    ONE radiobutton, resolving which grouped member to actually load from the currently active
-    locale at click time (`_resolve_grouped_model()`); `_set_language()` prefers a same-`menu_group`
-    match over the first language-matching model overall, so switching Piper's language stays on
-    Piper instead of falling back to FastSpeech2. Settings → Advanced still lists both Piper
-    variants individually (an intentional finer-detail view, not grouped). See its own `README.md`
-    for provenance/licence and
-    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for what the original integration found and fixed in
-    the contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
-    `gui_generic_controls()` — see that section, not repeated here).
-  - `synthesis/audio_postprocess.py` — unchanged from pre-reorg `audio_postprocess.py`.
-  - `synthesis/subtitles.py` — subtitle/duration-alignment file writers (was part of
-    `audio_utils.py`).
-  - `audio/playback.py`, `audio/denoise.py` — playback and noise-reduction (was part of
-    `audio_utils.py`).
-  - `gui/app.py`, `gui/keyboards.py` — Tkinter GUI, on-screen phonetic (Emmanuelle) keyboard, and
-    (added in the responsive/accessible refactor, `cc_prompt_gui_refactor.md`) a second soft
-    letter keyboard (`app.py:_create_letter_keyboard()`) toggled via a Texte/Phonèmes segmented
-    control — both live in one `keyboard_area` container that portrait/landscape reflow (`app.py`'s
-    `<Configure>` binding) repositions as a unit. The letter keyboard's own layout is switchable
-    between simplified AZERTY (default) and QWERTY (`app.py`'s `_LETTER_LAYOUTS`, live-swapped via
-    a Settings → Advanced radio pair next to the Orientation control, independent of the active
-    TTS language — QWERTY doesn't imply English, nor AZERTY French). Main-window layout is
-    responsive (grid weights, not fixed pixel sizes); the model-options panel
-    (`gui_generic_controls()`, see "Interchangeable backends" below) is built entirely from the
-    active backend's `describe_controls()` — a wrapped style/GST-token chip grid with unnamed
-    placeholder tokens hidden behind an "Styles avancés" toggle is what today's FastSpeech2 backend
-    happens to declare, not something `app.py` hardcodes; TTS/vocoder model selection lives in
-    Settings → Advanced (see `gui/settings.py` below), not the main window. Synthesis+playback (and,
-    since the same refactor, Replay) run on a worker thread, never the Tk thread
-    (chatterbox_gui_spec_v0.1.md §2) — see `docs/GUI.md`. The app-bar's "Langue" menu is a real,
-    config-driven submenu (`config_tts.yaml`'s `GUI_config.languages`) switching `gui/i18n.py`'s
-    locale and restarting the window (`create_gui()`/`_run_gui_session()` split — a thin restart
-    loop wraps the actual session function, which returns the next `default_tts` index to load or
-    `None` to exit) onto the first `tts_models[]` entry whose own `language` field matches — a full
-    rebuild rather than live re-labelling, since nearly every widget's text is set once at creation
-    time via a literal `i18n.t(...)` call, with no existing refresh mechanism for static text. Also
-    switches which TTS model/voice loads, since a language and a voice are the same choice for most
-    users; `user_prefs.yaml`'s `gui.language` (Settings → Advanced's separate "Interface language"
-    radio picker, `_set_gui_language()`) is the interface text's language on its own, independent of
-    the loaded model — real-hardware feedback ("add a parameter that changes the GUI language and
-    not only the model language") for running e.g. the English Piper voice with French interface
-    text. Both controls persist to the same `gui.language` key and restart the window the same way
-    (`_set_language()` picks a new model + locale; `_set_gui_language()` re-renders the SAME model
-    in a new locale), so whichever was used last wins on the next launch. "Thème" stays a disabled
-    stub — no second theme table exists yet.
-  - `gui/i18n.py` — the GUI's string table (added in the same refactor to replace a hardcoded
-    French/English label mix). Both `"fr"` and `"en"` are populated today; `set_locale(code)`
-    switches which one `t(key, **kwargs)` reads from, called by the "Langue" menu above (and once
-    at GUI startup, matching whichever language `default_tts`'s own model declares).
-  - `gui/input.py` — the `Action` enum + `dispatch()` + a minimal nav ring driving/driven-by
-    physical switches (via powerd) and the Speak/Replay/keyboard/Put-away/Settings controls.
-  - `gui/settings.py` — the settings screen (`chatterbox/config/user_prefs.yaml`'s power-timer/
-    brightness fields; atomic write; `powerd.reload()` on save), plus an "Avancé" section
-    (dependency-injected via `open_settings(..., build_advanced_section=...)`, mirroring
-    `gui/input.py`'s no-import-cycle pattern) that `gui/app.py` uses to host the TTS/vocoder model
-    pickers — model switches there take effect immediately, unlike the power fields, which need
-    "Enregistrer".
-  - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
-  - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
-    `docs/ARCHITECTURE.md`, stale on paths but not on structure). Each `tts_models[i]` entry
-    carries three static capability flags read *before* that model is loaded (see "Interchangeable
-    backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false),
-    `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
-    `"translate_labels"`, `"hide"`, or `"disable"` (landscape-refactor plan, input-row phase — greys
-    out rather than removing the Phonèmes toggle), for when a model doesn't understand the
-    Phonèmes keyboard's phone-code syntax), and `supports_subtitles` (added for the Piper backend — `false` skips
-    `chatterbox/synth.py`'s subtitle-writing path, which otherwise assumes FastSpeech2's own
-    per-symbol `audio_file_duration.npy` output exists; see
-    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3.4). `config/paths.py` — repo-root-anchored path resolution for the vendored
-    model dirs (added Phase 0); `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs
-    (below), reloadable on SIGHUP.
-  - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon
-    (ACTIVE→DIM→DARK→DEEP, backlight, amplifier SD line, physical switches/touch activity, halt-on-
-    DEEP). Run with `python3 -m chatterbox.power.daemon`; every hardware import (`gpiozero`,
-    `evdev`) is guarded so this package (and everything importing it) still loads cleanly without
-    them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
-    `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
-    powerd isn't reachable — see `docs/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
-    `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
-    DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
-    `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
-- `deploy/` — Pi deployment; see `deploy/README.md`. `systemd/chatterbox-powerd.service` plus
-  `xorg-kiosk/`, the current kiosk mechanism (plain Xorg + `agetty --autologin`, installed by
-  `setup_pi.sh` step 9). The former `chatterbox-gui.service` ran the GUI under `cage` and was
-  deleted in the release reorganisation: real Pi5 bring-up (2026-07-31) hit a reproducible SIGSEGV
-  inside Raspberry Pi Foundation's own `libwlroots` build with no fixed package available. Full
-  writeup in `deploy/xorg-kiosk/README.md` and `docs/KIOSK.md`.
-- `research/` — **L3 STUDY**, never imported by `chatterbox/`; see `research/README.md`:
-  - `benchmark/` — fixed 10-sentence French benchmark set, runner, P4 cadence sweep, xlsx export,
-    cross-run comparison.
-  - `profiling/` — background PMIC/CPU/thermal sampler, per-sentence timing recorder, offline join;
-    off by default.
-  - `calibration/pmic_calibrate.py` — guided PMIC→meter calibration wizard.
-  - `data/archive/` — committed historical run data (was `profile/`; `profile/` is now gitignored
-    live scratch).
-- `assets/models/` — vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `flaubert/`; weights
-  not in git — see Install below). Waveglow was removed in the release reorganisation: unreachable
-  by config, yet load-bearing through a module-level import. See `assets/README.md`.
-- `tests/` — pytest suite (L3); see `tests/README.md`, which documents what it does *not* cover.
-  `test_layer_boundary.py` enforces the layer rule above.
-- `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`, `scripts/setup_pi.sh` — PC
-  vs Pi 5 dependency split + Pi provisioning script; see `INSTALL.md`.
-- `scripts/kiosk_finalize.sh` — **opt-in**, run once a Pi has passed
-  `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7 (note: that document is NOT in this
-  repository — see `docs/README.md` "Missing documents"): disables `getty@tty1`, tunes `config.txt`/`cmdline.txt` (backed up, idempotent),
-  enables+starts both systemd units. Never touches EEPROM beyond a read-only check. Not part of
-  `setup_pi.sh`'s default run. See `docs/KIOSK.md`.
-
-## The synthesis pipeline (4 stages)
-
-1. **FlauBERT front-end** (optional, per-utterance) — `text_pipeline.preprocess_styleTag()`, only
-   invoked when a `<STYLE_TAG=...>` free-text tag is present in the input text.
-2. **FastSpeech2 acoustic** — `FastSpeech2HifiGanBackend.syn_fastspeech2()` →
-   `assets/models/FastSpeech2/synthesize.py`. Text → mel-spectrogram + `.AU` (visual/facial
-   animation params).
-3. **HiFi-GAN vocoder** — `FastSpeech2HifiGanBackend.syn_hifigan()` →
-   `assets/models/hifi-gan-master/inference_e2e.py`. Mel → waveform.
-4. **Audio write** — `chatterbox.synth.synthesize()`: denoise, optional post-process
-   (`chatterbox/synthesis/audio_postprocess.py`), visual smoothing, subtitle write. Playback
-   (`chatterbox/audio/playback.py:play_audio()`) is a separate step the caller (`cli.syn_audio()`
-   or the GUI's worker thread) triggers afterward.
-
-Full detail (globals-turned-instance-state pattern, control-tag mini-language, config-driven model
-registry, weights locations) is in `docs/ARCHITECTURE.md` — read it on demand, but note its
-module names/paths predate the Phase 3 reorg above; cross-check against this file or
-`docs/research/history/REORG_PROPOSAL.md` §2 if something doesn't match.
-
-## Interchangeable backends
-
-The GUI/synthesis-result layer is generic, not hardcoded to FastSpeech2 — a backend swap (e.g. a
-monolithic state-of-the-art model with no separate vocoder stage) needs **no** changes to
-`chatterbox/gui/app.py` or `chatterbox/synth.py`, only its own backend module + `config_tts.yaml`
-entry conforming to this contract. **No longer just a design goal**: the Piper (fr_FR) backend
-(`chatterbox/synthesis/backends/piper/`) proved this against a real second backend, and found that
-`chatterbox/synthesis/registry.py` itself needed a small fix first (a bare-singleton `BACKEND`
-couldn't resolve which backend's `tts()`/`describe_controls()` a caller meant once a second one
-existed) plus a stale-Tk-variable bug in `gui/app.py`'s `gui_generic_controls()` — both fixed, both
-documented in full in `docs/research/INTERCHANGEABLE_BACKENDS.md` §3, neither required touching
-`synth.py`. The contract described below is what actually held up under that test:
-
-- **Model-options panel**: each backend's `describe_controls()` (`chatterbox/synthesis/README.md`
-  has the full return shape) returns `speaker_list`/`default_speaker` plus an ordered
-  `controls` list of `chip_grid`/`slider`/`text` descriptors — `gui/app.py:gui_generic_controls()`
-  renders one widget per entry generically (no per-backend GUI code) and collects values into a
-  dict `get_gui_controls()` returns, keyed by each control's declared `"key"`. FastSpeech2's own
-  `describe_controls()` (`synthesis/backends/fastspeech2_hifigan/backend.py`) is what actually
-  declares today's style chip grid / 9 sliders / StyleTag entry, reading the same
-  `config_tts.yaml` keys (`gst_token_list`, `default_args.*`, `gui_control_bias`, etc.) it always
-  has, just translated into the generic schema instead of hand-built widgets.
-- **Two-stage vs. monolithic pipeline**: the static per-model
-  `needs_vocoder` flag (`config_tts.yaml`) tells `chatterbox.synth.synthesize()` whether to call
-  `BACKEND.vocoder()` at all, and tells `gui/app.py`'s Settings → Advanced whether to show a
-  Vocodeur picker. Denoising/postprocess/subtitles stay universal regardless of pipeline shape.
-  `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (GUI/CLI reporting iterate
-  it, no fixed named fields) — `"vocoder"` is simply absent for a monolithic backend.
-- **Phoneme keyboard**: the on-screen "Emmanuelle" Phonèmes keyboard (`gui/keyboards.py`) is
-  FastSpeech2's own custom phone-symbol alphabet (there's no G2P step anywhere in this repo) — a
-  different backend declares `accepts_phoneme_input: false` (`config_tts.yaml`, per `tts_models`
-  entry) if it can't understand that syntax, and `GUI_config.phoneme_fallback`
-  (`"translate_labels"`, the default; `"hide"`; or `"disable"`, landscape-refactor plan) decides
-  what the GUI does about it: substitute each key's already-computed plain-French display label,
-  remove the Phonèmes keyboard/toggle entirely, or leave the toggle visible but greyed out
-  (`state="disabled"`) and unclickable. `keyboards.py`'s own mood-shortcut keys and phone-symbol table remain FS2/GST-specific
-  by design — a backend wanting phoneme input support of its own would need its own keyboard
-  layout, not a reuse of this one.
-
-## Install gotchas
-
-- Use **`requirements-dev.txt`** (PC) or **`requirements-pi.txt`** + **`apt-packages-pi.txt`**
-  (Raspberry Pi 5) — see `INSTALL.md`. The legacy `requirements.txt` / `minimal_requirements.txt`
-  (deleted 2026-07-20, reorg Phase 4 sign-off — see `docs/research/CHANGELOG.md`) pulled in
-  FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`, `librosa` transitively,
-  `tensor2tensor`, ...) and pinned `apex==0.9.10dev`, which resolves to the wrong PyPI package —
-  not needed to run inference against an already-trained checkpoint. If you ever need to retrain
-  or re-preprocess FastSpeech2, recover their pins from git history rather than reconstructing them
-  by hand.
-- Pretrained weights are **not in git** — download manually from the Google Drive links in
-  `README.md`: FastSpeech2 checkpoint `390000`, FlauBERT large, HiFi-GAN
-  `FR_V2/g_00570000`. `scripts/setup_pi.sh` automates this on a fresh Pi 5.
-- Linux GUI needs `apt-get install python-tk` / `pip3 install python3-tk` in addition to the
-  runtime requirements (already in `apt-packages-pi.txt` for the Pi).
-
-## Run modes
-
-- **Free-text (default)**: `python3 do_tts.py [--gui]` — prompts for text on stdin (or via GUI) and
-  synthesizes/plays it. See `do_tts.py --help` for post-processing/analysis flags
-  (`--postprocess`, `--target-crest-db`, `--analyze`, `--report-wav`) and the profiling flag
-  (`--profile`, or `CHATTERBOX_PROFILE=1` — see below).
-- **Benchmark**: `python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FILE]`
-  — runs the fixed 10-sentence set in `research/benchmark/sentences_fr.jsonl` through the
-  same `chatterbox.cli.syn_audio()` call as free-text mode, with profiling forced on. See
-  `docs/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
-- **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
-  per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/ARCHITECTURE.md`
-  "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
-- **Power daemon** (optional, separate process, Pi/Linux-only): `python3 -m chatterbox.power.daemon`
-  (or the `chatterbox-powerd` systemd unit) runs the kiosk power-state machine alongside `do_tts.py
-  --gui`. See `docs/POWERD.md`.
-- **GUI** (`--gui`, above): non-blocking (worker-thread synthesis+playback), crash-resistant, and
-  a `chatterbox-powerd` client (activity pings, put-away, forwarded switch input, a settings
-  screen). See `docs/GUI.md`.
-
-## Testing
-
-```bash
-.venv/Scripts/python.exe -m pytest tests/            # all tests
-.venv/Scripts/python.exe -m pytest tests/test_audio_postprocess.py -k test_no_clipping  # single test
+```
+chatterbox/  (L1 RUN)    must NEVER import research/  (L3 STUDY)
+research/                may import chatterbox/ freely
 ```
 
-On this checkout, bare `python`/`python3` resolve to the Windows Store stub, not the project
-venv — invoke via `.venv/Scripts/python.exe` (Windows) or activate the venv first. Tests need no
-pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profiling.py`/
-`test_benchmark.py` cover pure-parsing/call-ordering logic with synthesis monkeypatched.
-`test_power_*.py` similarly need no Pi hardware (fake-injected FSM/backlight/amp) — the one
-exception, a live unix-socket loopback test in `test_power_ipc.py`, is `skipif`'d on Windows.
-`test_gui_*.py`/`test_synth.py` need no Tk instance or pretrained weights either (fake-injected
-widgets/monkeypatched `synth.synthesize`/`playback.play_audio`) — see `docs/GUI.md` for the
-separate manual real-weights smoke tests that *do* need loaded models (not part of this suite).
+Deleting `research/` and `tests/` must leave a working demonstrator. The only bridge is
+`chatterbox/instrumentation.py`, an inert seam that `research.profiling` installs itself into.
 
-## Conventions
+Enforced by `scripts/check_layers.py` and `tests/test_layer_boundary.py`. If you need profiling
+from L1, add a passthrough to `instrumentation.py` — never an `import research.*` in `chatterbox/`.
 
-- Keep dependencies minimal — this targets an embedded Pi 5, not a dev workstation.
-- The synthesis function is shared, not duplicated — the benchmark mode
-  (`research/benchmark/runner.py`) calls the same `chatterbox.cli.syn_audio()` /
-  `FastSpeech2HifiGanBackend.tts()` path as free-text mode, not a parallel copy. Any future batch
-  mode must do the same. Underneath, `cli.syn_audio()` and the GUI's worker thread both call the
-  same Tk-free `chatterbox.synth.synthesize()` — don't reintroduce a second compute path for one
-  or the other.
-- Profiling/instrumentation is opt-in and off by default (mirrors the `postprocess.enabled` pattern
-  in `config_tts.yaml`) — see the `research/profiling/` package.
+## Working here
 
-## Maintenance rules (IMPORTANT)
+- **Run commands from the repository root.** Model paths in `config_tts.yaml` are relative to the
+  working directory.
+- **Python invocation:** bare `python`/`python3` resolve to the Windows Store stub on this checkout.
+  Use `.venv/Scripts/python.exe` (Windows) or activate the venv.
+- **Before committing:** `python3 -m pytest tests/` and `python3 scripts/check_layers.py`.
+- **Green tests do not mean the device speaks.** Synthesis is mocked throughout; `chatterbox/synth.py`
+  has no test executing it past the empty-input guard. Changes to the synthesis path need real
+  hardware verification. See [`tests/README.md`](tests/README.md).
+- **Do not add a second compute path.** CLI and GUI both call `chatterbox.synth.synthesize()`.
+- **Keep dependencies minimal** — this targets an embedded Pi 5, not a workstation.
+- **Instrumentation is opt-in and off by default**, mirroring the `postprocess.enabled` pattern.
 
-- At the start of a task, read `docs/ARCHITECTURE.md` and the top entry of
-  `docs/research/CHANGELOG.md` for the current state and recent history.
-- After completing any change, append a `docs/research/CHANGELOG.md` entry (template at the top of
-  that file), and update `docs/ARCHITECTURE.md` / this file if the structure or run commands
-  changed.
+## Documentation ownership
+
+One fact, one place. When something changes, update the owning document only:
+
+| Owns | Document |
+|---|---|
+| Where code lives, key symbols, tasks | `docs/CODEMAP.md` |
+| How subsystems work | `docs/ARCHITECTURE.md` |
+| The backend contract | `chatterbox/synthesis/README.md` |
+| Install / run / GUI / maintenance | `README.md` (English), `README.fr.md` (French reference) |
+| Per-directory orientation | that directory's `README.md` |
+| History and rationale | `docs/research/CHANGELOG.md` |
+| The pre-release audit and its follow-ups | `docs/release/` — **dated records, do not update** |
+
+## After completing a change
+
+1. Append a `docs/research/CHANGELOG.md` entry (template at the top of that file).
+2. Update `docs/CODEMAP.md` if you added, moved or renamed a key symbol — `tests/test_codemap.py`
+   will fail if you don't.
+3. Update the owning document from the table above if behaviour changed.
+
+## Accuracy
+
+Treat existing documentation as evidence, not proof, and verify claims against the code. Two
+documented "facts" turned out to be false: `chatterbox/synthesis/base.py` was described as the
+operative backend contract while nothing imported, subclassed or constructed it, and `§` was
+documented as the sub-utterance separator while the code split on `|`. Both had stood for months.
+Where a document and the code disagree, the code wins — then fix the document.
 
 ## graphify
 

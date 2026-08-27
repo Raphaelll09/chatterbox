@@ -30,9 +30,9 @@ compute path is barely covered: `chatterbox/synth.py` is ~280 lines, and no test
 past the empty-input guard. Three of `test_synth.py`'s five tests construct an `AudioResult` by
 hand and assert on the object they just built — they would pass if `synthesize()` were deleted.
 
-Modules with no dedicated test file: `cli.py`, `gui/app.py` (the largest file in the repository),
-`audio/playback.py`, `audio/denoise.py`, `synthesis/subtitles.py`, both backends' text pipelines,
-`config/paths.py`.
+Modules with no dedicated test file: `chatterbox/cli.py`, `chatterbox/gui/app.py` (the largest
+file in the repository), `chatterbox/audio/playback.py`, `chatterbox/audio/denoise.py`,
+`chatterbox/synthesis/subtitles.py`, both backends' text pipelines, `chatterbox/config/paths.py`.
 
 `conftest.py` puts the repository root on `sys.path`, so the suite tests a **source checkout, never
 an installed package** — it cannot catch packaging or path-anchoring regressions.

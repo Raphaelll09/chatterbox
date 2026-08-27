@@ -458,6 +458,12 @@ On a Windows checkout, bare `python` may resolve to the Store stub — use
 Tests need no weights and no Tk instance. **They also do not tell you the device still speaks** —
 read [tests/README.md](tests/README.md) before treating a green run as reassurance.
 
+**Going to change code?** Start with [docs/CODEMAP.md](docs/CODEMAP.md) — which language governs
+which aspect of the program, where everything lives, the invariants that break things quietly, and
+an index from "I want to change X" to the files involved. It is written for humans and AI
+assistants alike, and `tests/test_codemap.py` verifies its paths and symbol names against the code
+so it cannot rot silently.
+
 Further reading: [docs/README.md](docs/README.md) is the documentation index;
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) the deep dive;
 [chatterbox/synthesis/README.md](chatterbox/synthesis/README.md) the backend contract;
