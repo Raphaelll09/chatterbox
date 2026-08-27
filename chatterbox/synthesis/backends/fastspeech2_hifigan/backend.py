@@ -45,7 +45,7 @@ AUDIO_FILE_NAME = "audio_file"
 
 # Emoji glyphs for the style chip grid's emotion icon bar (landscape-refactor plan, confirmed with
 # the user: Unicode emoji over canvas-drawn schematic faces or plain text, for less custom-drawing
-# code -- see docs/context/CHANGELOG.md). FS2/GST-specific by design, same as keyboards.py's own
+# code -- see docs/research/CHANGELOG.md). FS2/GST-specific by design, same as keyboards.py's own
 # mood-shortcut table and phone-symbol alphabet -- config_tts.yaml's gst_token_list names (below)
 # are this model's own fixed vocabulary, not something a generic control descriptor should assume
 # every backend shares. TOKEN13-16 (unnamed, hidden behind the "advanced" toggle) intentionally
@@ -69,7 +69,7 @@ GST_TOKEN_ICONS = {
 # The FastSpeech2 config/output/preprocessed_data archives are gitignored (downloaded from the
 # Google Drive links in README.md, never committed) and hardcode paths like
 # "FastSpeech2/preprocessed_data/ALL_corpus" -- relative to where FastSpeech2/ used to live at the
-# repo root, before the reorg moved it to assets/models/FastSpeech2/ (docs/REORG_PROPOSAL.md Sec6).
+# repo root, before the reorg moved it to assets/models/FastSpeech2/ (docs/research/history/REORG_PROPOSAL.md Sec6).
 # Remap them in memory so a fresh download doesn't need hand-patching every time; values that have
 # already been updated (no longer starting with this prefix) are left untouched.
 _LEGACY_FASTSPEECH2_PREFIX = "FastSpeech2/"
@@ -88,7 +88,7 @@ def _repoint_legacy_fastspeech2_config_paths(preprocess_config, train_config):
 
 class FastSpeech2HifiGanBackend:
     """One instance holds one loaded (acoustic model, vocoder) pair -- see
-    docs/context/ARCHITECTURE.md: models are swapped from disk files, never held resident as
+    docs/ARCHITECTURE.md: models are swapped from disk files, never held resident as
     multiple simultaneous instances, so a single shared instance (chatterbox.synthesis.registry.
     BACKEND) is the right granularity, matching the pre-Phase-3 module-globals design it replaces.
     """
@@ -208,7 +208,7 @@ class FastSpeech2HifiGanBackend:
         if not (gui_control is None):
             # gui_control is a dict keyed by the same "key"s describe_controls() declares below
             # (interchangeable-backend GUI refactor -- was a fixed 12-element positional list,
-            # too fragile for a different backend to conform to; see docs/context/CHANGELOG.md).
+            # too fragile for a different backend to conform to; see docs/research/CHANGELOG.md).
             # .get(key, <yaml default>) so a control describe_controls() doesn't declare (e.g. a
             # differently-configured model that hides style entirely) falls back to this model's
             # own configured default instead of a KeyError -- matches today's actual behavior,
@@ -371,7 +371,7 @@ class FastSpeech2HifiGanBackend:
     def describe_controls(self):
         """Speaker list read from the currently loaded model's preprocessed_path -- closes
         gui_utils.py:355's leak of re-opening the FastSpeech2 preprocess.yaml directly just to
-        get this (docs/REORG_PROPOSAL.md Sec5).
+        get this (docs/research/history/REORG_PROPOSAL.md Sec5).
 
         The "controls" list (interchangeable-backend GUI refactor -- see chatterbox/synthesis/
         chatterbox/synthesis/README.md for the general shape) mirrors exactly what

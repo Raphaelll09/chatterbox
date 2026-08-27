@@ -1,7 +1,7 @@
 """Tests for chatterbox/synth.py. Deliberately minimal -- synthesize()'s real pipeline needs
 loaded FastSpeech2/HiFi-GAN models (same reasoning tests/test_benchmark.py already documents for
 not faking chatterbox.cli.syn_audio's real pipeline); real-pipeline correctness for this refactor
-is covered by the manual real-weights smoke test in docs/gui/GUI.md instead. This file covers what
+is covered by the manual real-weights smoke test in docs/GUI.md instead. This file covers what
 *is* safely testable without models: the empty-input guard (returns before touching any backend)
 and AudioResult's shape.
 """

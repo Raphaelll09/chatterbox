@@ -2,7 +2,7 @@
 
 The Tkinter GUI (`chatterbox/gui/app.py`), refactored per `chatterbox_gui_spec_v0.1.md` so
 synthesis + playback never freeze the window, exceptions never crash it, and it speaks to
-`chatterbox-powerd` (`docs/power/POWERD.md`) as a client. Companion doc:
+`chatterbox-powerd` (`docs/POWERD.md`) as a client. Companion doc:
 `README_power_gui_workstream.md`.
 
 ## Running
@@ -38,7 +38,7 @@ Speak triggers a no-op while a job is running; the GUI's own startup warm-up
 during warm-up is naturally ignored rather than needing separate handling.
 
 The startup default model load runs through the same machinery too (startup-latency phase 2, see
-`docs/context/CHANGELOG.md`): `create_gui()` only registers the selected indices and grids a
+`docs/research/CHANGELOG.md`): `create_gui()` only registers the selected indices and grids a
 "Chargement du modèle…" placeholder synchronously, then builds every other widget as normal; the
 actual `loading_script()` calls run on a background thread (`_start_initial_model_load()`),
 scheduled via `window.after(50, ...)` right before `mainloop()` like warm-up always was — so the

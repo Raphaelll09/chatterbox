@@ -94,7 +94,7 @@ def test_summary_n_repeats_uses_mode_not_first_sentence(tmp_path):
     # --repeats 3) -- the summary's n_repeats must report the *typical* count (3, the mode across
     # all sentences -- REF is the only outlier among many), not REF's inflated one just because
     # it's first in file order (confirmed live: this bug printed "6" for an actual --repeats 3 run
-    # with 10 distinct sentences, only 1 of which is REF -- docs/context/CHANGELOG.md). Uses 4
+    # with 10 distinct sentences, only 1 of which is REF -- docs/research/CHANGELOG.md). Uses 4
     # distinct sentences (1 REF + 3 others), matching the real benchmark's lopsided proportions --
     # a 1-REF-vs-1-other tie isn't representative and was the wrong shape for this test originally.
     rows_a = (

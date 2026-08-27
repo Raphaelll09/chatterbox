@@ -3,7 +3,7 @@
 # (chatterbox/synthesis/backends/piper/), verifying each file's sha256 against the values recorded
 # in chatterbox/synthesis/backends/piper/README.md (captured live from a real download during
 # Phase B of the Piper integration, and again when the English lessac voice was added -- see
-# docs/context/CHANGELOG.md for both).
+# docs/research/CHANGELOG.md for both).
 #
 # Not part of scripts/setup_pi.sh's default run (doc's cc_prompt_piper_backend.md Sec1/Sec7:
 # Piper is an optional, separately-installed backend, not a hard dependency of this repo). Run
@@ -23,7 +23,7 @@ mkdir -p "$DEST_DIR"
 # locale_path:voice_dir:checkpoint_stem:sha256(.onnx):sha256(.onnx.json)
 # locale_path is HuggingFace's own <lang>/<lang_region> path segment (differs per voice, unlike
 # the single shared fr/fr_FR BASE_URL this script used before the English voice was added).
-# "tom" was removed (docs/context/CHANGELOG.md) after real-hardware evaluation found noticeably
+# "tom" was removed (docs/research/CHANGELOG.md) after real-hardware evaluation found noticeably
 # lower voice quality and slower inference than siwis/upmc, with no offsetting benefit.
 VOICES=(
   "fr/fr_FR:siwis:fr_FR-siwis-medium:641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99:39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959"

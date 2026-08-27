@@ -10,7 +10,7 @@ play_audio()) and any UI/console reporting, using the returned AudioResult.
 
 This is a logic *move*, not a rewrite -- the file I/O below (np.memmap/np.fromfile on the mel/.AU
 files HiFi-GAN/FastSpeech2 write to disk) is unchanged from the pre-refactor syn_audio(); see
-research/... 's tests and the manual real-weights smoke test in docs/gui/GUI.md for how
+research/... 's tests and the manual real-weights smoke test in docs/GUI.md for how
 this was verified against real models.
 """
 import os
@@ -37,7 +37,7 @@ class AudioResult:
     off via the existing chatterbox.audio.playback.AUDIO_EXAMPLE global (unchanged mechanism).
 
     stage_durations replaces separate tts_duration_s/vocoder_duration_s/denoiser_duration_s fields
-    (interchangeable-backend GUI refactor, phase 2 -- see docs/context/CHANGELOG.md): a dict,
+    (interchangeable-backend GUI refactor, phase 2 -- see docs/research/CHANGELOG.md): a dict,
     insertion-ordered, keyed by stage name ("tts", "vocoder", "denoiser" today). "vocoder" is
     present only when the selected TTS model's needs_vocoder flag (config_tts.yaml) is true --
     a monolithic backend produces a finished wav directly and has no separate vocoder stage to
@@ -99,7 +99,7 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     # duration predictor writes it alongside the mel/.AU files; no other backend produces it. The
     # top-level subtitles.create_file flag was the only gate here, so selecting a backend without
     # this data (Piper) crashed with FileNotFoundError the first time this was actually exercised
-    # end-to-end (Piper integration, docs/context/CHANGELOG.md) -- not caught by unit/smoke tests
+    # end-to-end (Piper integration, docs/research/CHANGELOG.md) -- not caught by unit/smoke tests
     # that call registry.BACKEND.tts()/PiperBackend.tts() directly, bypassing this code entirely.
     # supports_subtitles (new static per-model flag, same "read before that model is loaded"
     # pattern as needs_vocoder/accepts_phoneme_input, config_tts.yaml) defaults True -- every
@@ -140,7 +140,7 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
             # or needs_vocoder) -- it remains FS2-specific and unsupported by a monolithic backend
             # like Piper regardless of supports_subtitles; a Piper user including "|" in free text
             # will still hit a FileNotFoundError here. Not fixed as part of the Piper integration
-            # (docs/context/CHANGELOG.md) -- out of scope, a real remaining gap, documented rather
+            # (docs/research/CHANGELOG.md) -- out of scope, a real remaining gap, documented rather
             # than silently left for someone to rediscover the hard way.
             shape_mel = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.WAVEGLOW'), count=2, dtype=np.int32))
             shape_au = tuple(np.fromfile(os.path.join(location_mel_file, 'audio_file.AU'), count=4, dtype=np.int32))

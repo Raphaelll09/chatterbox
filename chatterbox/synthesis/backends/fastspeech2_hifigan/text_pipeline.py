@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """Text-side of the FastSpeech2+HiFi-GAN backend: the inline control-tag mini-language
 (<SPEAKER=...>, <STYLE=...>, {phonetic}, ...), pronunciation/punctuation cleanup, and the regex
-rule files. Split out of synthesis_modules.py in Phase 3 (docs/REORG_PROPOSAL.md) -- these don't
+rule files. Split out of synthesis_modules.py in Phase 3 (docs/research/history/REORG_PROPOSAL.md) -- these don't
 touch the loaded model's *weights*, but parse_params_from_text() and preprocess_styleTag() do need
 the loaded model's config/FlauBERT state, passed in explicitly by the caller (backend.py) rather
 than fetched via getattr() off a globals module. Fixes two config-reopening leaks along the way
-(see docs/REORG_PROPOSAL.md Sec5/Sec7): the original parse_params_from_text() re-read
+(see docs/research/history/REORG_PROPOSAL.md Sec5/Sec7): the original parse_params_from_text() re-read
 preprocess.yaml from disk from scratch every time a <SPEAKER=...> tag was used, instead of reusing
 the already-loaded config -- the exact same leak gui_utils.py:355 had for the GUI's speaker list.
 """

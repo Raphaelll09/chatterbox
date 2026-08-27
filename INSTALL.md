@@ -19,7 +19,7 @@ PyPI, and mixed in FastSpeech2/Waveglow *training*-only dependencies (`tensorflo
 inference against an already-trained checkpoint and may not even build on aarch64.
 `minimal_requirements.txt` was the previous PC-use workaround, identical in content to today's
 `requirements-dev.txt`. Both old files were deleted in the 2026-07-20 reorg cleanup
-(`docs/context/CHANGELOG.md`, `docs/REORG_PROPOSAL.md` §4) once confirmed fully superseded — if
+(`docs/research/CHANGELOG.md`, `docs/research/history/REORG_PROPOSAL.md` §4) once confirmed fully superseded — if
 you ever need the original training-environment pins, recover them from git history rather than
 reconstructing them by hand.
 
@@ -43,7 +43,7 @@ The script:
 - Creates (or reuses) a venv at `~/chatterbox/venv`.
 - Installs `requirements-pi.txt`.
 - Downloads the FastSpeech2, FlauBERT, and HiFi-GAN pretrained weights (links from
-  `README.md`) into the paths the code expects (`docs/context/ARCHITECTURE.md` "Weights and
+  `README.md`) into the paths the code expects (`docs/ARCHITECTURE.md` "Weights and
   config locations"). Waveglow is skipped by default (not part of the active pipeline).
 - Smoke-tests a CPU torch matmul (fatal if this fails) and, best-effort, one end-to-end sentence
   through `do_tts.py` (non-fatal — a missing microphone/speaker or a slow first run on a fresh Pi
@@ -72,7 +72,7 @@ phonemizer). The fetch script downloads and sha256-verifies 3 voices — 2 fr_FR
 (`fr_FR-siwis-medium`/`upmc-medium`) and 1 en_US (`en_US-lessac-medium`) — into
 `assets/models/Piper/` (gitignored, same "weights not in git" policy as every other vendored
 model). See `chatterbox/synthesis/backends/piper/README.md` for voice provenance/licence and
-`docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for the backend's own design notes. Select any voice with
+`docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for the backend's own design notes. Select any voice with
 `do_tts.py --default_tts <piper-voice-index>` or via the GUI's Settings → Advanced picker; the
 English voice is also reachable live from the GUI's "Langue" app-bar menu, which switches both the
 UI language and the active model together (`chatterbox/gui/i18n.py`, `config_tts.yaml`'s
@@ -82,7 +82,7 @@ UI language and the active model together (`chatterbox/gui/i18n.py`, `config_tts
 
 Optional always-on daemon owning the ACTIVE→DIM→DARK→DEEP power state machine, backlight,
 amplifier SD line, and physical switch/touch activity detection for an unattended kiosk
-deployment. See `chatterbox-powerd_spec_v0.1.md` for the full design and `docs/power/POWERD.md`
+deployment. See `chatterbox-powerd_spec_v0.1.md` for the full design and `docs/POWERD.md`
 for day-to-day running/configuration/testing. Not required to run `do_tts.py` normally — every
 integration point (`chatterbox/audio/playback.py`'s amp handshake, `chatterbox/gui/app.py`'s
 activity/put-away wiring) degrades to a no-op if powerd isn't running.
@@ -91,7 +91,7 @@ activity/put-away wiring) degrades to a no-op if powerd isn't running.
 `/etc/systemd/system/`, creates a `chatterbox` group, adds the user running the script to it
 (needed for the GUI to connect to powerd's socket at `/run/chatterbox/powerd.sock`), and
 `systemctl enable`s the unit — but does **not** `start` it. The same script's step 9 separately
-installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/kiosk/KIOSK.md`) —
+installs the plain-Xorg kiosk autostart mechanism (`deploy/xorg-kiosk/`, `docs/KIOSK.md`) —
 **not** `deploy/systemd/chatterbox-gui.service` (cage/Wayland), which real Pi5 hardware bring-up
 ruled out (a reproducible `libwlroots` SIGSEGV with no fixed package available; see
 `deploy/xorg-kiosk/README.md`). Step 10 pins ALSA's system-default output to the IQaudio DAC
@@ -118,7 +118,7 @@ need a one-time manual pass:
    backlight on a new board: `amp.sd_pin` and `amp.enable_active_high` (SD-line wiring/polarity),
    `display.backlight` (sysfs node name, or leave as `auto`). Wrong values here degrade safely
    (powerd logs and disables that one piece of hardware control rather than crashing — see
-   `docs/power/POWERD.md`), but won't actually control the amp/backlight until corrected.
+   `docs/POWERD.md`), but won't actually control the amp/backlight until corrected.
 3. **Verify the stack manually first** — launch `chatterbox-powerd` and `do_tts.py --gui` in the
    foreground (not via systemd yet) and work through
    `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7. This is what actually catches the two
@@ -138,9 +138,9 @@ Once the bring-up protocol above is fully green (including T6/T7), `scripts/kios
 the one opt-in script that commits the Pi to booting straight into the kiosk GUI unattended —
 verifies `getty@tty1`'s autologin override is in place (installed by `setup_pi.sh`'s step 9;
 **inverted** from this step's original cage-era behavior, which used to *disable* `getty@tty1` —
-the plain-Xorg mechanism needs it enabled instead, see `docs/kiosk/KIOSK.md`), applies the
+the plain-Xorg mechanism needs it enabled instead, see `docs/KIOSK.md`), applies the
 `config.txt`/`cmdline.txt` idle-power and boot-quiet tuning (backed up, idempotent — see
-`docs/kiosk/KIOSK.md` for exactly what and how to undo it), and enables+starts
+`docs/KIOSK.md` for exactly what and how to undo it), and enables+starts
 `chatterbox-powerd`:
 
 ```bash
@@ -150,7 +150,7 @@ sudo reboot   # once it reports PASS
 ```
 
 Full detail, including why EEPROM writes are deliberately excluded (read-only check only) and
-what `scripts/hw_check.py` would have covered if built: `docs/kiosk/KIOSK.md`.
+what `scripts/hw_check.py` would have covered if built: `docs/KIOSK.md`.
 
 ## Mass deployment: golden image
 

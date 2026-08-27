@@ -94,7 +94,7 @@ def test_all_sliders_declare_a_resolution():
     # Regression test: gui/app.py's gui_generic_controls() (the generic tk.Scale builder)
     # defaults to resolution=1 when a slider control doesn't specify one -- on length_scale's
     # 0.0-2.0 range that left only 2 selectable values (confirmed live: user-reported "cursor
-    # only has two values" -- docs/context/CHANGELOG.md). Every slider Piper declares must set
+    # only has two values" -- docs/research/CHANGELOG.md). Every slider Piper declares must set
     # its own resolution explicitly, same as every FS2 slider already does.
     backend = _make_backend()
     controls = backend.describe_controls()["controls"]

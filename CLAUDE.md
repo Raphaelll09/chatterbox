@@ -18,8 +18,8 @@ Python 3 (tested on 3.8/3.10, repo has a 3.11 `.venv`), PyTorch, PyYAML config, 
 ## Repo map
 
 This file lives at the repo root, alongside the code below — run all commands below from here.
-**Reorganized in Phase 3 of `docs/REORG_PROPOSAL.md` (2026-07-20)** — see that doc's §2 tree and §7
-for the full rationale/history; `docs/context/ARCHITECTURE.md`'s module-level detail still
+**Reorganized in Phase 3 of `docs/research/history/REORG_PROPOSAL.md` (2026-07-20)** — see that doc's §2 tree and §7
+for the full rationale/history; `docs/ARCHITECTURE.md`'s module-level detail still
 describes the pre-reorg layout and is flagged stale pending that doc's own Phase 4 rewrite.
 
 - `do_tts.py` — entry point, now a 3-line shim calling `chatterbox.cli.main()` (CLI contract
@@ -35,7 +35,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     model (`tts_models[i].needs_vocoder: false`) — see "Interchangeable backends" below;
     `AudioResult.stage_durations` is a generic `{stage_key: seconds}` dict (`"vocoder"` simply
     absent in that case), not fixed named fields. No Tk import, no playback call — both `cli.py`
-    and the GUI's worker thread call it directly. See `docs/gui/GUI.md`.
+    and the GUI's worker thread call it directly. See `docs/GUI.md`.
   - `synthesis/base.py` — `Synthesizer`/`VocoderBackend` ABCs, `SynthesisRequest`/`SynthesisResult`
     dataclasses (the latter's `wav_path` vs `mel_path` is how a monolithic backend signals "already
     a finished wav, no vocoding needed" — see "Interchangeable backends" below); `registry.py` —
@@ -48,7 +48,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     immediately before resolving a `tts_models[i]` entry's `load_script` (per that entry's new
     `backend` field, e.g. `"piper"` — omitted defaults to `"fastspeech2_hifigan"`), tells the proxy
     which concrete backend colliding names should resolve against. See
-    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for the full contract-gap writeup.
+    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for the full contract-gap writeup.
   - `synthesis/backends/fastspeech2_hifigan/` — `backend.py` (was `loading_modules.py` +
     `synthesis_modules.py`'s model-calling functions, now a `FastSpeech2HifiGanBackend` class owning
     loaded-model state as instance attributes) + `text_pipeline.py` (was `synthesis_modules.py`'s
@@ -88,7 +88,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     Piper instead of falling back to FastSpeech2. Settings → Advanced still lists both Piper
     variants individually (an intentional finer-detail view, not grouped). See its own `README.md`
     for provenance/licence and
-    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 for what the original integration found and fixed in
+    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 for what the original integration found and fixed in
     the contract itself (`registry.py`'s proxy above, plus a stale-Tk-variable bug in
     `gui_generic_controls()` — see that section, not repeated here).
   - `synthesis/audio_postprocess.py` — unchanged from pre-reorg `audio_postprocess.py`.
@@ -111,7 +111,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     happens to declare, not something `app.py` hardcodes; TTS/vocoder model selection lives in
     Settings → Advanced (see `gui/settings.py` below), not the main window. Synthesis+playback (and,
     since the same refactor, Replay) run on a worker thread, never the Tk thread
-    (chatterbox_gui_spec_v0.1.md §2) — see `docs/gui/GUI.md`. The app-bar's "Langue" menu is a real,
+    (chatterbox_gui_spec_v0.1.md §2) — see `docs/GUI.md`. The app-bar's "Langue" menu is a real,
     config-driven submenu (`config_tts.yaml`'s `GUI_config.languages`) switching `gui/i18n.py`'s
     locale and restarting the window (`create_gui()`/`_run_gui_session()` split — a thin restart
     loop wraps the actual session function, which returns the next `default_tts` index to load or
@@ -141,7 +141,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     "Enregistrer".
   - `state.py` — tiny globals for which TTS/vocoder index is selected (was `tts_utils.py`).
   - `config/config_tts.yaml` — the model registry + GUI + post-processing + profiling config (see
-    `docs/context/ARCHITECTURE.md`, stale on paths but not on structure). Each `tts_models[i]` entry
+    `docs/ARCHITECTURE.md`, stale on paths but not on structure). Each `tts_models[i]` entry
     carries three static capability flags read *before* that model is loaded (see "Interchangeable
     backends" below): `needs_vocoder` (hides the Settings → Advanced Vocodeur picker when false),
     `accepts_phoneme_input` (drives the top-level `GUI_config.phoneme_fallback`:
@@ -150,7 +150,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     Phonèmes keyboard's phone-code syntax), and `supports_subtitles` (added for the Piper backend — `false` skips
     `chatterbox/synth.py`'s subtitle-writing path, which otherwise assumes FastSpeech2's own
     per-symbol `audio_file_duration.npy` output exists; see
-    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.4). `config/paths.py` — repo-root-anchored path resolution for the vendored
+    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3.4). `config/paths.py` — repo-root-anchored path resolution for the vendored
     model dirs (added Phase 0); `config/user_prefs.yaml` — chatterbox-powerd's runtime prefs
     (below), reloadable on SIGHUP.
   - `power/` — **optional**, Pi/Linux-only: `chatterbox-powerd`, the kiosk power-state daemon
@@ -159,7 +159,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
     `evdev`) is guarded so this package (and everything importing it) still loads cleanly without
     them. `chatterbox/audio/playback.py` and `chatterbox/gui/app.py` talk to it through the shared
     `chatterbox.power.client.get_client()` singleton, which degrades to a silent no-op whenever
-    powerd isn't reachable — see `docs/power/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
+    powerd isn't reachable — see `docs/POWERD.md` and `chatterbox-powerd_spec_v0.1.md`.
     `power/battery.py` — independent of powerd/the daemon — reads battery %/voltage from a
     DFRobot FIT0992 UPS HAT over I2C (`smbus2`, guarded/lazy same as the rest of this package);
     `gui/app.py` polls it directly (no daemon involved) to show a battery-percentage label.
@@ -168,7 +168,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   (the *originally* finalized kiosk compositor choice) — **legacy, not installed by default**:
   real Pi5 hardware bring-up (2026-07-31) found a reproducible SIGSEGV deep inside Raspberry Pi
   Foundation's own `libwlroots` build, with no fixed package available — see
-  `deploy/xorg-kiosk/README.md` for the full writeup and `docs/kiosk/KIOSK.md` for the plain-Xorg
+  `deploy/xorg-kiosk/README.md` for the full writeup and `docs/KIOSK.md` for the plain-Xorg
   mechanism (`deploy/xorg-kiosk/` + a real console `agetty --autologin` session, installed by
   `setup_pi.sh`'s own step 9) that replaced it as the current default.
 - `tools/` — research/maintenance tooling, not daily-use (Goal 4 of the reorg):
@@ -188,7 +188,7 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
   `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7: disables `getty@tty1` (which would race
   `chatterbox-gui.service` for the tty), tunes `config.txt`/`cmdline.txt` (backed up, idempotent),
   enables+starts both systemd units. Never touches EEPROM beyond a read-only check. Not part of
-  `setup_pi.sh`'s default run. See `docs/kiosk/KIOSK.md`.
+  `setup_pi.sh`'s default run. See `docs/KIOSK.md`.
 
 ## The synthesis pipeline (4 stages)
 
@@ -205,9 +205,9 @@ describes the pre-reorg layout and is flagged stale pending that doc's own Phase
    or the GUI's worker thread) triggers afterward.
 
 Full detail (globals-turned-instance-state pattern, control-tag mini-language, config-driven model
-registry, weights locations) is in `docs/context/ARCHITECTURE.md` — read it on demand, but note its
+registry, weights locations) is in `docs/ARCHITECTURE.md` — read it on demand, but note its
 module names/paths predate the Phase 3 reorg above; cross-check against this file or
-`docs/REORG_PROPOSAL.md` §2 if something doesn't match.
+`docs/research/history/REORG_PROPOSAL.md` §2 if something doesn't match.
 
 ## Interchangeable backends
 
@@ -219,7 +219,7 @@ entry conforming to this contract. **No longer just a design goal**: the Piper (
 `chatterbox/synthesis/registry.py` itself needed a small fix first (a bare-singleton `BACKEND`
 couldn't resolve which backend's `tts()`/`describe_controls()` a caller meant once a second one
 existed) plus a stale-Tk-variable bug in `gui/app.py`'s `gui_generic_controls()` — both fixed, both
-documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither required touching
+documented in full in `docs/research/INTERCHANGEABLE_BACKENDS.md` §3, neither required touching
 `synth.py`. The contract described below is what actually held up under that test:
 
 - **Model-options panel**: `Synthesizer.describe_controls()` (`chatterbox/synthesis/base.py`,
@@ -253,7 +253,7 @@ documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither requir
 
 - Use **`requirements-dev.txt`** (PC) or **`requirements-pi.txt`** + **`apt-packages-pi.txt`**
   (Raspberry Pi 5) — see `INSTALL.md`. The legacy `requirements.txt` / `minimal_requirements.txt`
-  (deleted 2026-07-20, reorg Phase 4 sign-off — see `docs/context/CHANGELOG.md`) pulled in
+  (deleted 2026-07-20, reorg Phase 4 sign-off — see `docs/research/CHANGELOG.md`) pulled in
   FastSpeech2/Waveglow *training*-only dependencies (`apex`, `tensorflow`, `librosa` transitively,
   `tensor2tensor`, ...) and pinned `apex==0.9.10dev`, which resolves to the wrong PyPI package —
   not needed to run inference against an already-trained checkpoint. If you ever need to retrain
@@ -274,16 +274,16 @@ documented in full in `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3, neither requir
 - **Benchmark**: `python3 do_tts.py --benchmark [--play] [--repeats N] [--join] [--sentences FILE]`
   — runs the fixed 10-sentence set in `research/benchmark/sentences_fr.jsonl` through the
   same `chatterbox.cli.syn_audio()` call as free-text mode, with profiling forced on. See
-  `docs/context/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
+  `docs/ARCHITECTURE.md` "Benchmark mode" and README "Benchmark".
 - **Profiling** (optional, off by default): `python3 do_tts.py --profile` records per-sentence,
-  per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/context/ARCHITECTURE.md`
+  per-stage timing/CPU/PMIC-power data under `profile/`. See `docs/ARCHITECTURE.md`
   "Profiling subsystem" and README "Profilage" for the output files and calibration procedure.
 - **Power daemon** (optional, separate process, Pi/Linux-only): `python3 -m chatterbox.power.daemon`
   (or the `chatterbox-powerd` systemd unit) runs the kiosk power-state machine alongside `do_tts.py
-  --gui`. See `docs/power/POWERD.md`.
+  --gui`. See `docs/POWERD.md`.
 - **GUI** (`--gui`, above): non-blocking (worker-thread synthesis+playback), crash-resistant, and
   a `chatterbox-powerd` client (activity pings, put-away, forwarded switch input, a settings
-  screen). See `docs/gui/GUI.md`.
+  screen). See `docs/GUI.md`.
 
 ## Testing
 
@@ -299,7 +299,7 @@ pretrained weights: `test_audio_postprocess.py` is pure numpy/scipy, `test_profi
 `test_power_*.py` similarly need no Pi hardware (fake-injected FSM/backlight/amp) — the one
 exception, a live unix-socket loopback test in `test_power_ipc.py`, is `skipif`'d on Windows.
 `test_gui_*.py`/`test_synth.py` need no Tk instance or pretrained weights either (fake-injected
-widgets/monkeypatched `synth.synthesize`/`playback.play_audio`) — see `docs/gui/GUI.md` for the
+widgets/monkeypatched `synth.synthesize`/`playback.play_audio`) — see `docs/GUI.md` for the
 separate manual real-weights smoke tests that *do* need loaded models (not part of this suite).
 
 ## Conventions
@@ -316,10 +316,10 @@ separate manual real-weights smoke tests that *do* need loaded models (not part 
 
 ## Maintenance rules (IMPORTANT)
 
-- At the start of a task, read `docs/context/ARCHITECTURE.md` and the top entry of
-  `docs/context/CHANGELOG.md` for the current state and recent history.
-- After completing any change, append a `docs/context/CHANGELOG.md` entry (template at the top of
-  that file), and update `docs/context/ARCHITECTURE.md` / this file if the structure or run commands
+- At the start of a task, read `docs/ARCHITECTURE.md` and the top entry of
+  `docs/research/CHANGELOG.md` for the current state and recent history.
+- After completing any change, append a `docs/research/CHANGELOG.md` entry (template at the top of
+  that file), and update `docs/ARCHITECTURE.md` / this file if the structure or run commands
   changed.
 
 ## graphify

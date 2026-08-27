@@ -59,7 +59,7 @@ def test_tts_returns_output_dir_not_a_file_prefix(tmp_path):
     # returned os.path.join(out_dir, "audio_file") here (a file-prefix, not a directory), which
     # synth.py then double-joined into a nonexistent .../audio_file/audio_file.wav path -- only
     # caught by a real --benchmark run on the Pi going through the real synth.py, not by this
-    # backend's own tests in isolation (docs/context/CHANGELOG.md).
+    # backend's own tests in isolation (docs/research/CHANGELOG.md).
     backend = _make_backend_with_fake_voice()
     tts_config = _make_tts_config(tmp_path)
 

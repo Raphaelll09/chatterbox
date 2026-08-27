@@ -290,7 +290,7 @@ fi
 echo
 
 # ---------------------------------------------------------------------------
-# 9. Plain-Xorg kiosk autostart (deploy/xorg-kiosk/, docs/kiosk/KIOSK.md).
+# 9. Plain-Xorg kiosk autostart (deploy/xorg-kiosk/, docs/KIOSK.md).
 #
 # Non-fatal if any part of this fails, matching the powerd step above -- a failure here just
 # means falling back to running `do_tts.py --gui` by hand at the console. See

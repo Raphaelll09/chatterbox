@@ -38,7 +38,7 @@ def play_and_clear(args):
 
 def play_and_clear_with_style(args):
     # args[3] (gst_token_selection) is None when the active backend declares no "style" control
-    # at all (app.py:116's compat default -- e.g. the Piper backend, docs/context/CHANGELOG.md) --
+    # at all (app.py:116's compat default -- e.g. the Piper backend, docs/research/CHANGELOG.md) --
     # these mood-shortcut keys are FS2/GST-specific by design (CLAUDE.md "Interchangeable
     # backends"), so no-op the style part instead of crashing on None.set(...).
     if args[3] is None:

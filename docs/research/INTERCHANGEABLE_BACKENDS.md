@@ -64,7 +64,7 @@ testing feedback, each analyzed and fixed as its own set of commits. In rough or
 Every fix in this phase followed the same discipline: read the actual code to find the root
 cause (never guess), write a small ad hoc Tk reproduction script when a real-hardware screenshot
 was the only evidence, verify the fix with that same script, run the full pytest suite, then one
-commit per fix plus a `docs/context/CHANGELOG.md` entry. These ad hoc scripts (mocked model
+commit per fix plus a `docs/research/CHANGELOG.md` entry. These ad hoc scripts (mocked model
 loading via monkeypatched `registry.BACKEND` methods, no pretrained weights needed, a real
 `tk.Tk()` instance driven from a background probe thread) are not checked into `tests/` — they
 live only in the session's scratch directory — but the pattern is worth reusing: it is the only
@@ -233,7 +233,7 @@ live whenever the TTS model is switched from Settings → Advanced, not just onc
    meant to catch — it would have been much harder to isolate if all 5 phases had landed as one
    commit.
 
-Each phase has its own `docs/context/CHANGELOG.md` entry (search that file for "interchangeable-
+Each phase has its own `docs/research/CHANGELOG.md` entry (search that file for "interchangeable-
 backend GUI, phase" to find all five) with the full rationale, files touched, and verification
 detail — this document summarizes them, but the changelog entries are the authoritative per-phase
 record.
@@ -242,11 +242,11 @@ record.
 
 - **A second backend has since been implemented and exercised — see §3.** This section originally
   said the contract had never been tested against a real second backend; the Piper fr_FR
-  integration (`docs/context/CHANGELOG.md`) did exactly that and found two real gaps the 5-phase
+  integration (`docs/research/CHANGELOG.md`) did exactly that and found two real gaps the 5-phase
   refactor above missed. The scope of *this* section (2.1-2.4) was deliberately "make the existing
   backend conform to a generic contract and prove it fits" — read §3 for what happened when that
   claim was actually tested.
-- **`docs/context/ARCHITECTURE.md` was intentionally left untouched** — it was already flagged
+- **`docs/ARCHITECTURE.md` was intentionally left untouched** — it was already flagged
   stale (module names/paths predate the Phase 3 reorg) pending its own separately-tracked
   rewrite; re-describing the interchangeable-backend contract there was out of scope for this
   refactor. `CLAUDE.md` gained a new "Interchangeable backends" section instead, which is the
@@ -273,12 +273,12 @@ record.
   `chatterbox/synth.py`'s `synthesize()` — the conditional-vocoder pipeline.
 - `chatterbox/config/config_tts.yaml` — see the comments directly above `needs_vocoder`/
   `accepts_phoneme_input` (per `tts_models` entry) and `phoneme_fallback` (top-level `GUI_config`).
-- `docs/context/CHANGELOG.md` — search "interchangeable-backend GUI, phase" for the five
+- `docs/research/CHANGELOG.md` — search "interchangeable-backend GUI, phase" for the five
   detailed per-phase entries.
 - `tests/test_backend_describe_controls.py`, `tests/test_synth.py`, `tests/test_gui_worker.py` —
   the pytest coverage added/updated for this refactor.
 
-## 3. Piper integration — the acid test (docs/context/CHANGELOG.md has the full session log)
+## 3. Piper integration — the acid test (docs/research/CHANGELOG.md has the full session log)
 
 `cc_prompt_piper_backend.md` set out to add Piper (fr_FR, `piper-tts==1.5.0`) as a second backend
 specifically to test whether §2's contract actually holds for a backend that's maximally different
@@ -308,7 +308,7 @@ A `backend` field was added to each `config_tts.yaml` `tts_models[i]` entry (`"p
 Piper voice; omitted — defaults to `"fastspeech2_hifigan"` — on the original FS2 entry, so it
 needed no yaml edit). Piper started with 3 voices; a 3rd, `tom`, was evaluated and removed after
 real-hardware listening found it noticeably lower quality and slower than the other two
-(`docs/context/CHANGELOG.md`) — 2 remained at the end of this integration session (siwis, upmc as
+(`docs/research/CHANGELOG.md`) — 2 remained at the end of this integration session (siwis, upmc as
 separate `tts_models` entries each); §3.6 below describes a later session unifying them into one.
 
 ### 3.2 Gap 2 (silent, found only by driving a real `tk.Tk()` instance, not by reading the code): stale `gst_token_selection`/`speaker_selection`

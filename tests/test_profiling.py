@@ -233,7 +233,7 @@ def test_recorder_phoneme_count_null_when_never_set(tmp_path):
 
 
 def test_recorder_finalize_stages_field_matches_first_seen_order(tmp_path):
-    # Piper integration (docs/context/CHANGELOG.md): a backend with a different stage shape than
+    # Piper integration (docs/research/CHANGELOG.md): a backend with a different stage shape than
     # FS2's front_end/acoustic/vocoder/write (e.g. Piper's "synth"+"write") must still show up
     # somewhere in the record -- the fixed front_end_ms/acoustic_ms/vocoder_ms/write_ms fields
     # silently drop any name not in that fixed set.

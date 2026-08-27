@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Piper (fr_FR) backend -- piper-tts==1.5.0 (OHF-voice/piper1-gpl, GPL-3.0-or-later), pinned and
-verified live on the Pi 5 during Phase A/B of this integration (docs/context/CHANGELOG.md). A
+verified live on the Pi 5 during Phase A/B of this integration (docs/research/CHANGELOG.md). A
 monolithic text->wav backend (needs_vocoder: false in config_tts.yaml) -- no separate mel/vocoder
 stage, no FlauBERT, phonemization is internal to piper-tts (bundled espeakbridge.so +
 espeak-ng-data, confirmed NOT a separate piper-phonemize/espeakng-loader dependency).
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # default_args.prepend_leading_pause (English Piper, real-hardware feedback: "the first word/
 # sound is always mispronounced") went through two attempted fixes, both abandoned -- see
-# docs/context/CHANGELOG.md's 2026-08-20 entries for the full investigation, not repeated in full
+# docs/research/CHANGELOG.md's 2026-08-20 entries for the full investigation, not repeated in full
 # here:
 #   1. Prepending a bare ". " (text_frontend.py) -- confirmed a complete no-op: piper-tts's
 #      bundled espeak-ng silently discards a leading "." with nothing before it, so it never
@@ -159,7 +159,7 @@ class PiperBackend:
         -- returning anything other than the bare directory here double-joins "audio_file" and
         produces a wrong, nonexistent path (confirmed live: a real --benchmark run on the Pi
         crashed with FileNotFoundError on .../audio_file/audio_file.wav before this was fixed --
-        docs/context/CHANGELOG.md). PiperBackend still *writes* the real file at
+        docs/research/CHANGELOG.md). PiperBackend still *writes* the real file at
         <location_mel_file>/audio_file.wav itself, same as always -- only the returned tuple
         element changed."""
         from piper.config import SynthesisConfig
@@ -215,7 +215,7 @@ class PiperBackend:
                 # "resolution" must be set explicitly -- gui/app.py's gui_generic_controls() (the
                 # generic tk.Scale builder) defaults to resolution=1 when a control doesn't
                 # specify one, which on a 0.5-2.0 range only leaves 0.5/1.5 selectable (confirmed
-                # live: user-reported "cursor only has two values" -- docs/context/CHANGELOG.md).
+                # live: user-reported "cursor only has two values" -- docs/research/CHANGELOG.md).
                 # FS2's own sliders (fastspeech2_hifigan/backend.py's describe_controls()) all set
                 # this explicitly; these three were the oversight, not a gap in the generic
                 # contract itself.

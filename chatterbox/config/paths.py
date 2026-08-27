@@ -3,7 +3,7 @@
 """Repo-root-anchored path resolution.
 
 Every path below is derived from this file's own location, not the process's current working
-directory -- see docs/REORG_PROPOSAL.md, Phase 0. Lives at chatterbox/config/paths.py (two levels
+directory -- see docs/research/history/REORG_PROPOSAL.md, Phase 0. Lives at chatterbox/config/paths.py (two levels
 under the repo root) as of Phase 3 -- ROOT below accounts for that nesting explicitly. If this file
 moves again, update the parent count here first, before anything else: an off-by-one here breaks
 every path in this module silently (see Phase 2's _PACKAGE_ROOT bug in

@@ -10,9 +10,9 @@ Recorder.finalize() times from before the FIRST stage starts to after the LAST o
 for FS2 that's front_end (FlauBERT, only if a <STYLE_TAG=...> tag is present -- otherwise a no-op)
 + acoustic (FastSpeech2) + vocoder (HiFi-GAN) + write (denoise), and for Piper it's synth (Piper's
 own ONNX inference) + write. Both already cover the FULL pipeline a user actually waits on -- this
-tool was previously unclear enough about that to cause real confusion (docs/context/CHANGELOG.md).
+tool was previously unclear enough about that to cause real confusion (docs/research/CHANGELOG.md).
 
-REPEATABILITY (also from real confusion this tool caused -- docs/context/CHANGELOG.md): a single
+REPEATABILITY (also from real confusion this tool caused -- docs/research/CHANGELOG.md): a single
 --benchmark pass on this Pi 5 is NOT reliable by itself. Confirmed empirically, twice, in *both*
 directions -- one single-run FS2 measurement came out ~2x slower than a repeated-average, another
 came out roughly tied with Piper when repeated data showed a consistent ~2x gap. The empirically
@@ -176,7 +176,7 @@ def compare(profile_dirs, labels=None):
         # anchor/drift-check design), so it has *double* the occurrence count of every other
         # sentence (e.g. 6 vs 3 for --repeats 3) -- picking whichever sentence happens to be first
         # in file order (almost always REF) silently over-reported the repeat count (confirmed
-        # live: printed "6" for a --repeats 3 run -- docs/context/CHANGELOG.md).
+        # live: printed "6" for a --repeats 3 run -- docs/research/CHANGELOG.md).
         n_counts = _Counter(e["n"] for e in present)
         n_repeats = n_counts.most_common(1)[0][0] if n_counts else 0
         means = {col: [e[col][0] for e in present] for col, _f, _u in _COMPARE_COLUMNS}
@@ -205,7 +205,7 @@ def print_report(rows, summary, run_labels, governors):
     for label, governor in zip(run_labels, governors):
         flag = "" if governor == "performance" else "  <-- NOT 'performance': expect run-to-run " \
             "noise from frequency scaling (confirmed cause of contradictory single-run results " \
-            "during this tool's own testing, docs/context/CHANGELOG.md)"
+            "during this tool's own testing, docs/research/CHANGELOG.md)"
         print("  {:<20} {}{}".format(label, governor or "unknown (no meta.json / old run)", flag))
 
     print("\n=== Per-sentence comparison ({} sentence_ids, mean{} across repeats) ===".format(

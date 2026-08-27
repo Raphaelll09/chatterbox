@@ -1,7 +1,7 @@
 # Kiosk finalization
 
 Step 3 of `README_power_gui_workstream.md`'s build sequence: wrapping the already-verified
-`chatterbox-powerd` + GUI stack (`docs/power/POWERD.md`, `docs/gui/GUI.md`, all of
+`chatterbox-powerd` + GUI stack (`docs/POWERD.md`, `docs/GUI.md`, all of
 `Bring-up_Integration_Test_Protocol_v0.1.md`'s T0-T7) in an actual unattended kiosk boot.
 
 Prerequisite: T0-T7 green on real hardware, with the **real** (non-test) timers restored in
@@ -12,7 +12,7 @@ asked you to set.
 
 **cage** (a minimal Wayland kiosk compositor running the Tk app fullscreen via XWayland) was the
 originally finalized choice — an open decision in the workstream README, resolved in an earlier
-session. Real Pi5 hardware bring-up (2026-07-31, `docs/context/CHANGELOG.md`) overturned that:
+session. Real Pi5 hardware bring-up (2026-07-31, `docs/research/CHANGELOG.md`) overturned that:
 a reproducible SIGSEGV deep inside `libwlroots` (Raspberry Pi Foundation's own `0.18.2-3+rpt4`
 build), triggered by essentially any input event causing a seat/focus signal, confirmed via
 `coredumpctl` — backtrace bottoms out in `wl_signal_emit_mutable` inside `libwlroots-0.18.so`, not

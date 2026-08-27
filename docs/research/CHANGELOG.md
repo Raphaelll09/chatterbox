@@ -303,7 +303,7 @@ state before starting new work.
   chatterbox-powerd.service`, `deploy/systemd/chatterbox-gui.service` (legacy-marked, not
   deleted), `deploy/xorg-kiosk/` (new: `README.md`, `getty-tty1-autologin.conf`, `xinitrc`,
   `bash_profile_snippet.sh`), `scripts/setup_pi.sh`, `scripts/kiosk_finalize.sh`,
-  `apt-packages-pi.txt`, `INSTALL.md`, `docs/kiosk/KIOSK.md`, `docs/context/ARCHITECTURE.md`,
+  `apt-packages-pi.txt`, `INSTALL.md`, `docs/KIOSK.md`, `docs/ARCHITECTURE.md`,
   `CLAUDE.md`.
 - Why: first real Pi OS Lite deployment — the whole point of the reorg's target platform.
 - Verify: manually, on real Pi5 hardware (no pretrained-weight-free automated test covers a
@@ -318,7 +318,7 @@ state before starting new work.
     `README_power_gui_workstream.md` docs referenced throughout this repo (including by this very
     session) do not actually exist in the git checkout — external planning docs never committed.
     Phase 1 (powerd standalone) verification this session was reconstructed from
-    `docs/power/POWERD.md`'s own "needs real Pi 5 hardware" section instead.
+    `docs/POWERD.md`'s own "needs real Pi 5 hardware" section instead.
   - `torch>=2.4.1` (`requirements-pi.txt`) pulls in a full CUDA-bundled build
     (`nvidia-cu13-*`/`cuda-toolkit`/`triton`, several hundred MB) on this aarch64 target that has
     no GPU at all — reproduced on both trixie and Bookworm, so not an OS-version artifact. Flagged,
@@ -350,7 +350,7 @@ state before starting new work.
      only if that raises `TclError`. Two real gaps found reasoning through this (not yet testable
      live -- the Pi5 currently runs a full desktop image over WayVNC, not Pi OS Lite + cage):
      (a) `-zoomed` asks a window manager to maximize a *decorated* window -- a genuinely desktop-
-     WM concept that `cage` (a minimal, chrome-less kiosk compositor, `docs/kiosk/KIOSK.md`) may
+     WM concept that `cage` (a minimal, chrome-less kiosk compositor, `docs/KIOSK.md`) may
      not implement/honor at all, and critically, an unsupported EWMH state doesn't necessarily
      make Tk raise `TclError` the way an genuinely-unsupported *attribute* would -- the compositor
      can simply ignore the hint, silently, with the fallback path never triggering either. Added
@@ -368,7 +368,7 @@ state before starting new work.
      to "the real screen" on any display this project actually targets).
 - Files: `chatterbox/gui/app.py`, `chatterbox/config/config_tts.yaml`.
 - Why: (1) direct real-hardware feedback; (2) a forward-looking question about the Pi OS Lite/
-  cage migration, answered by code-reading `docs/kiosk/KIOSK.md` + the window-creation code itself
+  cage migration, answered by code-reading `docs/KIOSK.md` + the window-creation code itself
   rather than guessing, since there's no live cage deployment to test against yet.
 - Verify: `.venv/Scripts/python.exe -m pytest tests/` (305 passed, 1 skipped, unchanged). One new
   ad hoc Tk smoke test (mocked model/controls, no pretrained weights, not part of the pytest
@@ -377,7 +377,7 @@ state before starting new work.
   `emotion_bar_frame` -- confirms both the hidden options AND the toggle itself are gone, not
   just hidden again).
 - Notes/gotchas: item 2 is **explicitly unverified against real cage** -- this session reasoned
-  from `docs/kiosk/KIOSK.md` and Tk/EWMH semantics, not a live test (the Pi5 currently runs a full
+  from `docs/KIOSK.md` and Tk/EWMH semantics, not a live test (the Pi5 currently runs a full
   desktop image, not Pi OS Lite). Next session should confirm live once that migration actually
   happens: does the window fill the real screen under cage, and does adding `-fullscreen`
   interfere with anything (e.g. the Settings/Sliders `Toplevel`s, which aren't set fullscreen
@@ -769,7 +769,7 @@ state before starting new work.
   the last remaining phase of this session's landscape GUI redesign.
 - Verify: full test suite (307 passed/1 skipped, unchanged -- no pytest coverage added, matching
   this project's own "real Tk mainloop scenarios are ad hoc manual smoke scripts" convention,
-  `docs/gui/GUI.md` "Testing"). New ad hoc Tk smoke test (20 fake slider controls to guarantee
+  `docs/GUI.md` "Testing"). New ad hoc Tk smoke test (20 fake slider controls to guarantee
   overflow, monkeypatches `USER_PREFS_PATH`) confirms both canvases actually scroll (`canvas.
   yview()[0]` measurably changes) in response to a synthetic `<MouseWheel>` event with a
   Windows-style `delta=-120`, not just that a handler is *bound*.
@@ -987,7 +987,7 @@ state before starting new work.
     clickable precisely while a worker thread is busy playing audio, the opposite of Speak/Replay's
     guard.
 - Files: `chatterbox/audio/playback.py`, `chatterbox/gui/input.py`, `chatterbox/gui/app.py`,
-  `chatterbox/gui/i18n.py` (new `stop_button` key, both locales), `docs/context/ARCHITECTURE.md`
+  `chatterbox/gui/i18n.py` (new `stop_button` key, both locales), `docs/ARCHITECTURE.md`
   (playback section updated to match), `tests/test_gui_input.py` (4 new: STOP routing + default
   no-op, plus 2 filling a pre-existing gap -- REPLAY was never actually tested before this).
 - Why: `cc_prompt_gui_landscape_v2.md` Sec3, input-row phase's last piece (chatbox masking and the
@@ -1002,7 +1002,7 @@ state before starting new work.
   `playback.stop_audio` reference; Stop returns to `disabled` once the (fake) playback ends.
 - Notes/gotchas: the real ffplay/Popen path (Linux/Pi) is **not verified on real hardware** in this
   session -- the user stated they no longer have Pi5 access; this is a stated gap, not a hidden
-  one, consistent with `docs/gui/GUI.md`'s existing "Known gaps" convention. Re-verify
+  one, consistent with `docs/GUI.md`'s existing "Known gaps" convention. Re-verify
   end-to-end (Stop actually silences ffplay mid-sentence, not just that `.terminate()` was called)
   once a Pi is available again.
 
@@ -1099,7 +1099,7 @@ state before starting new work.
 - Why: `cc_prompt_gui_landscape_v2.md` Sec3.1, second sub-step of the menu-bar-restructure phase
   (first was backgrounding `_select_tts_model()`, previous entry).
 - Verify: full test suite (303 passed/1 skipped, unchanged — no pytest coverage added here,
-  matching this project's own stated convention, `docs/gui/GUI.md` "Testing": real-`tk.Tk()`/
+  matching this project's own stated convention, `docs/GUI.md` "Testing": real-`tk.Tk()`/
   mainloop scenarios are ad hoc manual smoke scripts, not part of the automated suite). New ad hoc
   Tk smoke test (two fake TTS models, one with 2 speakers and one with none, monkeypatches
   `USER_PREFS_PATH`) confirms: top-level order is exactly Paramètres/Outils/Modèle TTS/Langue/
@@ -1283,7 +1283,7 @@ state before starting new work.
     config has no `speakers:` key at all, so this is purely additive to the contract.
 - Files: `chatterbox/config/config_tts.yaml`, `chatterbox/synthesis/backends/piper/backend.py`,
   `chatterbox/synthesis/backends/piper/text_frontend.py`, `chatterbox/synthesis/backends/piper/
-  README.md`, `CLAUDE.md`, `docs/gui/INTERCHANGEABLE_BACKENDS.md` (new §3.6), `tests/
+  README.md`, `CLAUDE.md`, `docs/research/INTERCHANGEABLE_BACKENDS.md` (new §3.6), `tests/
   test_piper_backend.py` (5 new cases), `tests/test_piper_describe_controls.py` (1 new case).
 - Why: user request, made while confirming direction for the landscape GUI redesign's Model/
   Language/Speaker menu cascade.
@@ -1379,7 +1379,7 @@ state before starting new work.
     `"performance"`.
   - Module docstring now states explicitly that `total_synth_ms`/`rtf` already cover the *whole*
     pipeline (front_end/acoustic/vocoder/write for FS2, synth/write for Piper) — real user
-    confusion (docs/context/CHANGELOG.md, previous entries) about whether HiFi-GAN/FlauBERT time
+    confusion (docs/research/CHANGELOG.md, previous entries) about whether HiFi-GAN/FlauBERT time
     was being excluded, when it wasn't.
   - Bug found only by running the new code against real 10-sentence data (not the small fake CSVs
     in the unit tests): the summary's `n_repeats` read `present[0]["n"]` — whichever sentence_id
@@ -1490,7 +1490,7 @@ state before starting new work.
   `chatterbox/synthesis/backends/piper/backend.py` (slider resolutions, tom removed from
   comments), `chatterbox/config/config_tts.yaml` (tom entry removed), `scripts/
   fetch_piper_voices.sh` (tom removed, voice count now dynamic), `chatterbox/synthesis/backends/
-  piper/README.md`, `CLAUDE.md`, `INSTALL.md`, `docs/gui/INTERCHANGEABLE_BACKENDS.md` (voice
+  piper/README.md`, `CLAUDE.md`, `INSTALL.md`, `docs/research/INTERCHANGEABLE_BACKENDS.md` (voice
   count/mentions updated), `tests/test_piper_describe_controls.py` (new slider-resolution
   regression test, comment fixes).
 - Why: the previous entry's GUI verification only covered a Tk repro script with mocked backends
@@ -1514,7 +1514,7 @@ state before starting new work.
 - What: implements `cc_prompt_piper_backend.md`'s Phase A (verification) and Phase B (integration)
   — Piper becomes a real, selectable second TTS backend alongside FastSpeech2+HiFi-GAN, run
   through the same `synth.py`/`cli.py`/`gui/app.py` layer, deliberately chosen as an acid test of
-  the interchangeable-backend contract (`docs/gui/INTERCHANGEABLE_BACKENDS.md`) because it's
+  the interchangeable-backend contract (`docs/research/INTERCHANGEABLE_BACKENDS.md`) because it's
   maximally different from FS2 along every axis (monolithic vs. two-stage, ONNX Runtime vs.
   PyTorch, internal espeak-ng phonemizer vs. no G2P at all, no style dimension, per-voice speaker
   maps vs. a shared `speakers.json`). Phase A confirmed live on the Pi 5: `piper-tts==1.5.0`
@@ -1522,7 +1522,7 @@ state before starting new work.
   source build, and needs neither `piper-phonemize` nor `espeakng-loader` — it bundles its own
   compiled `espeakbridge.so` + `espeak-ng-data` directly in the wheel.
   - Two real contract gaps found and fixed, both documented in full in
-    `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 (not summarized twice here):
+    `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 (not summarized twice here):
     1. **`registry.BACKEND` was a hardcoded singleton**, unable to resolve `tts()`/
        `describe_controls()` (identically named on every backend by design) once a second backend
        existed. Fixed with a small resolving proxy (`_BackendProxy`, `activate_tts_backend()`) in
@@ -1656,7 +1656,7 @@ state before starting new work.
   16-bit/mono, matching FS2+HiFi-GAN's own output so the shared playback path needs no resampling
   regardless of backend), confirmed `<SPEAKER=...>`/`<STYLE=...>` tags strip correctly and
   discarded tags never leak into Piper's input text, confirmed FlauBERT never loads on the Piper
-  path. Ad hoc Tk repro script (`docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.2's convention) drove a
+  path. Ad hoc Tk repro script (`docs/research/INTERCHANGEABLE_BACKENDS.md` §3.2's convention) drove a
   real `create_gui()` at 800×480 through FS2→siwis→upmc→tom→FS2, all 11 checks passing (no crash,
   style grid/speaker dropdown present exactly when expected, mood-shortcut keys no-op cleanly).
   **Then, on real Pi 5 hardware** (the step that actually caught the 3 bugs above):
@@ -2270,11 +2270,11 @@ state before starting new work.
      module global + `_set_orientation_override()`/`_refresh_orientation` in `gui/app.py`). "Auto"
      keeps the `<Configure>`-based detection; forcing Portrait/Paysage applies immediately and
      makes further real resize events a no-op until set back to Auto.
-  2. `docs/kiosk/KIOSK.md` gained a "Maintenance / recovery access" section (manual SSH-over-
+  2. `docs/KIOSK.md` gained a "Maintenance / recovery access" section (manual SSH-over-
      Ethernet, config.txt dtoverlay restore, getty@tty1 re-enable steps) instead of an in-GUI
      feature -- both radios and getty are boot-time config, not live-toggleable, and a kiosk-escape
      control needs real access-control design not yet done.
-- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `docs/kiosk/KIOSK.md`.
+- Files: `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`, `docs/KIOSK.md`.
 - Why: user asked for a persisted-feeling manual orientation override (kiosk windows may never
   actually resize at runtime, defeating pure auto-detection) and a way back into a locked-down
   kiosk Pi once `scripts/kiosk_finalize.sh` disables wifi/bluetooth/console login.
@@ -2412,7 +2412,7 @@ state before starting new work.
   had a one-off mocked-`create_gui()` smoke script (real Tk, no pretrained weights) run manually
   during the session confirming the specific claim (dead column gone, speakers wrap into 2+ rows,
   Replay/Ranger/Réglages rows all precede keyboard_area's row, menu entry counts/labels, toggle
-  visibility) -- not checked into `tests/`, same carve-out as the rest of `docs/gui/GUI.md`.
+  visibility) -- not checked into `tests/`, same carve-out as the rest of `docs/GUI.md`.
 - Notes/gotchas: none of these seven has been re-verified on the Pi yet as of this entry (the
   session ended mid-verification) -- flagged for the next session/user check. A separate,
   not-yet-started request came in mid-session: a battery-percentage display for a DFRobot
@@ -2426,7 +2426,7 @@ state before starting new work.
 
 - What: seven incremental commits against `cc_prompt_gui_refactor.md`'s Phase 1 audit list (Phase
   0 discovery found the reliability item, #9, already solved in an earlier session — worker
-  thread + busy-guard + exception-swallowing were already in place per `docs/gui/GUI.md`):
+  thread + busy-guard + exception-swallowing were already in place per `docs/GUI.md`):
   1. Responsive grid: `window`/options-panel `columnconfigure`/`rowconfigure` weights replace the
      fixed-pixel `grid_propagate(False)` pinning, so content tracks window size.
   2. Fixed a real latent bug in the "Play" replay button (crashed on click before any synthesis,
@@ -2457,11 +2457,11 @@ state before starting new work.
   commit. Each commit additionally has a one-off mocked-`create_gui()` smoke script (real Tk, no
   pretrained weights, `registry.BACKEND` model-loading monkeypatched) run manually during the
   session, not checked into `tests/` — same "needs real weights/Tk, not part of pytest" carve-out
-  `docs/gui/GUI.md` already documents for the worker-thread responsiveness check.
+  `docs/GUI.md` already documents for the worker-thread responsiveness check.
 - Notes/gotchas: manual on-hardware test checklists were given per-commit in-session; only the
   portrait/landscape reflow (item 3) has been confirmed by the user on a real Pi 5 so far. Chip
   grid touch-target size, French menu label accent rendering, and the new letter keyboard still
-  need real-hardware eyes-on. `docs/gui/GUI.md` itself was not updated in this session (still
+  need real-hardware eyes-on. `docs/GUI.md` itself was not updated in this session (still
   accurate on the pre-existing worker-thread/dispatch architecture; the new pieces layer on top
   without changing it) — flagged here in case it drifts further from `app.py`'s actual layout.
 
@@ -2485,11 +2485,11 @@ state before starting new work.
     `TTYPath=/dev/tty1` for the same tty — the standard systemd kiosk pattern), and enables+starts
     both systemd units. Deliberately never writes EEPROM (same boot-config brick-risk posture
     already established for the powerd task).
-  - New `docs/kiosk/KIOSK.md` (what each step does + how to undo it); `INSTALL.md` gained a
+  - New `docs/KIOSK.md` (what each step does + how to undo it); `INSTALL.md` gained a
     "Finalizing the kiosk" section pointing at it.
-- Files: new `scripts/kiosk_finalize.sh`, `docs/kiosk/KIOSK.md`; modified `apt-packages-pi.txt`,
+- Files: new `scripts/kiosk_finalize.sh`, `docs/KIOSK.md`; modified `apt-packages-pi.txt`,
   `deploy/systemd/chatterbox-gui.service` (comment only — states cage as decided, not open),
-  `INSTALL.md`, `CLAUDE.md`, `docs/context/ARCHITECTURE.md` (also updated its stale "unverified on
+  `INSTALL.md`, `CLAUDE.md`, `docs/ARCHITECTURE.md` (also updated its stale "unverified on
   hardware" notes for powerd/GUI now that T0-T7 passed).
 - Why: the bring-up protocol's own closing line names this as the explicit next gate once T0-T7
   are green.
@@ -2499,7 +2499,7 @@ state before starting new work.
   as the powerd task's systemd units) and no SSH access to the Pi this session.
 - Notes/gotchas: **not yet run on the Pi** — the user needs to run `scripts/kiosk_finalize.sh`
   and reboot to confirm unattended boot actually works before this is considered done end-to-end.
-  Explicitly out of scope (see `docs/kiosk/KIOSK.md`): any EEPROM *write* automation,
+  Explicitly out of scope (see `docs/KIOSK.md`): any EEPROM *write* automation,
   `scripts/hw_check.py` (T1/T2 tooling, already done manually), and wake→interactive boot-time
   measurement (needs a real reboot + stopwatch, feeds `power.t_deep_s`).
 
@@ -2601,17 +2601,17 @@ state before starting new work.
   - `cli.py`'s warm-up (previously a closure inside `main()`) is now module-level `cli.warmup()`
     so the GUI can call it too, on startup, through the same busy/worker machinery as real
     synthesis.
-- Files: new `chatterbox/synth.py`, `chatterbox/gui/{input,settings}.py`, `docs/gui/GUI.md`,
+- Files: new `chatterbox/synth.py`, `chatterbox/gui/{input,settings}.py`, `docs/GUI.md`,
   `tests/test_synth.py`, `tests/test_gui_{input,worker,settings}.py`; modified `chatterbox/cli.py`
   (shrunk a lot), `chatterbox/gui/{app,keyboards}.py`, `chatterbox/power/client.py`
   (+`send_reload`), `chatterbox/config/config_tts.yaml` (+`add_settings_button`), `CLAUDE.md`,
-  `docs/context/ARCHITECTURE.md`.
+  `docs/ARCHITECTURE.md`.
 - Why: the spec's own audit anchor — a hung/blocking GUI and an unguarded synthesis call are the
   two things standing between this demonstrator and being trustworthy for unattended/AAC use.
 - Verify: `.venv/Scripts/python.exe -m pytest tests/` — 227 passed, 1 skipped (same platform-gated
   powerd IPC test as before). Unlike the powerd task, this checkout has real pretrained weights, so
   two manual real-weights checks were actually run (not just written) while building this — see
-  `docs/gui/GUI.md` "Testing" for how to reproduce:
+  `docs/GUI.md` "Testing" for how to reproduce:
   1. `chatterbox.synth.synthesize()` called directly (no Tk) against loaded models — correct
      `AudioResult`, `playback.AUDIO_EXAMPLE` set, matching the pre-refactor pipeline's output shape.
   2. A scripted `create_gui()` run with a `window.after(50, tick)` counter running throughout a
@@ -2628,7 +2628,7 @@ state before starting new work.
   error state ~30ms after showing it; implemented as mutually-exclusive `_done`/`_fail` posting
   instead. Not verified on real Pi hardware (this is a PC dev checkout) or with a human physically
   dragging/resizing the window during synthesis, or with real physical switches (none configured in
-  `user_prefs.yaml` yet) — see `docs/context/ARCHITECTURE.md` "Not yet implemented".
+  `user_prefs.yaml` yet) — see `docs/ARCHITECTURE.md` "Not yet implemented".
 
 ---
 
@@ -2645,14 +2645,14 @@ state before starting new work.
   singleton that degrades to a permanent silent no-op if powerd isn't reachable.
   Also added: `deploy/systemd/{chatterbox-powerd,chatterbox-gui}.service`, a `scripts/setup_pi.sh`
   install step (units + socket group, non-fatal if it fails), an `INSTALL.md` section, and
-  `docs/power/POWERD.md` (run/configure/test).
+  `docs/POWERD.md` (run/configure/test).
 - Files: new `chatterbox/power/{__init__,config,fsm,backlight,amp,inputs,ipc,client,daemon}.py`,
-  `chatterbox/config/user_prefs.yaml`, `deploy/systemd/*.service`, `docs/power/POWERD.md`,
+  `chatterbox/config/user_prefs.yaml`, `deploy/systemd/*.service`, `docs/POWERD.md`,
   `tests/test_power_{fsm,config,backlight,amp,ipc}.py`; modified `chatterbox/config/paths.py`
   (+`USER_PREFS_PATH`), `chatterbox/audio/playback.py`, `chatterbox/gui/app.py`,
   `chatterbox/config/config_tts.yaml` (+`add_put_away_button`), `requirements-pi.txt`
   (+gpiozero/lgpio/evdev), `scripts/setup_pi.sh`, `INSTALL.md`, `CLAUDE.md`,
-  `docs/context/ARCHITECTURE.md`.
+  `docs/ARCHITECTURE.md`.
 - Why: `chatterbox-powerd_spec_v0.1.md` — an unattended AAC kiosk needs the display/amp to sleep
   and the amp to never be left silently drawing power, without adding failure modes to the TTS
   pipeline itself.
@@ -2665,7 +2665,7 @@ state before starting new work.
   clip completes with no exception and no added latency versus before this change.
 - Notes/gotchas: **nothing here has been run on real Pi 5 hardware** — GPIO/backlight/evdev/
   systemd/halt behavior (spec §5/§8/§10) is implemented per spec but entirely unverified; that
-  needs the spec's own §10 test pass on actual hardware (see `docs/context/ARCHITECTURE.md` "Not
+  needs the spec's own §10 test pass on actual hardware (see `docs/ARCHITECTURE.md` "Not
   yet implemented"). Deliberate deviations from the spec's literal text, all flagged in code
   comments where they land: no real `chatterbox-powerd` console script (this repo has no
   packaging, so it's `python -m chatterbox.power.daemon`, matching the spec's own systemd
@@ -2685,7 +2685,7 @@ state before starting new work.
 
 ## 2026-07-20 — Fix silent --gui override by --benchmark/--p4-sweep, found via Part A verification
 
-- What: running `docs/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
+- What: running `docs/research/history/REORG_VERIFICATION.md`'s Part A, the user combined `--gui --benchmark
   --export-xlsx` into one command (rather than the separate commands the protocol actually lists)
   and got the benchmark, not the GUI, with zero indication `--gui` had been ignored. Root cause:
   `chatterbox/cli.py`'s mode dispatch is an `if args.benchmark: ... elif args.p4_sweep: ... elif
@@ -2696,10 +2696,10 @@ state before starting new work.
     running --benchmark instead. Launch the interface on its own with \`do_tts.py --gui\`.`
     Behavior (which mode wins) is unchanged; only the silence is fixed.
   - Updated `--gui`'s `--help` text to document the precedence.
-  - Added a note to `docs/REORG_VERIFICATION.md` clarifying `--gui`/`--benchmark`/`--p4-sweep` are
+  - Added a note to `docs/research/history/REORG_VERIFICATION.md` clarifying `--gui`/`--benchmark`/`--p4-sweep` are
     mutually exclusive top-level modes, not composable flags — run each protocol step as its own
     separate command.
-- Files: `chatterbox/cli.py`, `docs/REORG_VERIFICATION.md`.
+- Files: `chatterbox/cli.py`, `docs/research/history/REORG_VERIFICATION.md`.
 - Why: confusing, silent flag-precedence behavior that real testing (the exact purpose of Part A)
   surfaced immediately — worth fixing even though it predates the reorg, since the reorg's own
   verification protocol is what prompted testing this combination in the first place.
@@ -2716,7 +2716,7 @@ state before starting new work.
 
 ## 2026-07-20 — Reorg §4 sign-off: delete graphify-out/ and the two deprecated requirements files
 
-- What: `docs/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather
+- What: `docs/research/history/REORG_PROPOSAL.md` §4 flagged four items for an explicit keep/delete decision rather
   than deciding unilaterally (Phase 4 CHANGELOG entry below); this session brought them back and
   got answers:
   - `git rm -r graphify-out/` (this AI-assistant tool's own knowledge-graph cache, a build
@@ -2739,14 +2739,14 @@ state before starting new work.
     `profiling/__pycache__/` (from before Phase 2 moved `profiling/` to
     `research/profiling/`) → `research/profiling/__pycache__/`.
 - Files: `.gitignore`, `CLAUDE.md`, `INSTALL.md`, `README.md`, `requirements-dev.txt`,
-  `docs/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
+  `docs/research/history/REORG_PROPOSAL.md`; deleted `graphify-out/` (entire tree), `requirements.txt`,
   `minimal_requirements.txt`.
-- Why: closing out `docs/REORG_PROPOSAL.md` §4's three explicitly-deferred sign-off items, the
+- Why: closing out `docs/research/history/REORG_PROPOSAL.md` §4's three explicitly-deferred sign-off items, the
   last open piece of the reorg plan.
 - Verify: `pytest tests/` — 130 passed (none of these files were imported by code, so this was
   never expected to affect tests — confirmed anyway).
 - Notes/gotchas: the `profile/` experiment-directory migration is a real, tracked follow-up, not
-  forgotten — see `docs/REORG_PROPOSAL.md` §4's table for the exact decision and reasoning. If you
+  forgotten — see `docs/research/history/REORG_PROPOSAL.md` §4's table for the exact decision and reasoning. If you
   ever need the deleted `requirements.txt`'s training-environment pins, they're recoverable from
   git history (any commit before this one).
 
@@ -2754,17 +2754,17 @@ state before starting new work.
 
 ## 2026-07-20 — Reorg Phase 4: assets/docs cleanup — the four-phase reorg is functionally complete
 
-- What: Phase 4 of `docs/REORG_PROPOSAL.md`'s migration plan, the last one.
+- What: Phase 4 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan, the last one.
   - `git mv` the five root demo WAVs (reclassified from delete-candidates to kept reference assets
     in an earlier review pass) into `assets/audio/reference/`.
   - `git mv audio_keyboards/Emmanuelle assets/audio/prompts/Emmanuelle`; updated
     `chatterbox/config/paths.py`'s `AUDIO_KEYBOARDS_DIR` constant to the new location — no code
     change needed in `chatterbox/gui/app.py` (the actual home of `play_prerecorded_phone()`,
-    correcting `docs/REORG_PROPOSAL.md`'s original text which said `keyboards.py`), since it
+    correcting `docs/research/history/REORG_PROPOSAL.md`'s original text which said `keyboards.py`), since it
     already read this path via `paths.py`.
   - `git mv tts_gui.png docs/assets/tts_gui.png`; updated the README image link.
   - Created `hardware/.gitkeep` (git doesn't track empty directories).
-  - Full rewrite of `docs/context/ARCHITECTURE.md` (deferred since Phase 0's stale-banner
+  - Full rewrite of `docs/ARCHITECTURE.md` (deferred since Phase 0's stale-banner
     workaround) — every module path, function name, and `profiling/`/`benchmark/`/`FastSpeech2/`
     reference updated to the post-reorg `chatterbox/`/`tools/`/`assets/models/` layout, technical
     substance (pipeline stages, control-tag mini-language, profiling/benchmark design) preserved
@@ -2772,13 +2772,13 @@ state before starting new work.
     profiling/benchmark module paths, the image link). `CLAUDE.md` needed no further changes
     (already rewritten in Phase 3, verified still accurate). `INSTALL.md` needed no changes at all
     — it never hardcoded the paths that moved.
-  - Brought the three items `docs/REORG_PROPOSAL.md` §4 flagged but didn't resolve
+  - Brought the three items `docs/research/history/REORG_PROPOSAL.md` §4 flagged but didn't resolve
     (`graphify-out/`, the `profile/` experiment directories, the two deprecated requirements files)
     back to the user for an explicit keep/delete decision rather than deciding unilaterally.
 - Files: `assets/audio/{reference,prompts}/` (new, via `git mv`), `chatterbox/config/paths.py`,
   `docs/assets/tts_gui.png` (new, via `git mv`), `hardware/.gitkeep` (new),
-  `docs/context/ARCHITECTURE.md`, `README.md`, `docs/REORG_PROPOSAL.md`.
-- Why: `docs/REORG_PROPOSAL.md` Phase 4 (Goal 1: 30-second clarity) — the last phase of the
+  `docs/ARCHITECTURE.md`, `README.md`, `docs/research/history/REORG_PROPOSAL.md`.
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 4 (Goal 1: 30-second clarity) — the last phase of the
   four-phase reorg plan.
 - Verify: `pytest tests/` — 130 passed. Confirmed `paths.AUDIO_KEYBOARDS_DIR` resolves to the new
   location and a sample phoneme WAV exists there. Real end-to-end synthesis smoke test on Windows,
@@ -2788,14 +2788,14 @@ state before starting new work.
   real interactive GUI testing (only a non-interactive, no-display `--gui` launch was possible —
   see the Phase 3 entry) and Pi 5 hardware verification (no Pi access at any point across all four
   phases). Treat the whole reorg as implemented and Windows-verified, not field-verified, until a
-  real Pi 5 run happens — this is explicitly called out in `docs/REORG_PROPOSAL.md` §7 as the one
+  real Pi 5 run happens — this is explicitly called out in `docs/research/history/REORG_PROPOSAL.md` §7 as the one
   verification step that can't be waived.
 
 ---
 
 ## 2026-07-20 — Reorg Phase 3: chatterbox/ package, class-based Synthesizer, GUI leak fix
 
-- What: Phase 3 of `docs/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
+- What: Phase 3 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan — the largest and riskiest phase: a
   real behavioral refactor (module-level globals → class-owned state), not just file relocation,
   executed in full (not scoped down) despite touching the Tkinter GUI code this session has no way
   to test interactively (no display) — an explicit, disclosed risk tradeoff, not an oversight.
@@ -2859,7 +2859,7 @@ state before starting new work.
   `tts_utils.py`, `audio_postprocess.py`, `do_normalize_txt.pl`; `do_tts.py` reduced to a 3-line
   shim; `research/benchmark/{runner,p4_sweep,export_to_xlsx}.py`,
   `tests/{test_benchmark,test_audio_postprocess,conftest}.py` updated for the new import paths.
-- Why: `docs/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 3 (Goals 2 & 3: swappable acoustic-model backend, swappable
   GUI) — the interface boundaries §5 called for, plus closing out the config-reopening leaks found
   while implementing them.
 - Verify: `pytest tests/` — 130 passed (the `SyntaxWarning`s from `synthesis_modules.py`'s non-raw
@@ -2872,7 +2872,7 @@ state before starting new work.
   `window.mainloop()`, blocking as expected until the timeout killed it.
 - Notes/gotchas: this is the strongest GUI confirmation available without an interactive display,
   but **not equivalent to actually clicking through it** — real interactive GUI testing is still
-  owed, on top of the standing no-Pi-5-access caveat from Phases 0-2. See `docs/REORG_PROPOSAL.md`
+  owed, on top of the standing no-Pi-5-access caveat from Phases 0-2. See `docs/research/history/REORG_PROPOSAL.md`
   Sec5 for the two design deviations (two ABCs not one; text_pipeline.py needing model state) in
   full, and Sec7/Phase 3 for the complete checklist. One known remaining gap, not yet fixed: a
   from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
@@ -2894,7 +2894,7 @@ state before starting new work.
      hand-editing needed. Chosen over patching `setup_pi.sh` with a `sed` step because that would
      only cover the Pi provisioning path, not a manual install following the same README
      instructions.
-  2. Phase 2 of `docs/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
+  2. Phase 2 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan: `git mv benchmark/
      research/benchmark/`, `git mv profiling/ research/profiling/`, `git mv
      pmic_calibrate.py research/`. Added `tools/__init__.py`,
      `research/__init__.py`, `research/__init__.py`. Updated every
@@ -2914,8 +2914,8 @@ state before starting new work.
   `research/__init__.py`, `research/__init__.py`; the moved packages' own
   cross-imports and self-referential usage strings; `tests/test_benchmark.py`,
   `tests/test_p4_sweep.py`, `tests/test_export_xlsx.py`, `tests/test_profiling.py`;
-  `docs/REORG_PROPOSAL.md`.
-- Why: `docs/REORG_PROPOSAL.md` Phase 2 (Goal 4, monitoring isolated as maintenance-only); the
+  `docs/research/history/REORG_PROPOSAL.md`.
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 2 (Goal 4, monitoring isolated as maintenance-only); the
   config-path fix closes the one thing Phase 1 explicitly left unresolved.
 - Verify: `pytest tests/` — 130 passed. Re-verified the config-path fix by reverting the local
   YAMLs to their original stale, as-downloaded content and re-running a synthesis — confirmed the
@@ -2928,7 +2928,7 @@ state before starting new work.
 - Notes/gotchas: no Pi 5 hardware access this round — the sampler subprocess launch string is the
   one Phase 2 change Windows genuinely cannot exercise (the sampler no-ops off-Linux before
   reaching that code), so it's the highest-risk item to merge blind, per
-  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. Flagging the general pattern for Phase 3
+  `docs/research/history/REORG_PROPOSAL.md`'s retired amendment #8 note. Flagging the general pattern for Phase 3
   (nests files even deeper, under `chatterbox/synthesis/backends/fastspeech2_hifigan/...`): grep
   for other `dirname(dirname(...))`/`Path(__file__).parents[N]`-style constants across the whole
   tree before executing it, not just in the files being moved that phase — this is the second time
@@ -2938,7 +2938,7 @@ state before starting new work.
 
 ## 2026-07-20 — Reorg Phase 1: move vendored model repos + weights under `assets/models/`
 
-- What: Phase 1 of `docs/REORG_PROPOSAL.md`'s migration plan.
+- What: Phase 1 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan.
   - `git mv FastSpeech2 hifi-gan-master Waveglow flaubert assets/models/` — all four vendored
     dirs, including their gitignored weight files (~3.7 GB: FlauBERT `pytorch_model.bin`,
     Waveglow's `waveglow_NEB.pt`, HiFi-GAN's `g_00570000`), which the directory rename carried
@@ -2962,21 +2962,21 @@ state before starting new work.
        (downloaded from the Google Drive archives in `README.md`, never committed) — patched on
        this checkout only, to unblock verification. **Not a real fix**: a fresh
        `scripts/setup_pi.sh` run re-downloads the same stale-path archive and will hit this again.
-       Left as an open follow-up in `docs/REORG_PROPOSAL.md` §6 (needs a decision: patch
+       Left as an open follow-up in `docs/research/history/REORG_PROPOSAL.md` §6 (needs a decision: patch
        `scripts/setup_pi.sh` to `sed` these keys post-unzip, or make the FastSpeech2 code resolve
        them relative to `paths.FASTSPEECH2_DIR` instead of trusting them as full paths).
 - Files: `paths.py`, `synthesis_modules.py`, `config_tts.yaml`, `scripts/setup_pi.sh`,
   `.gitignore`, plus the `git mv` of `FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, `flaubert/`
   into `assets/models/`. (Also two gitignored, untracked local edits — see above — that do not
   show up in `git status` and are not part of this commit.)
-- Why: `docs/REORG_PROPOSAL.md` Phase 1 — code vs. non-code separation (Goal 5), lowest
+- Why: `docs/research/history/REORG_PROPOSAL.md` Phase 1 — code vs. non-code separation (Goal 5), lowest
   coupling-risk directory move in the reorg.
 - Verify: `pytest tests/` — 130 passed (after fix 1). Real end-to-end smoke test on this Windows
   checkout (after fix 2): FlauBERT, FastSpeech2 (`assets/models/FastSpeech2/390000`), and HiFi-GAN
   (`assets/models/hifi-gan-master/FR_V2/g_00570000`) all loaded via the moved paths;
   `audio_file.wav` produced with normal per-stage timing.
 - Notes/gotchas: no Pi 5 hardware access this round — Windows-verified only, per
-  `docs/REORG_PROPOSAL.md`'s retired amendment #8 note. The config-YAML issue (gap 2 above) is the
+  `docs/research/history/REORG_PROPOSAL.md`'s retired amendment #8 note. The config-YAML issue (gap 2 above) is the
   one item in this phase that isn't actually resolved yet, just worked around locally — flag it
   before Phase 4 closes the reorg out, since it will bite a fresh Pi provisioning run exactly the
   same way it bit this one.
@@ -2985,7 +2985,7 @@ state before starting new work.
 
 ## 2026-07-20 — Reorg Phase 0: repo-root-anchored path resolution (`paths.py`)
 
-- What: Phase 0 of `docs/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
+- What: Phase 0 of `docs/research/history/REORG_PROPOSAL.md`'s migration plan — de-risk path resolution before any
   directory moves. Added a temporary root-level `paths.py` module (`ROOT =
   Path(__file__).resolve().parent`, i.e. anchored to the file's own location, not the process's
   CWD) and routed every CWD-relative path through it:
@@ -3003,7 +3003,7 @@ state before starting new work.
   down scattered CWD-relative strings.
 - Files: `paths.py` (new), `loading_modules.py`, `synthesis_modules.py`,
   `FastSpeech2/utils/model.py`.
-- Why: `docs/REORG_PROPOSAL.md` §6 flagged CWD-relative `sys.path.insert` as the highest-risk item
+- Why: `docs/research/history/REORG_PROPOSAL.md` §6 flagged CWD-relative `sys.path.insert` as the highest-risk item
   in the whole reorg — every subsequent phase that moves `FastSpeech2/`, `hifi-gan-master/`,
   `Waveglow/`, `flaubert/`, or the regex-rule CSVs would silently break without this fix landing
   first.
@@ -3015,7 +3015,7 @@ state before starting new work.
   for the one sentence).
 - Notes/gotchas: no Pi 5 hardware access for this session, so this phase is **Windows-verified,
   Pi-unverified** — real hardware validation is still needed before this is considered fully safe,
-  per `docs/REORG_PROPOSAL.md`'s note on the retired "Pi-mandatory" amendment. `paths.py` is
+  per `docs/research/history/REORG_PROPOSAL.md`'s note on the retired "Pi-mandatory" amendment. `paths.py` is
   intentionally a temporary root-level module (not yet under a `chatterbox/` package, which doesn't
   exist until Phase 3) — see the proposal doc for the full phased plan.
 
@@ -3773,7 +3773,7 @@ what actually gets fitted. No behavior change, no new test needed for a print st
   `benchmark/export_to_xlsx.py` (new), `tests/test_profiling.py` (rail-parsing + join cpu/mem
   tests), `tests/test_export_xlsx.py` (new), `requirements-dev.txt`/`requirements-pi.txt` (added
   `openpyxl`), `.gitignore` (added `profile/exports/`), `README.md` ("Puissance par rail PMIC" +
-  "Export Excel" sections), `docs/context/ARCHITECTURE.md`.
+  "Export Excel" sections), `docs/ARCHITECTURE.md`.
 - Why: The PMIC's summed total conflates CPU and memory draw; splitting `VDD_CORE` (compute) from
   the DDR/1V1 rails (memory) lets a per-stage view show whether a given pipeline stage is CPU-bound
   or memory-bound. The Excel exporter removes a manual copy/reformat step before results can be
@@ -3823,7 +3823,7 @@ what actually gets fitted. No behavior change, no new test needed for a print st
   `profiling/__init__.py`, `do_tts.py`, `config_tts.yaml`, `requirements-pi.txt` (added
   `smbus2`, Pi-only, lazily imported inside `sampler.py`), `apt-packages-pi.txt` (added
   `i2c-tools` for `i2cdetect`), `tests/test_profiling.py` (INA226 decode tests + join `amp_*`
-  column tests), `README.md` ("Profilage" section), `docs/context/ARCHITECTURE.md` (profiling
+  column tests), `README.md` ("Profilage" section), `docs/ARCHITECTURE.md` (profiling
   subsystem section).
 - Why: The PMIC (`vcgencmd pmic_read_adc`) only reports system-wide Pi power; a second INA226
   sensor was wired directly on the Pi's own I2C bus to isolate the amplifier breadboard's 5V
@@ -3857,7 +3857,7 @@ what actually gets fitted. No behavior change, no new test needed for a print st
      comment at the top of each — not deleted).
   2. `scripts/setup_pi.sh`: idempotent, guards on Linux/aarch64, installs apt + pip deps, creates
      `~/chatterbox/venv`, downloads the FastSpeech2/FlauBERT/HiFi-GAN weights (README's Drive
-     links) into the exact paths `docs/context/ARCHITECTURE.md` documents, runs a torch-CPU smoke
+     links) into the exact paths `docs/ARCHITECTURE.md` documents, runs a torch-CPU smoke
      test (fatal) and a best-effort one-sentence end-to-end synthesis smoke test (non-fatal), then
      writes `requirements-pi-lock.txt` via `pip freeze`.
   3. `INSTALL.md`: PC vs Pi5 split, fresh-Pi5 setup steps, golden-image mass-deployment note,
@@ -3865,7 +3865,7 @@ what actually gets fitted. No behavior change, no new test needed for a print st
 - Files: `requirements-dev.txt`, `requirements-pi.txt`, `apt-packages-pi.txt`,
   `scripts/setup_pi.sh`, `INSTALL.md` (all added); `requirements.txt`, `minimal_requirements.txt`
   (deprecation header only, contents otherwise unchanged); `CLAUDE.md` (repo map entry + corrected
-  "Install gotchas"); `docs/context/ARCHITECTURE.md` (weights section now points at the script).
+  "Install gotchas"); `docs/ARCHITECTURE.md` (weights section now points at the script).
 - Why: PC and Pi5 need different dependency sets (`apex` mis-resolves on PyPI and is CUDA/Waveglow
   training-only; several other pins are FastSpeech2 training-only), and there was no repeatable way
   to provision a new Pi5 unit.
@@ -3960,7 +3960,7 @@ what actually gets fitted. No behavior change, no new test needed for a print st
   `sentence_id` override instead of always auto-incrementing); refactored `profiling/join.py`
   (`main()` split into a plain `run_join(profile_dir)` callable + a thin argparse `main()`, so
   `do_tts.py` can call it without an `sys.argv` collision); README "Benchmark" section;
-  `docs/context/ARCHITECTURE.md` "Benchmark mode".
+  `docs/ARCHITECTURE.md` "Benchmark mode".
 - Why: Need a repeatable, labelled sentence set (varying length/liaisons/numbers/prosody/proper
   nouns/homographs, one REF anchor at each end for drift) to compare compute/energy cost across
   sentence types without hand-typing free text each time, while keeping exactly one synthesis path.
@@ -4028,9 +4028,9 @@ what actually gets fitted. No behavior change, no new test needed for a print st
 ## 2026-07-08 — Add persistent project-context docs
 
 - What: Ran `/init` to generate a baseline `CLAUDE.md`, then split it into a lean root `CLAUDE.md` +
-  detailed `docs/context/ARCHITECTURE.md` + this changelog, per the three-file context design (short
+  detailed `docs/ARCHITECTURE.md` + this changelog, per the three-file context design (short
   file loaded every session vs. on-demand detail).
-- Files: `CLAUDE.md` (rewritten), `docs/context/ARCHITECTURE.md` (new), `docs/context/CHANGELOG.md`
+- Files: `CLAUDE.md` (rewritten), `docs/ARCHITECTURE.md` (new), `docs/research/CHANGELOG.md`
   (new, this file).
 - Why: Keep every-session context budget small while letting modification history and deep
   architecture notes grow indefinitely without re-exploring the codebase each session.

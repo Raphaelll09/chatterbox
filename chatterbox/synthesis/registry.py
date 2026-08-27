@@ -9,7 +9,7 @@ Note that `gui_script` is NOT resolved here despite being the same kind of strin
 it up in its own module globals() instead, so a backend cannot ship its own GUI function. That
 asymmetry is documented in README.md's "Known gaps".
 
-Two backends exist as of the Piper integration (docs/context/CHANGELOG.md, Phase B): FastSpeech2+
+Two backends exist as of the Piper integration (docs/research/CHANGELOG.md, Phase B): FastSpeech2+
 HiFi-GAN and Piper. `BACKEND` used to be a bare singleton instance -- fine for one backend, but
 `tts()`/`describe_controls()` are defined identically-named on *every* backend (that's the whole
 point of the shared contract), so a plain `getattr(BACKEND, name)` can no longer tell which
@@ -30,7 +30,7 @@ from chatterbox.synthesis.backends.fastspeech2_hifigan.backend import FastSpeech
 from chatterbox.synthesis.backends.piper.backend import PiperBackend
 
 # Models are swapped from disk files, never held resident as multiple simultaneous instances (see
-# docs/context/ARCHITECTURE.md "Synthesis pipeline") -- one shared instance per backend class
+# docs/ARCHITECTURE.md "Synthesis pipeline") -- one shared instance per backend class
 # mirrors that.
 _BACKENDS_BY_NAME = {
     "fastspeech2_hifigan": FastSpeech2HifiGanBackend(),

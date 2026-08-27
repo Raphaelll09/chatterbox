@@ -4,7 +4,7 @@
 
 Combines do_tts.py's argparse/dispatch logic and audio_utils.py's syn_audio() (the parts that
 didn't move to chatterbox/audio/{playback,denoise}.py or chatterbox/synthesis/subtitles.py) in
-Phase 3 (docs/REORG_PROPOSAL.md). The root-level do_tts.py is now a 3-line shim calling main()
+Phase 3 (docs/research/history/REORG_PROPOSAL.md). The root-level do_tts.py is now a 3-line shim calling main()
 here, preserving the documented CLI contract (every flag below) unchanged.
 """
 import os
@@ -319,7 +319,7 @@ def main():
         # state.VOCODER_INDEX unconditionally (getattr(state, "VOCODER_INDEX")) regardless of the
         # active TTS model, so leaving it unset for a needs_vocoder: false model raised
         # AttributeError the first time this was actually exercised end-to-end on the Pi (Piper
-        # integration, docs/context/CHANGELOG.md) -- a real regression from an earlier version of
+        # integration, docs/research/CHANGELOG.md) -- a real regression from an earlier version of
         # this guard that skipped it, not just a theoretical risk. Only the actual heavy
         # vocoder_loading_script() call (HiFi-GAN weights) is skipped: a monolithic TTS model has
         # no separate mel->wav stage and never calls registry.BACKEND.vocoder() (see
@@ -388,7 +388,7 @@ def main():
                 # takes warm-up to run, silently swallowing this prompt into warm-up's discarded
                 # buffer instead of the terminal (input() still reads stdin fine either way, so
                 # this only ever looked like a missing prompt, not a hang -- see
-                # docs/context/CHANGELOG.md 2026-07-21 "Fix the first free-text prompt...").
+                # docs/research/CHANGELOG.md 2026-07-21 "Fix the first free-text prompt...").
                 print("Input Text (Ctrl+C to exit): ", end="", flush=True, file=sys.__stdout__)
                 txt_input = input()
                 if first_input:

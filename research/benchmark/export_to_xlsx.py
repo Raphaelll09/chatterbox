@@ -87,7 +87,7 @@ def _check_stage_shape(stage_rows):
     (Chatterbox_Power_Measurements_final.xlsx's P2P3_Synthesis sheet, this module's own
     docstring) built around exactly FS2's 4 fixed stage names. join.py's per_stage_results.csv is
     now genuinely backend-agnostic (research/profiling/join.py's _stage_windows(),
-    Piper integration -- docs/context/CHANGELOG.md) and can contain a different stage count/names
+    Piper integration -- docs/research/CHANGELOG.md) and can contain a different stage count/names
     for a different backend (e.g. Piper's "synth"+"write") -- silently slicing those rows into
     fixed len(STAGES)-sized blocks here would misalign every downstream block, corrupting the
     pasted data with no error at all. Fail loudly instead: this tool only ever supported the FS2

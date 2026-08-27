@@ -10,7 +10,7 @@ so this project's own licensing stays unaffected; a user who doesn't want a GPL 
 never installs it, and every other backend keeps working.
 
 Confirmed live on a Raspberry Pi 5 during this integration's Phase A/B (see
-`docs/context/CHANGELOG.md`): installs from a single prebuilt aarch64 wheel
+`docs/research/CHANGELOG.md`): installs from a single prebuilt aarch64 wheel
 (`manylinux_2_17_aarch64...`), no source build, no separate `piper-phonemize`/`espeakng-loader`
 dependency — 1.5.0 bundles its own compiled `espeakbridge.so` + `espeak-ng-data` directly in the
 wheel, independent of any system-installed `espeak-ng`.
@@ -23,7 +23,7 @@ voice, e.g. `fr/fr_FR` vs `en/en_US`), CC0/public-domain-adjacent per that datas
 -- see the dataset page for the authoritative statement per voice. Fetch with
 `./scripts/fetch_piper_voices.sh` from the repo root (verifies sha256 against the values below,
 captured from a real download during this integration -- fr_FR during Phase B, en_US when the
-English voice/live language switch were added, docs/context/CHANGELOG.md for both).
+English voice/live language switch were added, docs/research/CHANGELOG.md for both).
 
 Sample rate: **22050 Hz** for all three (the `medium` quality tier) — matches the existing
 FastSpeech2+HiFi-GAN output exactly, so the shared playback/denoise/postprocess path in
@@ -35,7 +35,7 @@ FastSpeech2+HiFi-GAN output exactly, so the shared playback/denoise/postprocess 
 | `fr_FR-upmc-medium` | fr_FR | 2 (`jessica`, `pierre`) | `9abb3800c199148897a9ed64e100d224f3de83579f100044174ad19418f1786f` | `e8636ec15dfd5d72db37a02cb5320a20f2b8d339f2a0e4337da64c58a33a5868` |
 | `en_US-lessac-medium` | en_US | 1 (default) | `5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f` | `efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0` |
 
-`fr_FR-tom-medium` was evaluated alongside the two fr_FR voices and removed (`docs/context/
+`fr_FR-tom-medium` was evaluated alongside the two fr_FR voices and removed (`docs/research/
 CHANGELOG.md`): real-hardware listening found it noticeably lower quality and slower to
 synthesize than either remaining fr_FR voice, with no offsetting benefit. `scripts/
 fetch_piper_voices.sh` no longer fetches it.
@@ -67,7 +67,7 @@ generic whitespace/punctuation cleanup, not French-keyed.
 
 ## Contract notes specific to this backend
 
-See the Phase B plan (`docs/context/CHANGELOG.md`, and `docs/gui/INTERCHANGEABLE_BACKENDS.md` for
+See the Phase B plan (`docs/research/CHANGELOG.md`, and `docs/research/INTERCHANGEABLE_BACKENDS.md` for
 the contract-gap writeup) for the full detail. In short:
 
 - Monolithic (`needs_vocoder: false`) — `tts()` writes a finished `audio_file.wav` directly to

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opt-in "commit to unattended kiosk boot" finalization for a Pi 5 already provisioned by
 # scripts/setup_pi.sh and verified per Bring-up_Integration_Test_Protocol_v0.1.md (T0-T7 green).
-# See docs/kiosk/KIOSK.md for what each step below does and how to undo it.
+# See docs/KIOSK.md for what each step below does and how to undo it.
 #
 # NOT part of setup_pi.sh's default flow -- run this manually, once, only when you're ready to
 # have the Pi boot straight into the kiosk GUI unattended (setup_pi.sh stays scoped to "get the
@@ -139,7 +139,7 @@ echo
 # 4. Verify getty@tty1 is enabled with the autologin override -- INVERTED from this step's
 # original cage/Wayland-era behavior (which disabled getty@tty1, since chatterbox-gui.service
 # used TTYPath=/dev/tty1 + PAMName=login to become the tty1 session directly). The current
-# deployment (deploy/xorg-kiosk/, docs/kiosk/KIOSK.md -- cage ruled out by a real libwlroots
+# deployment (deploy/xorg-kiosk/, docs/KIOSK.md -- cage ruled out by a real libwlroots
 # SIGSEGV on this hardware, 2026-07-31) needs the OPPOSITE: a real agetty --autologin session on
 # tty1 is what launches the GUI now (via .bash_profile -> startx -> .xinitrc), so getty@tty1 must
 # stay enabled. scripts/setup_pi.sh's step 9 already installs the autologin override and enables

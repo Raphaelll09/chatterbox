@@ -1,11 +1,11 @@
 # Chatterbox Reorg — Verification Protocol
 
-Purpose: close out the two things `docs/REORG_PROPOSAL.md` flags as owed — real interactive GUI
+Purpose: close out the two things `docs/research/history/REORG_PROPOSAL.md` flags as owed — real interactive GUI
 testing and Pi 5 hardware verification — plus a quick regression check anyone can run on a PC
 before trusting a fresh checkout. Run Part A first, always; run Part B once Pi 5 access exists.
 
-Record the outcome in `docs/context/CHANGELOG.md` (template at that file's top) and update
-`docs/REORG_PROPOSAL.md`'s status line once Part B has actually run — don't just mark it done from
+Record the outcome in `docs/research/CHANGELOG.md` (template at that file's top) and update
+`docs/research/history/REORG_PROPOSAL.md`'s status line once Part B has actually run — don't just mark it done from
 Part A alone.
 
 > **`--gui`, `--benchmark`, and `--p4-sweep` are mutually exclusive top-level modes, not composable
@@ -46,7 +46,7 @@ Run from the repo root, venv activated.
    sampler didn't run - e.g. non-Linux...)` note (expected on PC), `Wrote 11 sentence rows, 44
    stage rows`, and `Wrote 1 pass(es) to profile\run_.../exports\chatterbox_paste.xlsx`.
    Clean up the generated `profile/run_*`/`profile/latest` afterward — they're test scratch, not
-   meant to be committed (same reasoning as `docs/REORG_PROPOSAL.md` §4).
+   meant to be committed (same reasoning as `docs/research/history/REORG_PROPOSAL.md` §4).
 
 4. **GUI — actually click through it this time.** Nothing in the reorg's own verification ever
    drove the GUI interactively (no display was available). On a machine with one:
@@ -74,7 +74,7 @@ still missing.
 
 ## Part B — Raspberry Pi 5 hardware (the actual gap)
 
-This is the check `docs/REORG_PROPOSAL.md` §7 calls out as the one step that can't be waived — it's
+This is the check `docs/research/history/REORG_PROPOSAL.md` §7 calls out as the one step that can't be waived — it's
 the only thing that ever exercises the Pi-only code paths (the background sampler subprocess,
 PMIC/INA226 reads, GPIO/audio-device specifics) at all.
 
@@ -115,7 +115,7 @@ PMIC/INA226 reads, GPIO/audio-device specifics) at all.
 
 7. **Timing sanity check**: compare `--benchmark`'s per-sentence TTS/vocoder/denoise durations and
    overall RTF against a pre-reorg baseline run, if one exists (e.g. an entry in
-   `docs/context/CHANGELOG.md` from before 2026-07-20) — the reorg should not have changed
+   `docs/research/CHANGELOG.md` from before 2026-07-20) — the reorg should not have changed
    inference cost, only where the code lives.
 
 ---
@@ -123,8 +123,8 @@ PMIC/INA226 reads, GPIO/audio-device specifics) at all.
 ## Recording the result
 
 Once Part B has actually run on real hardware:
-- Append a `docs/context/CHANGELOG.md` entry (what ran, what passed, anything that didn't).
-- Update `docs/REORG_PROPOSAL.md`'s status line from "Windows-verified... Pi-unverified" to
+- Append a `docs/research/CHANGELOG.md` entry (what ran, what passed, anything that didn't).
+- Update `docs/research/history/REORG_PROPOSAL.md`'s status line from "Windows-verified... Pi-unverified" to
   reflect the real outcome.
 - If anything in Part B fails, that's a real, undiscovered gap from the reorg — file it the same
   way the reorg's own phases documented their discovered gaps (a §6-style risk note plus a

@@ -3,7 +3,7 @@
 """Audio playback -- platform branch (Windows: simpleaudio, falling back to sounddevice/soundfile;
 other platforms: a direct ffplay subprocess, see "Interruptible playback" below). Split out of
 audio_utils.py in Phase 3
-(docs/REORG_PROPOSAL.md). See docs/context/ARCHITECTURE.md "Platform-specific playback" -- keep
+(docs/research/history/REORG_PROPOSAL.md). See docs/ARCHITECTURE.md "Platform-specific playback" -- keep
 both paths in sync when editing.
 
 AUDIO_EXAMPLE holds the most recently synthesized clip so play_audio() can be called with no

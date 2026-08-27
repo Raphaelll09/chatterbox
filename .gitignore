@@ -6,12 +6,14 @@ __pycache__/
 audio_file.wav
 audio_file_duration_alignment.json
 
-# Ignore profiling subsystem output (per-run data, not source)
-profile/*.csv
-profile/*.jsonl
-profile/sampler.pid
-profile/exports/
-tools/monitoring/profiling/__pycache__/
+# Ignore LIVE profiling output. profile/ is scratch: every profiled run writes here
+# (config_tts.yaml -> profiling.output_dir). Committed historical runs live in
+# research/data/archive/ instead and are NOT covered by this rule.
+#
+# The previous patterns (profile/*.csv, profile/*.jsonl, ...) were one level short: they
+# matched only the top of profile/, never profile/<run>/..., which is how ~180 run files
+# ended up committed. Ignoring the whole directory is the fix.
+profile/
 
 # Ignore this AI-assistant tool's own knowledge-graph cache (build artifact, not project source)
 graphify-out/
@@ -39,6 +41,9 @@ assets/models/flaubert/flaubert_large_cased/
 assets/models/Piper/*.onnx
 assets/models/Piper/*.onnx.json
 assets/models/Piper/output/
+
+# Ignore AI-assistant session state
+.claude/
 
 # Ignore Virtual Env
 python3.11.1_embedded_tts/

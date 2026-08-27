@@ -6,7 +6,7 @@ must no-op instead of crashing on None.set(...) when actually pressed. No real T
 play_and_clear() itself is monkeypatched so this stays headless-safe like the rest of this suite;
 the full end-to-end check (gst_token_selection actually resolving to None through a real
 gui_generic_controls() call) is a scratch ad hoc Tk repro script, not a unit test here -- see
-docs/gui/INTERCHANGEABLE_BACKENDS.md's own stated reason for that split.
+docs/research/INTERCHANGEABLE_BACKENDS.md's own stated reason for that split.
 """
 import chatterbox.gui.keyboards as keyboards
 

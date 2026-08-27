@@ -1,9 +1,9 @@
 # Plain-Xorg kiosk fallback
 
-**Current default deployment path** — not the originally-finalized choice. `docs/kiosk/KIOSK.md`
+**Current default deployment path** — not the originally-finalized choice. `docs/KIOSK.md`
 documents `cage` (a Wayland kiosk compositor) as the compositor decision reached during the
 power/GUI workstream, and `deploy/systemd/chatterbox-gui.service` still reflects that choice. Real
-Pi5 hardware bring-up (2026-07-31, `docs/context/CHANGELOG.md`) found a reproducible SIGSEGV deep
+Pi5 hardware bring-up (2026-07-31, `docs/research/CHANGELOG.md`) found a reproducible SIGSEGV deep
 inside `libwlroots` (Raspberry Pi Foundation's own `0.18.2-3+rpt4` build), triggered by essentially
 any input event causing a seat/focus signal — confirmed via `coredumpctl`, backtrace bottoms out in
 `wl_signal_emit_mutable` inside `libwlroots-0.18.so`, not in any chatterbox code, `cage`'s own

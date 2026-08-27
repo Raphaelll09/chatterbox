@@ -1,7 +1,7 @@
 # Piper TTS backend — integration & evaluation summary
 
 This document is a narrative summary of the work covered in detail, session-by-session, in
-`docs/context/CHANGELOG.md` (search that file for "Piper") and `docs/gui/INTERCHANGEABLE_BACKENDS.md`
+`docs/research/CHANGELOG.md` (search that file for "Piper") and `docs/research/INTERCHANGEABLE_BACKENDS.md`
 §3. Read those two for exact file:line detail; read this one for the overall story and the final
 numbers. Written 2026-07-24.
 
@@ -17,7 +17,7 @@ energy-efficient than FS2+HiFi-GAN**, consistently, across both remaining voices
 ## 1. Why this happened
 
 The GUI/synthesis layer had already been refactored (a separate, earlier body of work — see
-`docs/gui/INTERCHANGEABLE_BACKENDS.md` §1-§2) to be backend-agnostic *in theory*: a new TTS engine
+`docs/research/INTERCHANGEABLE_BACKENDS.md` §1-§2) to be backend-agnostic *in theory*: a new TTS engine
 should plug in via its own module + a `config_tts.yaml` entry, with zero changes needed to
 `chatterbox/gui/app.py` or `chatterbox/synth.py`. That claim had never been tested against a real
 second backend. Piper was deliberately chosen to test it — maximally different from FS2 along
@@ -50,7 +50,7 @@ per-voice speaker maps instead of a shared `speakers.json`.
 Fixed with a small resolving proxy (`_BackendProxy` + `activate_tts_backend()`), reviewed and
 chosen over a self-registering alternative for explicitness. `chatterbox/synth.py` needed **zero**
 changes; `cli.py`/`gui/app.py` each got one new line activating the right backend before resolving
-`load_script`. Full write-up: `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3.1.
+`load_script`. Full write-up: `docs/research/INTERCHANGEABLE_BACKENDS.md` §3.1.
 
 ## 4. Real-hardware bugs found and fixed
 
@@ -169,9 +169,9 @@ Raw data: `profile/compare_fs2_siwis_upmc.csv` (gitignored, not committed — re
 
 ## 9. Key references
 
-- `docs/context/CHANGELOG.md` — search "Piper" for the full session-by-session log, in far more
+- `docs/research/CHANGELOG.md` — search "Piper" for the full session-by-session log, in far more
   file:line detail than this summary.
-- `docs/gui/INTERCHANGEABLE_BACKENDS.md` §3 — the contract-gap write-up (what the interchangeable-
+- `docs/research/INTERCHANGEABLE_BACKENDS.md` §3 — the contract-gap write-up (what the interchangeable-
   backend design got right vs. wrong, tested against a real second backend).
 - `chatterbox/synthesis/backends/piper/README.md` — voice provenance, licence, sha256.
 - `CLAUDE.md`'s "Interchangeable backends" section — the current, accurate narrative for anyone

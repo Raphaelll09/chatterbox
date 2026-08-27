@@ -48,7 +48,7 @@ class Recorder:
         self.durations = {}
         self.extra = {}
         # First-seen order of distinct stage names (Piper integration,
-        # docs/context/CHANGELOG.md) -- generalizes finalize()'s output beyond the 4 names it used
+        # docs/research/CHANGELOG.md) -- generalizes finalize()'s output beyond the 4 names it used
         # to hardcode (front_end/acoustic/vocoder/write), so a backend with a different stage
         # shape (e.g. Piper's "synth") isn't silently dropped. Repeated stage() calls for the same
         # name (the "§" case above) don't re-append -- self.durations/self.timestamps already

@@ -187,7 +187,7 @@ def _stage_windows(record):
     """Yields (stage_name, t_start, t_end) for every stage this record actually recorded, in
     first-seen order, each stage's start chained from the previous stage's end (first stage starts
     at t_synth_start) -- generalizes the fixed STAGES/_stage_window() pair above beyond FS2's own
-    4-name pipeline shape (Piper integration, docs/context/CHANGELOG.md; Recorder.finalize()'s
+    4-name pipeline shape (Piper integration, docs/research/CHANGELOG.md; Recorder.finalize()'s
     "stages" field, research/profiling/recorder.py).
 
     Falls back to the old fixed 4-stage chain for a record with no "stages" field at all --

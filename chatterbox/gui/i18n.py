@@ -5,7 +5,7 @@ hardcoded mix of French and English literals scattered across chatterbox/gui/app
 "Synthèse"/"Durée audio" next to "Speaker :"/"Pitch (semitones):") -- this module gives them one
 consistent home instead.
 
-"fr" and "en" are both populated (English Piper voice + live language menu, docs/context/
+"fr" and "en" are both populated (English Piper voice + live language menu, docs/research/
 CHANGELOG.md) -- the app-bar's "Langue" entry is a real submenu built from config_tts.yaml's
 GUI_config.languages, switching locale via set_locale() below and reloading the GUI window with
 that language's default TTS model (chatterbox/gui/app.py's create_gui()/_run_gui_session()).
@@ -36,7 +36,7 @@ STRINGS = {
         # predicted_duration = ... * d_control -- and Piper's length_scale share this same "higher
         # = slower" direction, confirmed by reading FS2's code, not assumed), which reads backwards
         # against the label's own name -- confirmed as real user confusion on Piper's slider
-        # (docs/context/CHANGELOG.md: default 1.0 sounds normal, the slider's top end sounds
+        # (docs/research/CHANGELOG.md: default 1.0 sounds normal, the slider's top end sounds
         # "super slow", easy to read as broken rather than just unlabeled direction). One shared
         # label fixes it for both backends without changing FS2's own behavior/values.
         "speed_label": "Vitesse (+ = plus lent) :",

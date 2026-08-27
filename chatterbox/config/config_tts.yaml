@@ -173,7 +173,7 @@ tts_models:
       enforce_linking_duration: True
 
   # Piper (fr_FR, piper-tts==1.5.0) -- monolithic text->wav backend, see
-  # chatterbox/synthesis/backends/piper/backend.py and docs/context/CHANGELOG.md. "backend" is a
+  # chatterbox/synthesis/backends/piper/backend.py and docs/research/CHANGELOG.md. "backend" is a
   # per-entry field (chatterbox/synthesis/registry.py's _BackendProxy) telling cli.py/gui/app.py
   # which concrete backend class to activate before resolving load_script -- omitted entirely on
   # the FastSpeech2 entry above, which defaults to "fastspeech2_hifigan".
@@ -219,7 +219,7 @@ tts_models:
     accepts_phoneme_input: false
     # audio_file_duration.npy (FastSpeech2's own per-symbol duration output, chatterbox/synth.py)
     # is not something Piper produces -- confirmed live via a real --benchmark --join run on the
-    # Pi (docs/context/CHANGELOG.md), which crashed with FileNotFoundError before this flag
+    # Pi (docs/research/CHANGELOG.md), which crashed with FileNotFoundError before this flag
     # existed. False disables the subtitle-writing path for this model regardless of the
     # top-level subtitles.create_file setting.
     supports_subtitles: false
@@ -233,7 +233,7 @@ tts_models:
       noise_w_scale: 0.8
       apply_custom_regex_rules: false
 
-  # "Piper fr_FR (tom, medium)" was removed after real-hardware evaluation (docs/context/
+  # "Piper fr_FR (tom, medium)" was removed after real-hardware evaluation (docs/research/
   # CHANGELOG.md): noticeably lower voice quality and slower inference than siwis/upmc, with no
   # offsetting benefit. assets/models/Piper/fr_FR-tom-medium.onnx(.json) removed too --
   # scripts/fetch_piper_voices.sh no longer fetches it.
@@ -264,7 +264,7 @@ tts_models:
       # prepend_leading_pause (real-hardware feedback: "on each prompt the first word/sound is
       # always mispronounced" -- English Piper only) had two attempted fixes, both abandoned as
       # of 2026-08-20 -- see chatterbox/synthesis/backends/piper/backend.py's own module comment
-      # and docs/context/CHANGELOG.md for the full investigation (a bare ". " prepend was a
+      # and docs/research/CHANGELOG.md for the full investigation (a bare ". " prepend was a
       # confirmed no-op; priming with a real word + cropping it back off was measurably worse
       # than doing nothing -- a real batch test with ASR transcription as ground truth showed the
       # un-primed baseline mispronounces only ~6% of the time, while the primed+crop path left an

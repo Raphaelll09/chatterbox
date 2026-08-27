@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Subtitle (.vtt) and duration-alignment (.json) file writers. Split out of audio_utils.py in
-Phase 3 (docs/REORG_PROPOSAL.md) -- no model state, just the synthesized text/duration arrays
+Phase 3 (docs/research/history/REORG_PROPOSAL.md) -- no model state, just the synthesized text/duration arrays
 syn_audio() already has in hand.
 """
 import codecs

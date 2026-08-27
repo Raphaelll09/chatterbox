@@ -1,5 +1,5 @@
 """Tests for chatterbox/synthesis/registry.py's _BackendProxy (Piper integration, Phase B step 1
--- see docs/context/CHANGELOG.md and the Phase B plan). Uses two fake backend classes with
+-- see docs/research/CHANGELOG.md and the Phase B plan). Uses two fake backend classes with
 colliding method names (tts/describe_controls, the same names every real backend defines) plus a
 uniquely-named method on only one of them (mirroring load_script's per-backend uniqueness), so the
 proxy's two-tier resolution rule is exercised without needing either real backend/any model

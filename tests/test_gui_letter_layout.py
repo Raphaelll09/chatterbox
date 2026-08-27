@@ -1,5 +1,5 @@
 """Tests for chatterbox/gui/app.py's AZERTY/QWERTY letter-layout data (Settings -> Advanced
-toggle, docs/context/CHANGELOG.md). Pure data checks only, no real Tk instance -- matches this
+toggle, docs/research/CHANGELOG.md). Pure data checks only, no real Tk instance -- matches this
 suite's existing no-real-Tk-instance style (see test_gui_keyboards.py/test_gui_worker.py)."""
 import chatterbox.gui.app as app
 

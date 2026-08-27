@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Noise reduction wrapper. Extracted from an inline block in audio_utils.py's syn_audio() in
-Phase 3 (docs/REORG_PROPOSAL.md) -- same noisereduce call, now a standalone function.
+Phase 3 (docs/research/history/REORG_PROPOSAL.md) -- same noisereduce call, now a standalone function.
 """
 import noisereduce as nr
 

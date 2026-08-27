@@ -3,7 +3,7 @@
 Read this when you need module-level detail beyond what's in the root `CLAUDE.md`. Not loaded
 automatically — read on demand.
 
-Reflects the repo layout after the 2026-07-20 reorganization (`docs/REORG_PROPOSAL.md`, Phases
+Reflects the repo layout after the 2026-07-20 reorganization (`docs/research/history/REORG_PROPOSAL.md`, Phases
 0–4). See that doc for the full rationale, the phase-by-phase history, and what's still owed
 (real interactive GUI testing, Pi 5 hardware verification — no Pi access was available during the
 reorg itself).
@@ -30,7 +30,7 @@ installing dependencies — there is no nested `embedded_tts/` subfolder inside 
     `_LazyFlaubertModel` proxy (`assets/models/FastSpeech2/utils/model.py`) and only actually
     loaded from disk on the first per-utterance call where a `<STYLE_TAG=...>` free-text tag is
     present in the input — deferred since that's the dominant cost of a fresh startup and the tag
-    is rarely used (see `docs/context/CHANGELOG.md` 2026-07-22 "Lazy-load FlauBERT").
+    is rarely used (see `docs/research/CHANGELOG.md` 2026-07-22 "Lazy-load FlauBERT").
 - `assets/audio/` — `reference/` (postprocessing before/after demo WAVs) and `prompts/` (on-screen
   keyboard phoneme WAVs, read by `chatterbox/gui/app.py`).
 
@@ -92,7 +92,7 @@ the reorg converted this into a single `FastSpeech2HifiGanBackend` instance
 The backend keeps its pre-reorg method names (`load_fastspeech2`, `syn_hifigan`, etc.) so
 `config_tts.yaml`'s `load_script`/`syn_script`/`gui_script` string-based dispatch needed zero
 changes — only what those strings resolve *against* changed (an object instead of a flat module).
-See `docs/REORG_PROPOSAL.md` §5 for the full interface design, including why there are two ABCs
+See `docs/research/history/REORG_PROPOSAL.md` §5 for the full interface design, including why there are two ABCs
 (`Synthesizer` for the acoustic model, `VocoderBackend` for the vocoder — `chatterbox/synthesis/
 base.py`) rather than one: TTS and vocoder are independently swappable today (separate GUI
 buttons), so a single bundled `load()` would break that.
@@ -135,7 +135,7 @@ names its own `load_script`/`syn_script` (methods on `registry.BACKEND`, dynamic
 reuses the existing `FastSpeech2HifiGanBackend` class means adding a config entry plus a
 `load_*`/`syn_*` method pair on that class; adding a genuinely new *kind* of backend (e.g.
 Matcha-TTS) means a new class implementing `chatterbox.synthesis.base.Synthesizer` and a new
-`chatterbox/synthesis/backends/<name>/` package — see `docs/REORG_PROPOSAL.md` §5 "How Matcha-TTS
+`chatterbox/synthesis/backends/<name>/` package — see `docs/research/history/REORG_PROPOSAL.md` §5 "How Matcha-TTS
 would slot in". `chatterbox/gui/app.py` reads `gui_script` similarly to render model-specific
 controls (e.g. `gui_fastspeech2`), and calls `registry.BACKEND.describe_controls()` for the speaker
 list instead of re-parsing config YAML directly (the leak mentioned above, now closed).
@@ -193,13 +193,13 @@ needed because the GUI's "Play" replay button is wired as a zero-argument Tkinte
 (`Path(__file__).resolve().parents[2]`, i.e. two levels up — this file lives at
 `chatterbox/config/paths.py`, so `parents[2]` is the repo root; **check this parent count first if
 the file ever moves again**, since an off-by-one here breaks every path in the module silently —
-this has already happened twice during the reorg, see `docs/REORG_PROPOSAL.md` §6), not the
+this has already happened twice during the reorg, see `docs/research/history/REORG_PROPOSAL.md` §6), not the
 process's current working directory. `chatterbox/synthesis/backends/fastspeech2_hifigan/backend.py`'s
 three `sys.path.insert` calls (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`, all under
 `assets/models/`), the same file's three regex-rule CSV paths (now under
 `chatterbox/synthesis/backends/fastspeech2_hifigan/rules/`), and
 `assets/models/FastSpeech2/utils/model.py`'s FlauBERT path all resolve through it, instead of bare
-CWD-relative strings — see `docs/REORG_PROPOSAL.md` §6/Phase 0 for why (a future package move only
+CWD-relative strings — see `docs/research/history/REORG_PROPOSAL.md` §6/Phase 0 for why (a future package move only
 needs `paths.py`'s constants updated, not every scattered path string). It also anchors
 `assets/audio/prompts/` (the on-screen keyboard's phoneme WAVs, `chatterbox/gui/app.py`'s
 `AUDIO_KEYBOARDS_DIR`). `do_tts.py` must still be launched with the repo as the working directory
@@ -211,7 +211,7 @@ Two config files inside `assets/models/FastSpeech2/config/ALL_corpus/` (`preproc
 committed) and historically hardcoded their own `"FastSpeech2/..."`-prefixed paths, predating the
 reorg's move to `assets/models/`. `backend.py`'s `_repoint_legacy_fastspeech2_config_paths()`
 remaps these in memory at load time, so a fresh download (from the unchanged archive) still works
-without hand-editing — see `docs/REORG_PROPOSAL.md` §6 for the full story.
+without hand-editing — see `docs/research/history/REORG_PROPOSAL.md` §6 for the full story.
 
 ## Profiling subsystem (research/profiling/)
 
@@ -346,7 +346,7 @@ Tests: `tests/test_benchmark.py` covers sentence loading and call ordering
 ## Power daemon (chatterbox/power/)
 
 Added 2026-07-21, per `chatterbox-powerd_spec_v0.1.md` (repo root) — full design/rationale there;
-day-to-day running/config/testing in `docs/power/POWERD.md`. Optional, Pi/Linux-only, a **separate
+day-to-day running/config/testing in `docs/POWERD.md`. Optional, Pi/Linux-only, a **separate
 process** from `do_tts.py` (unlike everything else in this file) communicating over a unix socket
 (`/run/chatterbox/powerd.sock`, newline-delimited JSON — `chatterbox/power/ipc.py`).
 
@@ -389,7 +389,7 @@ Windows. GPIO/backlight/evdev/systemd/halt behavior itself needs real Pi 5 hardw
 ## GUI refactor (chatterbox/gui/, chatterbox/synth.py)
 
 Added 2026-07-21, per `chatterbox_gui_spec_v0.1.md` (repo root) — full design there; day-to-day
-detail in `docs/gui/GUI.md`. Fixes the pre-refactor GUI running synthesis+playback directly on the
+detail in `docs/GUI.md`. Fixes the pre-refactor GUI running synthesis+playback directly on the
 Tk thread (freezing the window for the whole call, no `try/except` around it).
 
 - **Threading**: `chatterbox/gui/app.py`'s `on_speak()` (Tk thread) snapshots text/model-indices/
@@ -411,7 +411,7 @@ Tk thread (freezing the window for the whole call, no `try/except` around it).
 Tests: `tests/test_gui_{input,worker,settings}.py`, `tests/test_synth.py` — all headless/no-models
 (fake widgets, monkeypatched `synth.synthesize`/`playback.play_audio`). Unlike the power daemon
 task, this checkout has real pretrained weights, so two real-weights checks were actually run
-(not just written) while building this — see `docs/gui/GUI.md` "Testing": `synth.synthesize()`
+(not just written) while building this — see `docs/GUI.md` "Testing": `synth.synthesize()`
 called directly against loaded models, and a scripted `create_gui()` run with a `window.after(50,
 tick)` responsiveness probe running through a real synthesis+playback call (138 ticks, max gap
 77ms across a 5.37s call — direct, quantitative proof the Tk thread never blocked). Neither script
@@ -425,9 +425,9 @@ Compositor decision (open in the workstream README) is finalized: **cage** (Wayl
 Tk), matching `deploy/systemd/chatterbox-gui.service`. `apt-packages-pi.txt` gained `cage`+
 `xwayland`.
 
-**Superseded 2026-07-31** (real Pi5 hardware bring-up, `docs/context/CHANGELOG.md`): a
+**Superseded 2026-07-31** (real Pi5 hardware bring-up, `docs/research/CHANGELOG.md`): a
 reproducible `libwlroots` SIGSEGV with no fixed package available ruled cage back out — current
-default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/kiosk/KIOSK.md`). The description
+default is plain Xorg (`deploy/xorg-kiosk/README.md`, `docs/KIOSK.md`). The description
 below is left as the historical record of that 2026-07-21 decision, not the current mechanism.
 
 `scripts/kiosk_finalize.sh` is the one opt-in script (not part of `setup_pi.sh`'s default run —
@@ -438,14 +438,14 @@ which a stock getty on the same tty would otherwise race), tunes `config.txt`/`c
 (backed up per-file, idempotent per-line append, auto-detecting `/boot/firmware/` vs `/boot/`),
 and enables+starts both systemd units. Deliberately does **not** write EEPROM (`rpi-eeprom-config`
 is read-only-checked, never edited by tooling — same "boot-config edits carry brick risk" posture
-`INSTALL.md` already established for the powerd task). See `docs/kiosk/KIOSK.md`.
+`INSTALL.md` already established for the powerd task). See `docs/KIOSK.md`.
 
 ## Not yet implemented
 
 - A from-scratch backend without an `.AU` visual-animation channel (e.g. Matcha-TTS) would need
   `chatterbox/synth.py`'s `synthesize()` changed to not assume one unconditionally (reading
   `audio_file.AU`, visual smoothing, subtitle timing from `audio_file_duration.npy`) — flagged
-  during the Phase 3 reorg, not attempted speculatively; see `docs/REORG_PROPOSAL.md` §5.
+  during the Phase 3 reorg, not attempted speculatively; see `docs/research/history/REORG_PROPOSAL.md` §5.
 - The GUI's nav ring / `Action.NEXT`/`PREV`/`SELECT`/`BACK` — implemented and unit-tested, but
   nothing currently drives them interactively: `chatterbox/config/user_prefs.yaml`'s `switches: []`
   is empty (no physical switches wired/configured yet). `Action.KEY` similarly has nothing but the

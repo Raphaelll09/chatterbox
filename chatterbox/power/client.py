@@ -13,7 +13,7 @@ PC dev machine, or a Pi before powerd is set up).
 v0.1 scope note: if the initial connection fails, or an established connection drops, this client
 does not auto-reconnect -- it becomes a permanent no-op for the rest of the process (get_client()
 still returns the same, now-disabled, instance). A GUI/CLI restart is required to reconnect if
-powerd restarts mid-session. See docs/power/POWERD.md.
+powerd restarts mid-session. See docs/POWERD.md.
 """
 import asyncio
 import sys

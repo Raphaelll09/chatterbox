@@ -3,7 +3,7 @@
 **Status: All four phases implemented and §4's sign-off resolved (branch
 `reorg/phase-0-path-anchoring`, Windows-verified — see §7). The reorg described in this document is
 functionally complete**, pending the two things no session on this machine could ever resolve: real
-interactive GUI testing and Pi 5 hardware verification. **See `docs/REORG_VERIFICATION.md` for the
+interactive GUI testing and Pi 5 hardware verification. **See `docs/research/history/REORG_VERIFICATION.md` for the
 concrete checklist to close those out** — run its Part A now on any PC as a regression check, and
 its Part B the moment Pi 5 access exists. Every phase in §7 uses `git mv` on this dedicated branch
 when executed, each with its own validation checkpoint. Every phase surfaced real gaps invisible to
@@ -50,7 +50,7 @@ The repo has **no nested `embedded_tts/` folder** — this directory *is* the wo
 vendored model repos (`FastSpeech2/`, `hifi-gan-master/`, `Waveglow/`) and one vendored weights
 folder (`flaubert/`) sit alongside a thin orchestration layer of eight root-level `.py` files,
 wired together through **module-level globals** (`loading_modules.py`, `tts_utils.py`) rather than
-passed objects — see `docs/context/ARCHITECTURE.md` "Global-state loading pattern."
+passed objects — see `docs/ARCHITECTURE.md` "Global-state loading pattern."
 
 ### Entry points
 
@@ -243,7 +243,7 @@ apt-packages-pi.txt
 | Old path | New path | Action | Note |
 |---|---|---|---|
 | `README.md, INSTALL.md, CLAUDE.md` | (unchanged) | keep in place | update path references inside them (§6) |
-| `docs/context/*` | (unchanged) | keep in place | content updated for new layout |
+| `docs/research/*` | (unchanged) | keep in place | content updated for new layout |
 | `tts_gui.png` | `docs/assets/tts_gui.png` | move | only image actually referenced by README |
 | `requirements-dev.txt, requirements-pi.txt, apt-packages-pi.txt` | (unchanged) | keep in place | see "where I disagree," above |
 | `requirements.txt, minimal_requirements.txt` | (unchanged) | keep in place, **flag** | both already self-documenting as deprecated; candidates to delete outright once you're comfortable losing the training-env reference — your call, not done here |
@@ -311,7 +311,7 @@ code-vs-non-code test as `assets/models/`.
 current tree. Reserved per Goal 5 for when the open-source hardware release happens; flagged as
 aspirational so it isn't mistaken for an oversight in the mapping table.
 
-**`docs/` & `scripts/`** — Unchanged in spirit — `docs/context/` already does exactly what Goal 5
+**`docs/` & `scripts/`** — Unchanged in spirit — `docs/research/` already does exactly what Goal 5
 asks. Added `docs/assets/` for the one image the README actually embeds.
 
 **Root-level files** — `README.md`/`INSTALL.md`/`CLAUDE.md`/requirements files/`do_tts.py` shim stay
@@ -591,7 +591,7 @@ blocks in §2 — that recommendation now stands as a **lower-effort default**, 
 
 ### Context-file & CLI-contract drift
 
-Every path reference in `CLAUDE.md`, `docs/context/ARCHITECTURE.md`, `README.md`, and `INSTALL.md`
+Every path reference in `CLAUDE.md`, `docs/ARCHITECTURE.md`, `README.md`, and `INSTALL.md`
 needs updating in the same commit as the move it describes — same discipline the "Maintenance
 rules" section of `CLAUDE.md` already mandates for ordinary changes, just at reorg scale. The
 `do_tts.py` CLI contract itself (every flag listed in the repo map: `--benchmark`, `--profile`,
@@ -703,7 +703,7 @@ hand-edit) is what makes it work. **Pi 5 hardware verification is owed, not avai
   finding on `_PACKAGE_ROOT` below, a second bug in the same function this string lives in.
 - [x] Updated the self-referential `python -m profiling.…` usage strings inside the moved files'
   own docstrings/comments/error messages (`calibrate.py`, `join.py`, `sampler.py`,
-  `export_to_xlsx.py`, `p4_sweep.py`) — left `README.md`/`docs/context/ARCHITECTURE.md`'s much
+  `export_to_xlsx.py`, `p4_sweep.py`) — left `README.md`/`docs/ARCHITECTURE.md`'s much
   larger Profiling/Benchmark sections alone, since a full rewrite there is Phase 4's batched
   doc-consistency pass, not a one-line fix like these.
 
@@ -820,7 +820,7 @@ the top of §7).
 - [x] Created `hardware/.gitkeep`.
 - [x] Rewrote `CLAUDE.md`'s repo map (done in Phase 3, since it's auto-loaded every session and a
   stale map there has an ongoing cost — verified accurate again now), a full rewrite of
-  `docs/context/ARCHITECTURE.md` (deferred until now as planned — every module path, function
+  `docs/ARCHITECTURE.md` (deferred until now as planned — every module path, function
   name, and stale `profiling/`/`benchmark/`/`FastSpeech2/` reference updated, technical substance
   preserved), and `README.md`'s path-bearing lines (Google Drive install targets, the `tts_gui.png`
   link, every `profiling/`/`benchmark/`/`audio_utils.py` mention in the French user docs).

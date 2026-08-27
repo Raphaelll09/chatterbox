@@ -597,7 +597,7 @@ _LETTER_ROWS_AZERTY = [
     # feedback: essential for French (l'..., qu'..., aujourd'hui, ...)
 ]
 
-# QWERTY alternative (English Piper voice + live language switch, docs/context/CHANGELOG.md) --
+# QWERTY alternative (English Piper voice + live language switch, docs/research/CHANGELOG.md) --
 # same 3-row shape as AZERTY above (so the control row below stays at a fixed grid position
 # regardless of which layout is active), same trailing comma/period/apostrophe.
 _LETTER_ROWS_QWERTY = [
@@ -795,7 +795,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # shorter than a too-small configured height, a window manager's
     # default placement centers a too-tall window, pushing roughly half its height (including the
     # title bar and its maximize/close controls) above the visible screen entirely -- confirmed
-    # live on the Pi in landscape (docs/context/CHANGELOG.md): unreachable window, no way to even
+    # live on the Pi in landscape (docs/research/CHANGELOG.md): unreachable window, no way to even
     # get to Settings to test anything else.
     #
     # First attempt pinned the window at +0+0 exactly filling the screen -- wrong: .geometry("WxH")
@@ -813,7 +813,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # a fallback for that case, not deleted.
     # Always compute and apply the explicit, screen-matching geometry as a baseline -- not only
     # in the TclError except branch below. Real-hardware finding (plain-Xorg-without-a-WM
-    # fallback, docs/kiosk/KIOSK.md): '-zoomed' can "succeed" from Tk's own point of view (no
+    # fallback, docs/KIOSK.md): '-zoomed' can "succeed" from Tk's own point of view (no
     # TclError) even with literally no window manager present to actually enforce the maximize --
     # unlike cage, which acts as a minimal WM/compositor for its one client, a bare `startx`
     # session run with no WM at all leaves the window at Tk's natural widget-sizing default,
@@ -866,8 +866,8 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # '-fullscreen' (EWMH _NET_WM_STATE_FULLSCREEN), in ADDITION to '-zoomed' above, not instead
     # of it -- real-hardware question (not yet tested): "once the Pi5 runs Pi OS Lite, will the
     # GUI adapt to the full screen?" '-zoomed' asks a WM to "maximize" a window, a genuinely
-    # desktop-WM concept (biggest a normal, still-decorated window can be); cage (docs/kiosk/
-    # KIOSK.md) is a minimal, chrome-less kiosk compositor with no desktop to maximize within, and
+    # desktop-WM concept (biggest a normal, still-decorated window can be); cage (docs/KIOSK.md) is a
+    # minimal, chrome-less kiosk compositor with no desktop to maximize within, and
     # may simply not implement/honor that EWMH state at all -- Tk wouldn't necessarily raise
     # TclError for that (the attribute call can "succeed" from Tk's own point of view even if the
     # compositor silently ignores the underlying hint), so this wasn't caught by the try/except
@@ -1243,7 +1243,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         """Backgrounded (landscape-refactor session) -- this used to call loading_script()
         synchronously on the Tk thread, freezing the whole GUI for however long the model takes to
         load (a few seconds for FastSpeech2's checkpoint, confirmed by the startup-latency work's
-        own timing notes -- docs/context/CHANGELOG.md). That was tolerable while this was buried in
+        own timing notes -- docs/research/CHANGELOG.md). That was tolerable while this was buried in
         Settings -> Advanced (a rare, deliberate action); promoting TTS Model switching to a
         first-class top-level menu (this phase) means users hit it far more often, so the freeze
         is no longer acceptable. Mirrors the exact background-load pattern already proven for
@@ -1308,7 +1308,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         here are 1-based, matching select_model_from_list()'s existing convention).
 
         Picker buttons wrap after _MODEL_BUTTONS_PER_ROW instead of growing one unbroken row per
-        model (Piper integration, docs/context/CHANGELOG.md: 4 tts_models entries -> 5 once Piper's
+        model (Piper integration, docs/research/CHANGELOG.md: 4 tts_models entries -> 5 once Piper's
         3 voices were added, up from FS2's original 1 -- a single row of long text-labeled buttons
         ("Piper fr_FR (upmc, medium)") grew wider than the actual kiosk screen. settings.py's
         scroll_canvas sizes itself to content's *natural* width with no cap of its own (unlike its
@@ -1411,7 +1411,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                     command=lambda c=lang_option["code"]: _set_gui_language(c),
                 ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
 
-    # Startup default load (phase 2 of the startup-latency work -- see docs/context/CHANGELOG.md
+    # Startup default load (phase 2 of the startup-latency work -- see docs/research/CHANGELOG.md
     # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
     # (still synchronous -- fine for a deliberate, rare Settings -> Advanced click), the *default*
     # load at startup used to run right here, blocking every widget below this line -- and
@@ -1909,7 +1909,7 @@ def select_model_from_list(id_button, list_buttons):
 def get_gui_controls():
     """Returns a dict keyed by control "key" (interchangeable-backend GUI refactor -- was a fixed
     12-element positional list, too fragile for a different backend to conform to; see
-    docs/context/CHANGELOG.md). "speaker" comes from the dedicated speaker dropdown (built outside
+    docs/research/CHANGELOG.md). "speaker" comes from the dedicated speaker dropdown (built outside
     the generic control loop, since it's the one control every backend will plausibly have); every
     other entry comes from _generic_control_widgets, populated by gui_generic_controls() from the
     active backend's describe_controls()["controls"]."""
@@ -2109,7 +2109,7 @@ def _build_emotion_bar_control(parent_frame, control):
 
 def gui_generic_controls(tts_config, main_panel_config):
     """Renders the model-options panel from the active backend's describe_controls() (renamed
-    from gui_fastspeech2() -- interchangeable-backend GUI refactor, see docs/context/CHANGELOG.md)
+    from gui_fastspeech2() -- interchangeable-backend GUI refactor, see docs/research/CHANGELOG.md)
     instead of hand-building FS2-specific widgets: a speaker dropdown (if describe_controls()
     returns a non-empty speaker_list) plus one widget per describe_controls()["controls"] entry,
     dispatched by "type". Collects every widget into _generic_control_widgets so get_gui_controls()
@@ -2123,7 +2123,7 @@ def gui_generic_controls(tts_config, main_panel_config):
     global _sliders_window
 
     # Reset both compat globals at the top of every call, not just their module-level initial
-    # values -- Piper integration finding (docs/context/CHANGELOG.md): FS2 is always today's
+    # values -- Piper integration finding (docs/research/CHANGELOG.md): FS2 is always today's
     # startup default, so speaker_selection/gst_token_selection become real Tk variables the
     # first time this runs; without an explicit reset here, switching to a backend that declares
     # neither "style" nor a non-empty speaker_list (e.g. Piper's siwis voice) left both

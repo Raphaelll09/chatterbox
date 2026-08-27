@@ -105,7 +105,7 @@ def prepare(text_to_syn, tts_config):
     # tts's bundled espeak-ng silently discards a bare leading "." with nothing before it), and a
     # follow-up fix attempt in backend.py (priming with a real leading word, then cropping it back
     # off) was also abandoned after real statistical testing showed it made things worse, not
-    # better. See docs/context/CHANGELOG.md's 2026-08-20 entries and backend.py's own module
+    # better. See docs/research/CHANGELOG.md's 2026-08-20 entries and backend.py's own module
     # comment for the full investigation -- no working fix exists yet, this function stays a pure
     # text transform with nothing prepended.
     return text_to_syn, speaker_name

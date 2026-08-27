@@ -1,6 +1,6 @@
 # chatterbox-powerd systemd unit (chatterbox-powerd_spec_v0.1.md Sec8).
 #
-# Installed by scripts/setup_pi.sh into /etc/systemd/system/ -- see docs/power/POWERD.md.
+# Installed by scripts/setup_pi.sh into /etc/systemd/system/ -- see docs/POWERD.md.
 #
 # Deviates from the literal spec in one way: ExecStart/WorkingDirectory point at the venv
 # scripts/setup_pi.sh actually creates (~/chatterbox/venv), not /usr/bin/python3 -- the system

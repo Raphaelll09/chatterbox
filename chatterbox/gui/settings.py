@@ -178,7 +178,7 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # (still true -- see the width/height cap further down, which only clamps an oversized
     # request, it doesn't force a fixed size).
     #
-    # *Position* is set explicitly, though (Piper integration, docs/context/CHANGELOG.md): left
+    # *Position* is set explicitly, though (Piper integration, docs/research/CHANGELOG.md): left
     # unset, a Toplevel's default placement is decided by the WM -- confirmed live on the Pi in
     # landscape, that default centered the dialog vertically in a way that pushed its own title
     # bar off-screen (the same class of bug as the main window's -- see create_gui()'s own
@@ -206,7 +206,7 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # itself never scrolls, so it's always visible regardless of how tall the field area gets.
     #
     # Horizontal scrollbar added alongside the pre-existing vertical one (Piper integration,
-    # docs/context/CHANGELOG.md): the "Avancé" TTS/vocoder picker row can grow wider than the
+    # docs/research/CHANGELOG.md): the "Avancé" TTS/vocoder picker row can grow wider than the
     # screen (app.py's _build_advanced_settings() now wraps it, the actual fix for that specific
     # case) -- but width had no cap or scroll mechanism of its own at all before this, unlike
     # height a few lines below, so ANY future content wider than the screen would still open a
@@ -380,7 +380,7 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
     # only; width had no cap at all until the Piper integration's "Avancé" TTS/vocoder picker row
     # grew wide enough to trigger the exact same class of bug for width (confirmed live on the Pi
     # in landscape: the whole dialog opened wider than the screen, its own title bar/close button
-    # unreachable since it's modal -- docs/context/CHANGELOG.md). If content fits within the
+    # unreachable since it's modal -- docs/research/CHANGELOG.md). If content fits within the
     # screen on either axis, the canvas just matches it exactly (no dead scroll space, no visible
     # scrollbar-for-nothing) -- same behavior as before on the axis that already had a cap.
     content.update_idletasks()

@@ -1,5 +1,5 @@
 """Tests for chatterbox/gui/i18n.py's locale switch (English Piper voice + live language menu,
-docs/context/CHANGELOG.md). The most valuable check here is key parity: STRINGS["en"] must define
+docs/research/CHANGELOG.md). The most valuable check here is key parity: STRINGS["en"] must define
 every key STRINGS["fr"] does, so a forgotten translation fails loudly here instead of surfacing as
 a KeyError deep inside a real GUI session (t() deliberately never swallows a missing key)."""
 import pytest
