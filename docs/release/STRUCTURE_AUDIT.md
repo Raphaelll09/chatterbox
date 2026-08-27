@@ -1,7 +1,10 @@
 # Chatterbox — Structure Audit (pre-open-source release)
 
 **Audit date:** 2026-08-17
-**Commit audited:** `c8a0a2e` (branch `reorg/phase-0-path-anchoring`, working tree clean)
+**Commit audited:** the tip of `reorg/phase-0-path-anchoring`, working tree clean — tagged
+`pre-release-audit`. (An earlier draft of this line named `c8a0a2e`; that was a misread of the log,
+and in any case every SHA below that tag was rewritten on 2026-08-27 by a mailmap history rewrite.
+Use the tag, not a SHA.)
 **Scope:** read-only inventory of the repository as it actually exists. No file was created, moved,
 renamed, deleted or edited to produce this document, and no state-modifying git command was run.
 
