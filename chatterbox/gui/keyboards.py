@@ -29,12 +29,14 @@ keys = {
 }
 
 def play_and_clear(args):
-    # args[0] (TTS_CONFIG) is unused now -- SPEAK reads chatterbox.gui.app.TTS_CONFIG itself --
-    # kept in the signature so the keys["Emmanuelle"] table's arg lists don't need reshaping.
+    # Name kept for the keys["Emmanuelle"] table and tests/test_gui_keyboards.py, but this no
+    # longer clears the chatbox (real-hardware feedback: clearing on ▶ wiped the phrase so the
+    # user couldn't replay it, and behaved differently from the "Synthèse" button and the Texte
+    # keyboard's own ▶ -- neither of which clear). Explicit clearing stays on the "C" key
+    # (clear()) and the "/" key (suppr()). args[1:] (ent_text_input, entry_text_keyboard) are now
+    # unused; left in the table's arg lists so play_and_clear_with_style()'s args[0:3] slicing
+    # doesn't need reshaping.
     app.dispatch(ginput.Action.SPEAK)
-    args[1].delete(0, 'end')
-
-    clear(args[1:3])
 
 def play_and_clear_with_style(args):
     # args[3] (gst_token_selection) is None when the active backend declares no "style" control

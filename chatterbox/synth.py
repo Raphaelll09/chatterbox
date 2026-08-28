@@ -56,7 +56,7 @@ def butter_lowpass_filter(data, cutoff, fs, order):
 
 
 def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
-               sentence_id=None, complexity_tag=None):
+               sentence_id=None, complexity_tag=None, phon_input=False):
     """Text -> mel (FastSpeech2) -> wav (HiFi-GAN) -> denoise/postprocess/visual-smoothing ->
     subtitles written to disk -> playback.AUDIO_EXAMPLE set. Returns None for empty/whitespace-only
     input (nothing to do, same as the pre-refactor early return), otherwise an AudioResult.
@@ -65,13 +65,22 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     these explicitly (a snapshot of chatterbox.state.TTS_INDEX/VOCODER_INDEX taken by the caller
     before starting any worker thread) rather than reading the state globals in here, so a model
     switch mid-synthesis on another thread can't change which model an in-flight call uses.
-    """
-    if tts_config["GUI_config"]["online_phon_input"]:
-        text = "{{{}}}.".format(text)
 
+    phon_input wraps the whole line in {curly braces} so FastSpeech2 reads it as phonemes rather
+    than orthographic text (assets/models/FastSpeech2/text/__init__.py only treats a run as
+    phonemes inside braces). The GUI sets it per synthesis when its on-screen keyboard is in
+    "Phonèmes" mode (chatterbox/gui/app.py:on_speak()); GUI_config.online_phon_input is the older
+    config-wide equivalent, still honoured for a phoneme-only detached keyboard. Without either,
+    the phoneme keyboard's raw codes ("s^ y u") are spoken letter by letter.
+    """
     text = text.strip(' ')
     if not text:
         return None
+
+    # Done after the empty-input guard above so "" / "   " still returns None rather than becoming
+    # "{}." and running the full pipeline on nothing.
+    if phon_input or tts_config["GUI_config"]["online_phon_input"]:
+        text = "{{{}}}.".format(text)
 
     _punctuation = list("[]§«»¬~!'(),.:;?#")
     if text[0] not in _punctuation:

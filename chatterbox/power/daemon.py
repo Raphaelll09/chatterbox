@@ -13,6 +13,7 @@ loop; gpiozero's switch callbacks run on gpiozero's own thread and are bridged i
 call_soon_threadsafe (chatterbox/power/inputs.py). Linux/Pi-only -- refuses to start elsewhere.
 """
 import asyncio
+import glob
 import signal
 import sys
 
@@ -23,6 +24,48 @@ from . import config as power_config
 from . import fsm as fsm_mod
 from . import inputs as inputs_mod
 from . import ipc as ipc_mod
+
+_GOVERNOR_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+
+
+def _write_governor(name):
+    """Best-effort CPU-governor swap for DOZE/wake (powerd runs as root -- see
+    deploy/systemd/chatterbox-powerd.service). Per-node try/except: a board without cpufreq, or one
+    CPU offline, must not take the daemon down."""
+    nodes = glob.glob(_GOVERNOR_GLOB)
+    if not nodes:
+        return
+    for node in nodes:
+        try:
+            with open(node, "w") as f:
+                f.write(name)
+        except OSError as exc:
+            print("[powerd] governor {} <- {!r} failed: {}".format(node, name, exc), file=sys.stderr)
+
+
+def _make_doze_hooks():
+    """Returns (doze_fn, resume_fn) for PowerFSM. doze_fn drops the CPU to `powersave` on entering
+    DOZE (the resident idle state); resume_fn restores whatever governor was active at daemon
+    start (falling back to `ondemand`, and never restoring to `powersave` itself). Kept here, not
+    in fsm.py, so that module stays hardware/sysfs-free and unit-testable."""
+    original = "ondemand"
+    nodes = glob.glob(_GOVERNOR_GLOB)
+    if nodes:
+        try:
+            with open(nodes[0]) as f:
+                current = f.read().strip()
+            if current and current != "powersave":
+                original = current
+        except OSError:
+            pass
+
+    def doze_fn():
+        _write_governor("powersave")
+
+    def resume_fn():
+        _write_governor(original)
+
+    return doze_fn, resume_fn
 
 
 async def _tick_loop(fsm):
@@ -66,7 +109,9 @@ async def run(config_path=None):
         fsm.set_config(new_cfg)
         print("[powerd] config reloaded from {}".format(config_path))
 
-    fsm = fsm_mod.PowerFSM(cfg, backlight, amplifier, _broadcast, _halt, reload_fn=_reload)
+    doze_fn, resume_fn = _make_doze_hooks()
+    fsm = fsm_mod.PowerFSM(cfg, backlight, amplifier, _broadcast, _halt, reload_fn=_reload,
+                           doze_fn=doze_fn, resume_fn=resume_fn)
 
     server = ipc_mod.PowerdServer(cfg["socket"]["path"], cfg["socket"]["group"], fsm)
     server_ref["server"] = server

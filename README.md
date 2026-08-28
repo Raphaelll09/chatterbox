@@ -250,8 +250,10 @@ landscape, and runs synthesis on a worker thread so the interface never freezes.
 
 ### Layout
 
-- **App bar** — model, language, theme, tools and settings menus, status light, battery percentage,
-  and a "put away" button that sends the device to sleep.
+- **App bar** — model, language, theme, tools and settings menus, status light, battery percentage.
+  There is no on-screen power button: the device dims, then blanks, then goes to a resumable
+  low-power sleep on its own after the idle timers; full power-off for storage is the Pi's hardware
+  button.
 - **Text area** — what will be spoken. Can be hidden via *Tools → Show input area* for users who
   only use the keyboard.
 - **Keyboard area** — a segmented control switches between:
@@ -260,8 +262,10 @@ landscape, and runs synthesis on a worker thread so the interface never freezes.
   - **Phonèmes** — the "Emmanuelle" phonetic keyboard, for precise pronunciation control. Only
     FastSpeech 2 understands it; with a Piper model selected the GUI falls back per
     `GUI_config.phoneme_fallback` (`translate_labels` by default — keys insert their plain-French
-    label instead of the raw phone code).
-  - The **▶ button** on the keyboard triggers synthesis and playback (and replay).
+    label instead of the raw phone code). In this mode the line is wrapped in `{…}` for FastSpeech 2
+    automatically — you don't type the braces.
+  - The **▶ button** on the keyboard triggers synthesis and playback. It leaves the text in place,
+    so pressing it again replays the phrase; clear with the **C** / **Tout effacer** keys.
 - **Emotion bar** — for FastSpeech 2, the 12 named styles as emoji chips; four unnamed tokens hide
   behind an "advanced" toggle. Absent for Piper, which has no styles.
 - **Sliders** — *Tools → Synthesis sliders* opens speed, pitch, energy and the bias controls. Which
@@ -275,7 +279,7 @@ landscape, and runs synthesis on a worker thread so the interface never freezes.
 | **Langue** | Switches interface language **and** loads the matching model. Restarts the window. |
 | **Thème** | Light/dark. Currently a stub — only one theme table exists. |
 | **Outils** | Show/hide the input area; open the synthesis sliders. |
-| **Réglages** | Power timers, brightness, and an *Avancé* section with the TTS/vocoder pickers, the letter-keyboard layout, screen orientation, and a separate **interface language** setting — so you can run the English voice with a French interface. |
+| **Réglages** | Power timers, brightness, and an *Avancé* section with the TTS/vocoder pickers, the letter-keyboard layout, a separate **interface language** setting (run the English voice with a French interface), and **Maintenance** buttons that open a terminal / the Wi-Fi setup (`nmtui`) on the kiosk screen. |
 
 Model changes in *Réglages → Avancé* apply immediately; power settings need **Enregistrer**.
 
@@ -326,13 +330,15 @@ normal behaviour when it is not running.
 ### States
 
 ```
-ACTIVE ──30s──► DIM ──180s──► DARK ──1200s──► DEEP
-  full          backlight     backlight        halt
-  brightness    dimmed        off, amp off
+ACTIVE ──30s──► DIM ──180s──► DARK ──1200s──► DOZE          DEEP
+  full          backlight     backlight        screen+amp    systemctl halt
+  brightness    dimmed        off, amp off     off, CPU      (PUT_AWAY only,
+                                               powersave      no GUI button)
 ```
 
-Any touch, keypress or physical switch returns to ACTIVE. The "put away" button jumps straight to
-DEEP.
+Any touch, keypress or physical switch returns to ACTIVE. `DOZE` is resident and wakes instantly.
+The idle timer never halts — `DEEP` (`systemctl halt`) is only reached by the `PUT_AWAY` command
+(e.g. a physical switch); there is no on-screen power button.
 
 ### Running it
 
@@ -348,8 +354,8 @@ Reloaded on `SIGHUP`; the GUI's settings screen writes it atomically and signals
 
 | Key | Default | Meaning |
 |---|---|---|
-| `power.t_dim_s` / `t_dark_s` / `t_deep_s` | 30 / 180 / 1200 | Idle seconds before each state. `t_deep_s: 0` or `null` disables the halt backstop. |
-| `power.deep_manual_only` | `false` | If true, only "put away" reaches DEEP — never the timer. |
+| `power.t_dim_s` / `t_dark_s` / `t_deep_s` | 30 / 180 / 1200 | Idle seconds before DIM / DARK / DOZE. `t_deep_s: 0` or `null` leaves DARK as the deepest idle state. |
+| `power.deep_manual_only` | `false` | If true, the idle timer stops at DARK — nothing reaches DOZE automatically. Hand-edit only (no GUI control). |
 | `display.backlight` | `auto` | sysfs node name, or auto-detect. |
 | `display.brightness_active` / `brightness_dim` | 255 / 60 | Clamped to `[1, max]` — never 0, which means "dimmest", not "off". |
 | `amp.sd_pin` | 23 | GPIO controlling the amplifier shutdown line. |

@@ -10,6 +10,8 @@ import os
 import json
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -139,6 +141,13 @@ speaker_selection = None
 # globals()["gst_token_selection"] lookup for those keys finds a name (just unusable/None) instead
 # of a KeyError; those keys would then no-op rather than crash if actually pressed.
 gst_token_selection = None
+
+# The Texte/Phonèmes segmented toggle's StringVar ("text" / "phonemes"), exposed at module level
+# (same rebindable-global pattern as gst_token_selection above) so on_speak() can tell whether the
+# current line is phoneme codes and needs {curly-brace} wrapping before synthesis. Stays None when
+# there's no embedded keyboard toggle at all (add_keyboard: False, or detach_keyboard: True) -- in
+# which case on_speak() falls back to GUI_config.online_phon_input like before.
+keyboard_mode = None
 
 # UI thread-marshaling (chatterbox_gui_spec_v0.1.md Sec2.1): the ONE queue shared by worker-thread
 # results (synthesis/playback done, warm-up done) AND powerd-forwarded socket events -- Tk is only
@@ -362,22 +371,31 @@ def on_speak():
         return
     tts_idx, voc_idx = state.TTS_INDEX, state.VOCODER_INDEX
     gui_control = get_gui_controls()
+    # Phonèmes mode -> the line is raw phone codes ("s^ y u"); tell synthesize() to wrap it in
+    # {curly braces} so FastSpeech2 reads it as phonemes and not letters. Only when the active
+    # model actually understands phone codes (_accepts_phoneme_input) -- for a model that doesn't
+    # (Piper) the keyboard already inserts plain-French labels via _keyboard_emit(), which must
+    # NOT be brace-wrapped. keyboard_mode is None when there's no embedded toggle.
+    phon_input = (keyboard_mode is not None and keyboard_mode.get() == "phonemes"
+                  and _accepts_phoneme_input)
 
     busy = True
     _set_ui_state("synthesising")
     _set_action_buttons_state("disabled")
     _power_client.send_activity()
-    threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control), daemon=True).start()
+    threading.Thread(target=_work, args=(text, tts_idx, voc_idx, gui_control, phon_input),
+                     daemon=True).start()
 
 
 def _set_action_buttons_state(tk_state):
     btn_syn_audio.config(state=tk_state)
 
 
-def _work(text, tts_idx, voc_idx, gui_control):
+def _work(text, tts_idx, voc_idx, gui_control, phon_input=False):
     """Worker thread -- NO Tk calls. All UI updates go through post()."""
     try:
-        result = synth.synthesize(text, tts_idx, voc_idx, TTS_CONFIG, gui_control=gui_control)
+        result = synth.synthesize(text, tts_idx, voc_idx, TTS_CONFIG, gui_control=gui_control,
+                                  phon_input=phon_input)
     except Exception as exc:  # noqa: BLE001 -- any synthesis failure must show as the GUI's
         # "error" state, never crash the process (spec Sec7).
         post(lambda exc=exc: _fail(exc))
@@ -483,6 +501,59 @@ def _toggle_settings():
 
 def _show_about():
     messagebox.showinfo(i18n.t("about_title"), i18n.t("about_body"))
+
+
+def _spawn_on_display(argv):
+    """Best-effort launch of a maintenance helper on the kiosk X display (bare Xorg :0, no window
+    manager -- real-hardware feedback: no shell access for Wi-Fi/network upkeep). Tries each argv
+    in turn, returns True on the first that spawns. Never raises -- a missing binary or a launch
+    error is logged and the next candidate is tried."""
+    for candidate in argv:
+        if shutil.which(candidate[0]) is None:
+            continue
+        env = dict(os.environ)
+        env.setdefault("DISPLAY", ":0")
+        try:
+            subprocess.Popen(candidate, env=env)
+            return True
+        except OSError as exc:
+            print("[gui] could not launch {}: {}".format(candidate, exc), file=sys.stderr)
+    print("[gui] no usable terminal emulator found (tried {})".format(
+        ", ".join(c[0] for c in argv)), file=sys.stderr)
+    return False
+
+
+# The kiosk is bare Xorg with no window manager -- a window has no title bar and no close button,
+# and a fixed +offset geometry can (and did, on the 800x480 DSI panel) land the window partly
+# off-screen with no way to drag it back. `-maximized` makes xterm size itself to the whole screen
+# at (0,0) with no WM involved (measured: exactly 800x480+0+0). Closing is done from inside: nmtui
+# ends on its own "Quit"; the plain shell ends on `exit` (the confirm dialog spells that out).
+_XTERM_BASE = ["xterm", "-maximized", "-fa", "DejaVu Sans Mono", "-fs", "9", "-T", "Maintenance"]
+# Shown at the top of the plain-terminal shell so whoever opened it knows how to get out again.
+_TERMINAL_HINT = ("echo; echo '  >>  Tapez  exit  puis Entree pour fermer cette fenetre  <<'; "
+                  "echo; exec bash -l")
+
+
+def _open_maintenance_terminal():
+    """Settings -> Advanced "Terminal" button (Linux/kiosk only). Confirms first so an AAC user
+    can't drop into a shell by accident; opens full-screen (no WM -> no window chrome)."""
+    if not messagebox.askyesno(i18n.t("maintenance_confirm_title"),
+                                i18n.t("maintenance_terminal_confirm")):
+        return
+    if not _spawn_on_display([_XTERM_BASE + ["-e", "bash", "-c", _TERMINAL_HINT],
+                               ["x-terminal-emulator", "-e", "bash", "-c", _TERMINAL_HINT]]):
+        messagebox.showerror(i18n.t("maintenance_error_title"), i18n.t("maintenance_no_terminal"))
+
+
+def _open_wifi_settings():
+    """Settings -> Advanced "Réseau Wi-Fi" button: nmtui full-screen on the kiosk display. nmtui
+    closes itself (and the xterm with it) when the user picks "Quitter"."""
+    if not messagebox.askyesno(i18n.t("maintenance_confirm_title"),
+                                i18n.t("maintenance_wifi_confirm")):
+        return
+    if not _spawn_on_display([_XTERM_BASE + ["-e", "nmtui"],
+                               ["x-terminal-emulator", "-e", "nmtui"]]):
+        messagebox.showerror(i18n.t("maintenance_error_title"), i18n.t("maintenance_no_terminal"))
 
 
 def _toggle_sliders_window():
@@ -1197,7 +1268,8 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     canvas_battery = None
     if main_panel_config.get("add_battery_info", True):
         battery_frame = tk.Frame(master=header_frame)
-        battery_frame.grid(row=0, column=5, sticky=tk.E, padx=(8, 0))
+        # column 4 (was 5) -- the "☾" put-away button that used to sit at column 4 was removed.
+        battery_frame.grid(row=0, column=4, sticky=tk.E, padx=(8, 0))
         canvas_battery = tk.Canvas(master=battery_frame, width=22, height=12, highlightthickness=0)
         canvas_battery.grid(row=0, column=0)
         lbl_battery = tk.Label(master=battery_frame, text="")
@@ -1410,6 +1482,23 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
                     value=lang_option["code"], indicatoron=0, selectcolor=theme.color("select_color"),
                     command=lambda c=lang_option["code"]: _set_gui_language(c),
                 ).grid(row=next_row, column=col, sticky=tk.EW, padx=2, pady=2)
+            next_row += 1
+
+        # Maintenance (real-hardware feedback: no terminal access from the kiosk for Wi-Fi/network
+        # upkeep -- bare Xorg on :0, no window manager, no menu bar reachable outside the app).
+        # Linux/kiosk only: the dev checkout is Windows and has no kiosk display to open a terminal
+        # on. Each button confirms first (messagebox.askyesno in _open_*), so an AAC user can't
+        # land in a shell by a stray touch.
+        if platform.system() != "Windows":
+            tk.Label(master=parent_frame, text=i18n.t("maintenance_label")).grid(
+                row=next_row, column=0, sticky=tk.W, padx=4, pady=2)
+            tk.Button(master=parent_frame, text=i18n.t("maintenance_terminal_button"),
+                      command=_open_maintenance_terminal).grid(
+                row=next_row, column=1, sticky=tk.EW, padx=2, pady=2)
+            tk.Button(master=parent_frame, text=i18n.t("maintenance_wifi_button"),
+                      command=_open_wifi_settings).grid(
+                row=next_row, column=2, sticky=tk.EW, padx=2, pady=2)
+            next_row += 1
 
     # Startup default load (phase 2 of the startup-latency work -- see docs/research/CHANGELOG.md
     # "Lazy-load FlauBERT" for phase 1): unlike _select_tts_model()/_select_vocoder_model() above
@@ -1588,17 +1677,14 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
     # Texte-mode keyboard's own Play/Stop toggle exists, btn_letter_kb_play in
     # _create_letter_keyboard() -- see _set_ui_state()'s own comment for the full state machine).
 
-    # Add "put away" button -- sends put_away to chatterbox-powerd (-> DEEP state -> halt). Part
-    # of the compact header row now (real-hardware feedback, 2026-07-28 round 2: "aligned with the
-    # battery indicator and the green Synthesis light"), not its own row above the keyboard. "☾"
-    # (U+263E, Miscellaneous Symbols -- confirmed present in DejaVu Sans, same cmap check as the
-    # Play/Stop button above) instead of the "Mettre en veille"/"Put away" text label -- same
-    # meaning, less header width (real-hardware feedback: "it would have the same meaning and
-    # take less space"). Font pinned to DejaVu Sans for the same reason as btn_letter_kb_play.
+    # The "☾" put-away button (Action.PUT_AWAY -> powerd -> DEEP -> systemctl halt) was removed
+    # (real-hardware feedback, 2026-08-28): once the idle timer descends to the resident DOZE
+    # state instead of halting, an on-screen full-power-off button is a footgun on a touch-only
+    # AAC device -- an accidental tap means a cold boot to recover. The PUT_AWAY path itself
+    # stays wired (make_dispatcher below, chatterbox/power/*) so a physical switch can still map
+    # to it; there is just no GUI button for it. Full power-off for storage is the hardware
+    # button now.
     btn_put_away = None
-    if main_panel_config.get("add_put_away_button", True):
-        btn_put_away = tk.Button(master=header_frame, text="☾", font=("DejaVu Sans", 14))
-        btn_put_away.grid(row=0, column=4, padx=(4, 4))
 
     # No physical "Réglages" button anymore -- PC-GUI feedback: it sat directly above the keyboard
     # area (row 18, keyboard at 19) and read as cluttered. Moved into the "Paramètres" menu entry
@@ -1642,6 +1728,7 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             keyboard_area.grid_columnconfigure(1, weight=1)
             keyboard_area.grid_rowconfigure(1, weight=1)
 
+            global keyboard_mode  # exposed for on_speak()'s {phonetic} wrapping decision
             keyboard_mode = tk.StringVar(value="phonemes")
             btn_mode_text = tk.Radiobutton(
                 master=keyboard_area, text=i18n.t("keyboard_mode_text"), variable=keyboard_mode,

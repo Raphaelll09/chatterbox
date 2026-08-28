@@ -403,11 +403,17 @@ day-to-day running/config/testing in `docs/POWERD.md`. Optional, Pi/Linux-only, 
 process** from `do_tts.py` (unlike everything else in this file) communicating over a unix socket
 (`/run/chatterbox/powerd.sock`, newline-delimited JSON — `chatterbox/power/ipc.py`).
 
-- `fsm.py` — `PowerFSM`: the ACTIVE→DIM→DARK→DEEP state machine. Descent is time-driven (1 Hz
-  `on_tick()`, descent-only — never re-ascends on its own); ascent is event-driven (`on_activity()`
-  jumps straight to ACTIVE from any state). DEEP is terminal: `systemctl halt`. Pure and
-  dependency-injected (backlight/amp/broadcast/halt passed in as objects/callables) — no
-  hardware/asyncio imports, fully unit-tested with fakes (`tests/test_power_fsm.py`).
+- `fsm.py` — `PowerFSM`: the ACTIVE→DIM→DARK→DOZE state machine, with DEEP reachable only by the
+  explicit `PUT_AWAY` command. Descent is time-driven (1 Hz `on_tick()`, descent-only — never
+  re-ascends on its own); ascent is event-driven (`on_activity()` jumps straight to ACTIVE from
+  any state). **DOZE** is a *resident* low-power state the idle timer (`t_deep_s`) descends to —
+  backlight off, amp off, plus `doze_fn()` (CPU governor → `powersave`, wired in `daemon.py`);
+  wakes instantly on the next activity (`resume_fn()` restores the governor). **DEEP** is terminal
+  (`systemctl halt`) and only the "put away for storage" button reaches it — this Pi 5 kernel
+  exposes no real suspend state (`/sys/power/state` is empty), so DOZE is the deepest resumable
+  state. Pure and dependency-injected (backlight/amp/broadcast/halt/doze/resume passed in as
+  objects/callables) — no hardware/asyncio imports, fully unit-tested with fakes
+  (`tests/test_power_fsm.py`).
 - `backlight.py` / `amp.py` — sysfs `bl_power`/`brightness` writes, and the amplifier SD-line
   GPIO (via `gpiozero`'s lgpio backend — not `RPi.GPIO`, which doesn't support the Pi 5's RP1 chip)
   with a watchdog that force-offs an amp left on too long (crashed-playback backstop). Both
@@ -421,8 +427,8 @@ process** from `do_tts.py` (unlike everything else in this file) communicating o
   `reload` from clients; `input`/`state`/`amp_ack` broadcast to them).
 - `client.py` — `PowerdClient` / `get_client()`: the single shared client both
   `chatterbox/audio/playback.py` (wraps `play_audio()` in an amp-on→ack→settle+preroll→play→tail→
-  amp-off handshake) and `chatterbox/gui/app.py` (sends `activity`, a "put away" button, receives
-  forwarded switch presses) use. Runs its own background thread + asyncio loop (Tkinter's mainloop
+  amp-off handshake) and `chatterbox/gui/app.py` (sends `activity`, receives forwarded switch
+  presses; `send_put_away()` stays available but has no GUI button since 2026-08-28) use. Runs its own background thread + asyncio loop (Tkinter's mainloop
   isn't asyncio-aware). **Degrades to a permanent silent no-op if powerd isn't reachable** (no
   auto-reconnect in v0.1) — this is what keeps every non-Pi dev checkout, and any Pi before powerd
   is set up, behaving exactly as before this daemon existed.

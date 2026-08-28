@@ -62,7 +62,7 @@ def close():
 # free-drag sliders over a wide second-level range weren't practical -- a fixed set of sensible
 # durations is easier to reason about and to hit reliably on a touchscreen). Chosen to fit each
 # field's actual role: dimming is the first, shortest threshold; screen-off is a middle ground;
-# deep sleep/shutdown is the last-resort, longest one (or disabled).
+# mise en veille (the resident DOZE state) is the last, longest one (or disabled).
 #
 # The three lists deliberately do NOT overlap in range (real-hardware bug report: picking, say,
 # 2min assombrissement + 30s extinction was pickable from the old presets even though it makes no
@@ -307,10 +307,14 @@ def open_settings(parent, on_saved=None, build_advanced_section=None):
 
     add_preset_dropdown("Délai avant assombrissement", t_dim_var, _DIM_PRESETS)
     add_preset_dropdown("Délai avant extinction écran", t_dark_var, _DARK_PRESETS)
-    add_preset_dropdown("Délai avant veille profonde", t_deep_var, _DEEP_PRESETS)
-    tk.Checkbutton(content, text="Veille profonde manuelle uniquement", variable=deep_manual_only_var,
-                    font="Helvetica 12").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=8, pady=4)
-    row += 1
+    # t_deep_s now drives the resident DOZE state (screen + amp off, CPU governor powersave, wakes
+    # instantly on touch), not a halt -- so this reads "mise en veille", not "veille profonde".
+    # The "Veille profonde manuelle uniquement" checkbutton was dropped (2026-08-28): with the
+    # timer going to a wakeable state there's no footgun to gate, and "never sleep automatically"
+    # is a niche choice. deep_manual_only stays a hand-editable user_prefs.yaml field
+    # (chatterbox/power/config.py) -- deep_manual_only_var below still round-trips its loaded value
+    # on save, it just has no widget.
+    add_preset_dropdown("Délai avant mise en veille", t_deep_var, _DEEP_PRESETS)
     brightness_active_percent_var = add_percent_scale("Luminosité active (%)", brightness_active_var)
     brightness_dim_percent_var = add_percent_scale("Luminosité atténuée (%)", brightness_dim_var)
 

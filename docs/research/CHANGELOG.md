@@ -15,6 +15,89 @@ state before starting new work.
 
 ---
 
+## 2026-08-28 — Real-hardware feedback: phonetic keyboard, ▶ clears, terminal access, "veille" halts
+
+Four separate Pi5-usage bugs reported by the user (a fifth, "emotions don't all work", was
+diagnosed as a GST model/checkpoint limitation and deferred).
+
+- What:
+  1. **Phonetic keyboard was ignored under FastSpeech2.** FS2 only reads a run as phonemes when
+     it's inside `{curly braces}` (`assets/models/FastSpeech2/text/__init__.py`). The only place
+     that added them was `synth.py`, gated on `GUI_config.online_phon_input` (a config-wide flag,
+     `False` since the Texte/Phonèmes toggle landed -- setting it `True` would wrap ordinary Texte
+     input too). So the phoneme keys' raw codes (`s^ y u`) went in unbraced and were spoken
+     letter by letter. Fix: `synthesize()` gains a `phon_input` param; `chatterbox/gui/app.py`'s
+     `on_speak()` sets it from `keyboard_mode == "phonemes"` (new module global) AND
+     `_accepts_phoneme_input` (so Piper's label-fallback is never brace-wrapped). The wrap now
+     happens *after* the empty-input guard (`""` still returns `None`, not `"{}."`).
+  2. **The phoneme keyboard's ▶ cleared the chatbox**, unlike "Synthèse" and the Texte ▶ -- so
+     the phrase couldn't be replayed and `on_speak()`'s empty-text guard then no-op'd. Fix:
+     `keyboards.py:play_and_clear()` no longer clears (name kept for the `keys` table + tests).
+     Explicit clearing stays on the `C` and `/` keys. `play_and_clear_with_style()` (mood
+     shortcuts `:D :p :( :O`) inherits the change.
+  3. **No terminal access from the kiosk** (bare Xorg `:0`, no WM/menu bar) for Wi-Fi/network
+     upkeep. Fix: a "Maintenance" row in Settings → Advanced with "Terminal" and "Réseau Wi-Fi"
+     buttons (`_open_maintenance_terminal()` / `_open_wifi_settings()` → `xterm` / `xterm -e
+     nmtui` on `:0`, `x-terminal-emulator` fallback, `messagebox.askyesno` confirm first).
+     Linux-only (`platform.system() != "Windows"`). `xterm`/`nmtui` confirmed installed on the Pi.
+  4. **"Veille profonde" just powered the Pi off** (`DEEP` → `systemctl halt`, EEPROM
+     `POWER_OFF_ON_HALT=1`). This kernel exposes no suspend state (`/sys/power/state` is empty),
+     so a real kernel sleep isn't available. Fix: new `DOZE` state between `DARK` and `DEEP` --
+     the idle timer (`t_deep_s`) now descends to `DOZE` (backlight off, amp off, CPU governor →
+     `powersave` via `daemon.py`'s injected `doze_fn`/`resume_fn`), *resident*, wakes instantly on
+     activity. `systemctl halt` (`DEEP`) is now reached ONLY by the explicit `PUT_AWAY` button.
+     `deep_manual_only` / `t_deep_s: 0` still disable the last timer step.
+- Files: `chatterbox/synth.py`, `chatterbox/gui/app.py`, `chatterbox/gui/keyboards.py`,
+  `chatterbox/gui/i18n.py`, `chatterbox/power/fsm.py`, `chatterbox/power/daemon.py`;
+  `tests/test_power_fsm.py`, `tests/test_synth.py`; `docs/POWERD.md`, `docs/ARCHITECTURE.md`,
+  `docs/CODEMAP.md`, `README.md`.
+- Why: user's real-hardware feedback list, 2026-08-28. Phonetic input (#1) was the priority --
+  "la phonétique ne fonctionne donc pas du tout".
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (338 passed / 1 skipped) +
+  `scripts/check_layers.py` (OK). #1/#2 need eyes-on the Pi (synthesis is mocked in the suite);
+  #4's governor swap needs a live DOZE entry/wake on the Pi (`cpufreq` sysfs, root-only -- powerd
+  runs as root).
+- Notes/gotchas:
+  - `keyboard_mode` is a module global set inside `_run_gui_session()`; `None` when there's no
+    embedded toggle (`add_keyboard: False` / `detach_keyboard: True`) → falls back to
+    `online_phon_input` exactly as before.
+  - `DOZE` is NOT terminal (unlike `DEEP`): `on_tick()` keeps polling the amp watchdog there.
+  - `_make_doze_hooks()` captures the governor at daemon start for restore (never restores *to*
+    `powersave`); `glob` + per-node try/except so a board without `cpufreq` is a no-op, not a
+    crash.
+  - Deploy: `git pull` on the Pi + `sudo systemctl restart chatterbox-powerd chatterbox-gui`.
+    No `user_prefs.yaml` change needed -- the existing `t_deep_s: 1200` / `deep_manual_only:
+    false` now mean "DOZE after 20 min idle" instead of "halt after 20 min idle".
+
+### Follow-up same day (live Pi5 test)
+
+- #1/#2 confirmed working by the user on the device. #4 (DOZE) confirmed end-to-end live: short
+  timers 6/12/20 s -> DIM -> DARK (backlight off) -> DOZE (governor `powersave`, socket still
+  responsive, no halt) -> touch -> ACTIVE (governor `ondemand`, backlight on). #3's xterm opened
+  but overflowed the 800x480 DSI panel and, with no window manager, couldn't be closed.
+- Fixes:
+  - **#3**: `_XTERM_BASE` now uses `xterm -maximized -fa "DejaVu Sans Mono" -fs 9` -> exactly
+    `800x480+0+0`, no off-screen overflow (verified via `xwininfo` on the Pi). Closing: the Wi-Fi
+    button runs bare `nmtui` (ends -> xterm closes); the plain terminal runs `bash -l` behind a
+    printed `>> Tapez exit pour fermer <<` line, and both confirm dialogs now spell out how to
+    close.
+  - **#4**: the user chose to drop the on-screen power-off entirely. Removed the "☾" `btn_put_away`
+    button (`chatterbox/gui/app.py`) and its `add_put_away_button` config key
+    (`config_tts.yaml`); battery indicator moved column 5 -> 4. Renamed the settings field
+    "Délai avant veille profonde" -> "Délai avant mise en veille" and removed the "Veille profonde
+    manuelle uniquement" checkbutton (`chatterbox/gui/settings.py`) -- `deep_manual_only` stays a
+    hand-edited `user_prefs.yaml` field, still round-tripped by `write_settings()`. `Action.PUT_AWAY`
+    / `send_put_away` / the FSM `PUT_AWAY -> DEEP -> halt` path are all untouched (a physical switch
+    can still trigger it).
+  - Files (this follow-up): `chatterbox/gui/app.py`, `chatterbox/gui/i18n.py`,
+    `chatterbox/gui/settings.py`, `chatterbox/config/config_tts.yaml`; docs
+    (`README.md`, `docs/{GUI,ARCHITECTURE,POWERD,CODEMAP}.md`).
+  - Tests unchanged and still green (338/1): `test_gui_settings.py` exercises `write_settings()`
+    directly, not the removed widget; `test_gui_input.py`'s `put_away_fn` routing tests still apply
+    (the dispatcher path stays).
+
+---
+
 ## 2026-08-20 — Revert: Piper English priming+crop fix made the artifact worse, not better
 
 - What: live Pi5 test of the previous entry's priming+crop fix -- "there is still this word at

@@ -54,9 +54,13 @@ UI states (idle/synthesising/initialising/playing/error) reuse the existing stat
 ## `chatterbox/synth.py` — the Tk-free compute path
 
 `synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None, sentence_id=None,
-complexity_tag=None) -> AudioResult | None` is the extracted compute path (text normalization →
-FastSpeech2 → HiFi-GAN → denoise/postprocess → subtitles → `playback.AUDIO_EXAMPLE` set), with no
-Tk import and no playback call. Both `chatterbox.cli.syn_audio()` (CLI/benchmark path) and the
+complexity_tag=None, phon_input=False) -> AudioResult | None` is the extracted compute path (text
+normalization → FastSpeech2 → HiFi-GAN → denoise/postprocess → subtitles → `playback.AUDIO_EXAMPLE`
+set), with no Tk import and no playback call. `phon_input=True` wraps the whole line in `{…}` so
+FastSpeech2 reads it as phonemes — `on_speak()` sets it when the keyboard is in *Phonèmes* mode
+(`keyboard_mode` module global) and the model accepts phone codes; the CLI leaves it `False` and
+relies on `GUI_config.online_phon_input` as before. Both `chatterbox.cli.syn_audio()`
+(CLI/benchmark path) and the
 GUI's worker call it directly. `chatterbox/cli.py:syn_audio()` keeps its exact old signature
 (every other caller — `research/benchmark/{runner,p4_sweep}.py`, the free-text loop,
 `tests/test_benchmark.py`'s fake — already passed `use_gui=False`) but no longer branches on
@@ -76,8 +80,10 @@ keys (`chatterbox/gui/keyboards.py`) all go through `dispatch()` now instead of 
 directly.
 
 **Nav ring** (`NavRing`, in the same file): a small, intentionally minimal ring —
-`[ent_text_input, btn_syn_audio, btn_put_away, btn_settings]` — that `NEXT`/`PREV`/`SELECT` move
-through and activate. This is the seam physical switches will drive once configured; **not
+`[ent_text_input, btn_syn_audio]` — that `NEXT`/`PREV`/`SELECT` move through and activate. (The
+`btn_put_away` "☾" button was removed 2026-08-28 — the idle timer descends to the resident DOZE
+state now, not a halt, so an on-screen full-power-off control was a footgun; `Action.PUT_AWAY`
+stays wired in `make_dispatcher()` for a physical switch to use.) This is the seam physical switches will drive once configured; **not
 hardware-validated** — `chatterbox/config/user_prefs.yaml`'s `switches: []` is empty by default
 (per `README_power_gui_workstream.md`'s own open items), so nothing currently triggers
 NEXT/PREV/SELECT/BACK interactively in a real deployment yet. `dispatch()`/`NavRing` are unit
@@ -85,9 +91,11 @@ tested (`tests/test_gui_input.py`) with fake widgets, not real hardware.
 
 ## Settings screen (`chatterbox/gui/settings.py`)
 
-A `Toplevel` editing `chatterbox/config/user_prefs.yaml`'s `power.{t_dim_s,t_dark_s,t_deep_s,
-deep_manual_only}` and `display.{brightness_active,brightness_dim}` — the same file/schema
-`chatterbox-powerd` reads. No volume (analogue/out-of-band). Range-validated
+A `Toplevel` editing `chatterbox/config/user_prefs.yaml`'s `power.{t_dim_s,t_dark_s,t_deep_s}` and
+`display.{brightness_active,brightness_dim}` — the same file/schema `chatterbox-powerd` reads.
+`t_deep_s`'s field is labelled "Délai avant mise en veille" (it drives the resident DOZE state).
+`deep_manual_only` is still written back (round-tripped from the loaded value) but has no widget
+since 2026-08-28 — hand-edit the YAML to set it. No volume (analogue/out-of-band). Range-validated
 (`validate_power_settings()`, pure, unit-tested) before writing; write is a full
 read-modify-write through `chatterbox.power.config.load_config()` (so the `amp`/`switches`/
 `evdev`/`socket` sections this screen doesn't edit survive untouched) with an atomic
