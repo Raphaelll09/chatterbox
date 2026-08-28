@@ -22,9 +22,14 @@ worker thread; everything the worker needs to hand back to the UI goes through o
 queue:
 
 - `post(fn)` — callable from any thread, queues a widget-safe closure.
-- `ui_queue` / `_pump()` — `window.after(30, _pump)` drains the queue on the Tk thread. This is
+- `ui_queue` / `_pump()` — `window.after(30, _pump)` drains the queue on the Tk thread, each
+  closure in its own `try/except` (a raising one must not kill the loop — that used to strand
+  `busy`/the disabled Synthèse button, since the follow-up `_done()`/`_fail()` never ran). This is
   the **same** queue used for powerd-forwarded switch presses (`{"type":"input",...}` messages),
   not a separate mechanism — see `chatterbox_gui_spec_v0.1.md` §2.1.
+- **Recovery**: *Tools → Recharger le modèle* (`_reload_current_model()`) reloads the active
+  model's weights and force-clears `busy` — deliberately not behind the busy-guard, for when a
+  hung worker has wedged it.
 
 `on_speak()` (Tk thread) snapshots the text, the currently-selected model indices
 (`chatterbox.state.TTS_INDEX`/`VOCODER_INDEX`), and the slider values *before* starting the
@@ -56,8 +61,9 @@ UI states (idle/synthesising/initialising/playing/error) reuse the existing stat
 `synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None, sentence_id=None,
 complexity_tag=None, phon_input=False) -> AudioResult | None` is the extracted compute path (text
 normalization → FastSpeech2 → HiFi-GAN → denoise/postprocess → subtitles → `playback.AUDIO_EXAMPLE`
-set), with no Tk import and no playback call. `phon_input=True` wraps the whole line in `{…}` so
-FastSpeech2 reads it as phonemes — `on_speak()` sets it when the keyboard is in *Phonèmes* mode
+set), with no Tk import and no playback call. `phon_input=True` runs `_wrap_phoneme_runs()` — each
+run of phone tokens goes in `{…}` (FastSpeech2's ARPAbet trigger), `! ? , . ; :` stay outside so
+they drive intonation. `on_speak()` sets it when the keyboard is in *Phonèmes* mode
 (`keyboard_mode` module global) and the model accepts phone codes; the CLI leaves it `False` and
 relies on `GUI_config.online_phon_input` as before. Both `chatterbox.cli.syn_audio()`
 (CLI/benchmark path) and the

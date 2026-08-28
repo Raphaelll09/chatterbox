@@ -258,12 +258,14 @@ landscape, and runs synthesis on a worker thread so the interface never freezes.
   only use the keyboard.
 - **Keyboard area** — a segmented control switches between:
   - **Texte** — an on-screen letter keyboard, layout switchable between simplified AZERTY (default)
-    and QWERTY, independently of the TTS language;
-  - **Phonèmes** — the "Emmanuelle" phonetic keyboard, for precise pronunciation control. Only
-    FastSpeech 2 understands it; with a Piper model selected the GUI falls back per
-    `GUI_config.phoneme_fallback` (`translate_labels` by default — keys insert their plain-French
-    label instead of the raw phone code). In this mode the line is wrapped in `{…}` for FastSpeech 2
-    automatically — you don't type the braces.
+    and QWERTY, independently of the TTS language. Punctuation keys: `,` `'` `?` `!` (no `.` — a
+    final `.` is added automatically).
+  - **Phonèmes** — the "Emmanuelle" phonetic keyboard, for precise pronunciation control, with
+    `? ! . ;` and `,` for prosody. Only FastSpeech 2 understands it; with a Piper model selected the
+    GUI falls back per `GUI_config.phoneme_fallback` (`translate_labels` by default — keys insert
+    their plain-French label instead of the raw phone code). The phone runs are wrapped in `{…}` for
+    FastSpeech 2 automatically (punctuation stays outside, so `?`/`!` shape the intonation) — you
+    don't type the braces.
   - The **▶ button** on the keyboard triggers synthesis and playback. It leaves the text in place,
     so pressing it again replays the phrase; clear with the **C** / **Tout effacer** keys.
 - **Emotion bar** — for FastSpeech 2, the 12 named styles as emoji chips; four unnamed tokens hide
@@ -278,7 +280,7 @@ landscape, and runs synthesis on a worker thread so the interface never freezes.
 | **Modèle TTS** | Pick the model. Grouped entries (both Pipers) collapse to one item. |
 | **Langue** | Switches interface language **and** loads the matching model. Restarts the window. |
 | **Thème** | Light/dark. Currently a stub — only one theme table exists. |
-| **Outils** | Show/hide the input area; open the synthesis sliders. |
+| **Outils** | Show/hide the input area; open the synthesis sliders; **Recharger le modèle** (reloads the active model's weights from disk — recovery if synthesis wedges and the buttons grey out). |
 | **Réglages** | Power timers, brightness, and an *Avancé* section with the TTS/vocoder pickers, the letter-keyboard layout, a separate **interface language** setting (run the English voice with a French interface), and **Maintenance** buttons that open a terminal / the Wi-Fi setup (`nmtui`) on the kiosk screen. |
 
 Model changes in *Réglages → Avancé* apply immediately; power settings need **Enregistrer**.

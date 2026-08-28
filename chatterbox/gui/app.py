@@ -135,11 +135,13 @@ _audio_info_active_stage_count = 0
 # docstring), in which case get_gui_controls() simply omits "speaker" from its result.
 speaker_selection = None
 
-# Compat alias for chatterbox/gui/keyboards.py's "Emmanuelle" mood-shortcut keys (see
-# gui_generic_controls()'s "style" chip_grid handling) -- stays None if the active backend's
-# describe_controls() doesn't declare a "style" control at all, so create_keyboard()'s
-# globals()["gst_token_selection"] lookup for those keys finds a name (just unusable/None) instead
-# of a KeyError; those keys would then no-op rather than crash if actually pressed.
+# Alias for the "style" chip grid's IntVar (set by gui_generic_controls()). It existed as a compat
+# shim for keyboards.py's "Emmanuelle" GST mood-shortcut keys (:D/:p/:(/:O), which resolved this
+# name via create_keyboard()'s globals()[...] lookup; those keys were removed 2026-08-28 (replaced
+# by punctuation), so nothing reads this today. Kept -- it's the natural place for any future
+# feature that wants to drive the style selection by name, and dropping it would ripple through
+# gui_generic_controls() + several backend/docs comments for no real gain. Stays None for a
+# backend that declares no "style" control (e.g. Piper).
 gst_token_selection = None
 
 # The Texte/Phonèmes segmented toggle's StringVar ("text" / "phonemes"), exposed at module level
@@ -208,10 +210,18 @@ def post(fn):
 
 
 def _pump():
-    """Runs on the Tk thread. Drains ui_queue, then reschedules itself."""
+    """Runs on the Tk thread. Drains ui_queue, then reschedules itself. Each queued closure runs
+    in its own try/except: a raising one (real-hardware feedback -- a degenerate synthesis with a
+    zero-length wav hit a ZeroDivisionError inside update_audio_infos(), on the Tk thread) must
+    not kill the pump loop, which would strand `busy`/the disabled Synthèse button forever
+    because the follow-up _done()/_fail() closures would never run."""
     try:
         while True:
-            ui_queue.get_nowait()()
+            fn = ui_queue.get_nowait()
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                print("[gui] ui_queue closure raised: {}".format(exc), file=sys.stderr)
     except queue.Empty:
         pass
     window.after(30, _pump)
@@ -664,17 +674,21 @@ def create_keyboard(key_board_options, entry, main_window=None):
 _LETTER_ROWS_AZERTY = [
     ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
     ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
-    ["W", "X", "C", "V", "B", "N", ",", ".", "'"],  # apostrophe was missing -- real-hardware
-    # feedback: essential for French (l'..., qu'..., aujourd'hui, ...)
+    # Last row: apostrophe (essential for French elisions -- l'..., qu'..., aujourd'hui), then the
+    # sentence-final marks. "." was dropped (real-hardware feedback: rarely typed on an AAC device,
+    # and synth.py adds a default final "." anyway) and its slot plus the row's spare 10th column
+    # now carry "?" and "!" so questions/exclamations get the right intonation.
+    ["W", "X", "C", "V", "B", "N", ",", "'", "?", "!"],
 ]
 
 # QWERTY alternative (English Piper voice + live language switch, docs/research/CHANGELOG.md) --
-# same 3-row shape as AZERTY above (so the control row below stays at a fixed grid position
-# regardless of which layout is active), same trailing comma/period/apostrophe.
+# same 3-row 10-wide shape as AZERTY (so the control row below stays at a fixed grid position).
+# Same "." -> "?"/"!" swap; the apostrophe moves up to row 1's spare 10th column to keep row 2 at
+# exactly 10.
 _LETTER_ROWS_QWERTY = [
     ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
-    ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
-    ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "'"],
+    ["A", "S", "D", "F", "G", "H", "J", "K", "L", "'"],
+    ["Z", "X", "C", "V", "B", "N", "M", ",", "?", "!"],
 ]
 
 _LETTER_LAYOUTS = {"azerty": _LETTER_ROWS_AZERTY, "qwerty": _LETTER_ROWS_QWERTY}
@@ -1011,6 +1025,11 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
             label=i18n.t("menu_toggle_chatbox"), variable=chatbox_visible_var,
             command=lambda: _refresh_chatbox_visibility(chatbox_visible_var))
     tools_menu.add_command(label=i18n.t("menu_sliders"), command=_toggle_sliders_window)
+    # Recovery for a wedged synthesis (real-hardware feedback: "le modèle a planté, plus de son,
+    # les boutons de synthèse étaient grisés et inutilisables"). Reloads the active model's
+    # weights from disk and force-clears the busy guard -- forward reference, _reload_current_model
+    # is defined later in this function (same convention as the entries above).
+    tools_menu.add_command(label=i18n.t("menu_reload_model"), command=lambda: _reload_current_model())
     menubar.add_cascade(label=i18n.t("menu_tools"), menu=tools_menu)
 
     # TTS Model: promoted from Settings -> Advanced-only to a first-class top-level menu (still ALSO
@@ -1372,6 +1391,50 @@ def _run_gui_session(tts_config, device, default_tts, default_vocoder):
         state.update_selected_vocoder(id_button)
         if list_buttons is not None:
             select_model_from_list(id_button, list_buttons)
+
+    # Tools -> "Recharger le modèle": recovery for a wedged synthesis (real-hardware feedback --
+    # the model crashed, playback went silent, and the Synthèse button stayed greyed out because a
+    # hung/failed worker never posted _done()/_fail()). Reloads the active TTS (+ vocoder) weights
+    # from disk and force-clears `busy`, so it works precisely when `busy` is stuck True --
+    # deliberately NOT behind on_speak()'s `if busy: return`. _pump()'s per-closure try/except now
+    # prevents the most likely cause of the stuck state, but a model genuinely corrupted in memory
+    # still needs this. _reload_in_progress (a 1-element list, so the nested worker can flip it
+    # without `nonlocal`) stops a double-tap from stacking loads.
+    _reload_in_progress = [False]
+
+    def _reload_current_model():
+        if _reload_in_progress[0]:
+            return
+        global busy
+        _reload_in_progress[0] = True
+        busy = True
+        _set_ui_state("initialising")
+        _set_action_buttons_state("disabled")
+        threading.Thread(target=_reload_model_work, daemon=True).start()
+
+    def _reload_model_work():
+        try:
+            tts_model = TTS_CONFIG["tts_models"][state.TTS_INDEX]
+            registry.activate_tts_backend(tts_model.get("backend", "fastspeech2_hifigan"))
+            getattr(registry.BACKEND, tts_model["load_script"])(tts_model, device)
+            if tts_model.get("needs_vocoder", True):
+                voc = TTS_CONFIG["vocoder_models"][state.VOCODER_INDEX]
+                getattr(registry.BACKEND, voc["load_script"])(voc, device)
+        except Exception as exc:  # noqa: BLE001 -- report as the "error" UI state, never crash.
+            post(lambda exc=exc: _finish_reload(exc))
+            return
+        post(lambda: _finish_reload(None))
+
+    def _finish_reload(exc):
+        global busy
+        busy = False
+        _reload_in_progress[0] = False
+        btn_syn_audio.config(state="normal")
+        if exc is None:
+            _set_ui_state("idle")
+        else:
+            print("[gui] model reload failed: {}".format(exc), file=sys.stderr)
+            _set_ui_state("error", exc)
 
     def _build_advanced_settings(parent_frame):
         """Called by settings.open_settings() every time the dialog opens -- rebuilds the picker
@@ -1923,6 +1986,12 @@ def update_audio_infos(audio_duration, stage_durations):
     if main_panel_config["add_audio_infos"]:
         lbl_audio_infos_audio_duration["text"] = i18n.t("audio_duration_label", duration=audio_duration)
 
+        # audio_duration is 0 only for a malfunctioning backend that "succeeded" with a zero-length
+        # wav -- guard the "% of audio" divisions so this doesn't raise on the Tk thread (see
+        # _pump()'s own comment for why a raise here used to strand the UI).
+        def _pct(part):
+            return (100.0 * part / audio_duration) if audio_duration else 0.0
+
         stage_items = list(stage_durations.items())
         _audio_info_active_stage_count = min(len(stage_items), len(lbl_audio_infos_stage_pool))
         for pool_index, lbl in enumerate(lbl_audio_infos_stage_pool):
@@ -1931,7 +2000,7 @@ def update_audio_infos(audio_duration, stage_durations):
                 display_name = _STAGE_DISPLAY_NAMES.get(stage_key, stage_key.title())
                 lbl["text"] = i18n.t(
                     "stage_duration_label", name=display_name, duration=stage_duration,
-                    percent=100*stage_duration/audio_duration)
+                    percent=_pct(stage_duration))
                 # before=... (not a bare pack()) -- pack() with no position hint always appends a
                 # newly-managed slave at the END of the packing order, which would land a freshly
                 # re-shown pool label after the already-packed synthesis-duration label instead of
@@ -1943,7 +2012,7 @@ def update_audio_infos(audio_duration, stage_durations):
         total_inference_duration = sum(stage_durations.values())
         lbl_audio_infos_synthesis_duration["text"] = i18n.t(
             "synthesis_duration_label", duration=total_inference_duration,
-            percent=100*total_inference_duration/audio_duration)
+            percent=_pct(total_inference_duration))
 
 def update_GST_infos(GST_weights):
     if main_panel_config["add_GST_infos"]:
@@ -2214,10 +2283,9 @@ def gui_generic_controls(tts_config, main_panel_config):
     # startup default, so speaker_selection/gst_token_selection become real Tk variables the
     # first time this runs; without an explicit reset here, switching to a backend that declares
     # neither "style" nor a non-empty speaker_list (e.g. Piper's siwis voice) left both
-    # pointing at FS2's now-torn-down widgets instead of None, which the "stays None"/"compat
-    # shim" comments below and in chatterbox/gui/keyboards.py's play_and_clear_with_style() both
-    # assume. Only a stale-reference issue (not a crash -- confirmed via a real Tk repro script,
-    # not just static reading), but the comments' own claims should actually hold.
+    # pointing at FS2's now-torn-down widgets instead of None, which the "stays None" comments
+    # below assume. Only a stale-reference issue (not a crash -- confirmed via a real Tk repro
+    # script, not just static reading), but the comments' own claims should actually hold.
     speaker_selection = None
     gst_token_selection = None
     _generic_control_widgets = {}
@@ -2325,14 +2393,13 @@ def gui_generic_controls(tts_config, main_panel_config):
             found_style_control = True
             selection_var = _build_emotion_bar_control(emotion_bar_frame, control)
             _generic_control_widgets[key] = selection_var
-            # Compat shim: chatterbox/gui/keyboards.py's "Emmanuelle" phoneme keyboard has its own
-            # hardcoded mood-shortcut keys (:D/:p/:(/:O) that look up this exact global by name
-            # (create_keyboard()'s globals()[key_arg] resolution) to set/restore the GST style
-            # selection around a quick styled phrase. Those are themselves FS2/GST-specific
-            # (unchanged, out of scope here) -- keep the name they already depend on working
-            # rather than touching that table. (global gst_token_selection is already declared
-            # once, at the top of this function -- a second `global` statement here is a
-            # SyntaxError once an assignment under the first one has already happened.)
+            # Also expose the style IntVar under the module-level `gst_token_selection` alias (see
+            # its own comment near the top of this file): the phoneme keyboard's :D/:p/:(/:O mood
+            # keys used to resolve this name via create_keyboard()'s globals()[...] lookup. Those
+            # keys are gone (replaced by punctuation, 2026-08-28) so nothing reads it now, but the
+            # alias is cheap to keep. (global gst_token_selection is already declared once at the
+            # top of this function -- a second `global` here would be a SyntaxError after the
+            # assignment under the first one.)
             gst_token_selection = selection_var
             continue
 
