@@ -83,6 +83,16 @@ STRINGS = {
         "keyboard_backspace": "Effacer",
         "keyboard_clear_all": "Tout effacer",
         "keyboard_layout_label": "Disposition clavier :",
+        # Settings -> Advanced "Maintenance" row (real-hardware feedback: no terminal access from
+        # the kiosk for Wi-Fi/network upkeep). Opens xterm / xterm -e nmtui on the kiosk X display.
+        "maintenance_label": "Maintenance :",
+        "maintenance_terminal_button": "Terminal",
+        "maintenance_wifi_button": "Réseau Wi-Fi",
+        "maintenance_confirm_title": "Maintenance",
+        "maintenance_terminal_confirm": "Ouvrir un terminal plein écran ?\n\nTapez « exit » puis Entrée pour le fermer.",
+        "maintenance_wifi_confirm": "Ouvrir la configuration Wi-Fi (nmtui) en plein écran ?\n\nChoisissez « Quitter » dans nmtui pour revenir.",
+        "maintenance_error_title": "Maintenance",
+        "maintenance_no_terminal": "Aucun terminal disponible (xterm introuvable).",
         "menu_toggle_audio_info": "Afficher les données de synthèse",
         "about_body": "Chatterbox\nSynthèse vocale embarquée (FastSpeech 2 + HiFi-GAN)\n"
                        "Raspberry Pi 5 -- démonstrateur pour la communication alternative (AAC)",
@@ -136,6 +146,14 @@ STRINGS = {
         "keyboard_backspace": "Backspace",
         "keyboard_clear_all": "Clear all",
         "keyboard_layout_label": "Keyboard layout:",
+        "maintenance_label": "Maintenance:",
+        "maintenance_terminal_button": "Terminal",
+        "maintenance_wifi_button": "Wi-Fi network",
+        "maintenance_confirm_title": "Maintenance",
+        "maintenance_terminal_confirm": "Open a full-screen terminal?\n\nType \"exit\" then Enter to close it.",
+        "maintenance_wifi_confirm": "Open the Wi-Fi setup (nmtui) full-screen?\n\nChoose \"Quit\" in nmtui to return.",
+        "maintenance_error_title": "Maintenance",
+        "maintenance_no_terminal": "No terminal available (xterm not found).",
         "menu_toggle_audio_info": "Show synthesis data",
         "about_body": "Chatterbox\nEmbedded neural TTS (FastSpeech 2 + HiFi-GAN)\n"
                       "Raspberry Pi 5 -- augmentative and alternative communication (AAC) demonstrator",

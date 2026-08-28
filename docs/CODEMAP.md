@@ -236,7 +236,7 @@ this table, the suite fails.)*
 | `gui_generic_controls()` | `chatterbox/gui/app.py` | Renders a backend's declared controls |
 | `t()` | `chatterbox/gui/i18n.py` | Translated string lookup |
 | `dispatch()` | `chatterbox/gui/input.py` | Action routing (switches, buttons) |
-| `PowerFSM` | `chatterbox/power/fsm.py` | ACTIVE → DIM → DARK → DEEP |
+| `PowerFSM` | `chatterbox/power/fsm.py` | ACTIVE → DIM → DARK → DOZE (timer); DEEP (halt) only via `PUT_AWAY` |
 | `get_client()` | `chatterbox/power/client.py` | GUI-side powerd client; no-ops when absent |
 | `run_benchmark()` | `research/benchmark/runner.py` | The fixed 10-sentence set |
 | `run_join()` | `research/profiling/join.py` | Merges samples and sentences into results |
@@ -260,7 +260,8 @@ this table, the suite fails.)*
 | **INA226** | I2C current/voltage sensor on the amplifier branch |
 | **SD line** | The amplifier's shutdown pin, driven by powerd to avoid idle draw and pops |
 | **powerd** | `chatterbox-powerd`, the power daemon. A separate process |
-| **Put away** | User action sending the device straight to DEEP (halt) |
+| **DOZE** | Resident low-power state the idle timer descends to (screen + amp off, CPU governor `powersave`); wakes instantly on activity. Not a halt |
+| **Put away** | The `PUT_AWAY` command → DEEP (`systemctl halt`) — the only path to DEEP; the idle timer stops at DOZE. No GUI button since 2026-08-28; a physical switch can still map to it |
 | **Emmanuelle** | The phonetic keyboard layout and its symbol alphabet |
 | **Kiosk mode** | Autologin → Xorg → fullscreen GUI, no desktop |
 

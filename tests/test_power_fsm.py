@@ -2,7 +2,7 @@
 backlight/amp/broadcast/halt (see chatterbox-powerd_spec_v0.1.md Sec4/Sec10 "FSM" test plan)."""
 import pytest
 
-from chatterbox.power.fsm import ACTIVE, DIM, DARK, DEEP, PowerFSM
+from chatterbox.power.fsm import ACTIVE, DIM, DARK, DOZE, DEEP, PowerFSM
 
 
 class FakeClock:
@@ -102,20 +102,20 @@ def test_descends_through_all_thresholds_in_order():
 
     clock.advance(10)  # idle = 30 -> hits t_deep_s
     fsm.on_tick()
-    assert fsm.state == DEEP
-    assert broadcasts[-1] == {"type": "state", "value": DEEP}
-    assert halts == [True]
+    assert fsm.state == DOZE  # timer descends to DOZE, not DEEP -- no halt
+    assert broadcasts[-1] == {"type": "state", "value": DOZE}
+    assert halts == []
 
 
 def test_long_idle_jumps_straight_to_deepest_satisfied_threshold():
     """A tick that finds idle time already past every threshold (e.g. daemon started up long
     after the last activity) goes straight to the deepest satisfied state in one hop, not
-    DIM->DARK->DEEP one tick at a time."""
+    DIM->DARK->DOZE one tick at a time. The timer never reaches DEEP (halt)."""
     fsm, backlight, amp, broadcasts, halts, clock = make_fsm()
     clock.advance(1000)
     fsm.on_tick()
-    assert fsm.state == DEEP
-    assert halts == [True]
+    assert fsm.state == DOZE
+    assert halts == []
 
 
 def test_instant_ascent_on_activity_from_any_state():
@@ -145,6 +145,75 @@ def test_put_away_goes_directly_to_deep_from_active():
     assert fsm.state == DEEP
     assert halts == [True]
     assert broadcasts[-1] == {"type": "state", "value": DEEP}
+
+
+def _make_fsm_with_doze_hooks(cfg=None, clock=None):
+    """Like make_fsm() but also wires doze_fn/resume_fn and returns the call-log lists."""
+    clock = clock or FakeClock()
+    backlight = FakeBacklight()
+    amp = FakeAmp()
+    broadcasts, halts, dozes, resumes = [], [], [], []
+    fsm = PowerFSM(
+        cfg or make_cfg(), backlight, amp,
+        broadcast_fn=broadcasts.append, halt_fn=lambda: halts.append(True), now_fn=clock,
+        doze_fn=lambda: dozes.append(True), resume_fn=lambda: resumes.append(True),
+    )
+    return fsm, backlight, amp, broadcasts, halts, dozes, resumes, clock
+
+
+def test_timer_reaches_doze_runs_doze_fn_and_powers_down_screen_and_amp():
+    fsm, backlight, amp, broadcasts, halts, dozes, resumes, clock = _make_fsm_with_doze_hooks()
+    clock.advance(30)  # past t_deep_s
+    fsm.on_tick()
+    assert fsm.state == DOZE
+    assert dozes == [True]
+    assert resumes == []
+    assert halts == []
+    assert backlight.off_calls == 1
+    assert amp.set_calls[-1] is False
+    assert broadcasts[-1] == {"type": "state", "value": DOZE}
+
+
+def test_activity_from_doze_returns_to_active_and_runs_resume_fn_once():
+    fsm, backlight, amp, broadcasts, halts, dozes, resumes, clock = _make_fsm_with_doze_hooks()
+    clock.advance(30)
+    fsm.on_tick()
+    assert fsm.state == DOZE
+
+    fsm.on_activity("evdev")
+    assert fsm.state == ACTIVE
+    assert resumes == [True]
+    assert backlight.brightness_calls[-1] == 255
+
+    # A second activity while already ACTIVE must not re-run resume_fn.
+    fsm.on_activity("evdev")
+    assert resumes == [True]
+
+
+def test_doze_is_not_terminal_tick_still_polls_the_amp_watchdog():
+    fsm, backlight, amp, broadcasts, halts, dozes, resumes, clock = _make_fsm_with_doze_hooks()
+    clock.advance(30)
+    fsm.on_tick()
+    assert fsm.state == DOZE
+    watchdog_before = len(amp.watchdog_calls)
+
+    clock.advance(1)
+    fsm.on_tick()
+    assert fsm.state == DOZE  # nowhere deeper to go on the timer
+    assert len(amp.watchdog_calls) == watchdog_before + 1  # unlike DEEP, ticking is not a no-op
+    assert dozes == [True]  # entry action fired once, not re-run per tick
+
+
+def test_put_away_from_doze_still_halts():
+    fsm, backlight, amp, broadcasts, halts, dozes, resumes, clock = _make_fsm_with_doze_hooks()
+    clock.advance(30)
+    fsm.on_tick()
+    assert fsm.state == DOZE
+
+    fsm.on_command("PUT_AWAY")
+    assert fsm.state == DEEP
+    assert halts == [True]
+    assert resumes == []  # DOZE -> DEEP is not a wake
 
 
 def test_deep_manual_only_blocks_the_timer_but_not_put_away():

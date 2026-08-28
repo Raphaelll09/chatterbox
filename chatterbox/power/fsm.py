@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""The power state machine (chatterbox-powerd_spec_v0.1.md Sec4): ACTIVE -> DIM -> DARK -> DEEP.
+"""The power state machine (chatterbox-powerd_spec_v0.1.md Sec4): ACTIVE -> DIM -> DARK -> DOZE,
+with DEEP reachable only by the explicit PUT_AWAY command.
 
-Pure logic, dependency-injected -- `backlight`/`amp`/`broadcast_fn`/`halt_fn` are passed in as
-objects/callables rather than imported, so this module has no hardware/asyncio/platform imports
-and is fully unit-testable with fakes (see tests/test_power_fsm.py) on any platform.
+Pure logic, dependency-injected -- `backlight`/`amp`/`broadcast_fn`/`halt_fn`/`doze_fn`/`resume_fn`
+are passed in as objects/callables rather than imported, so this module has no hardware/asyncio/
+platform imports and is fully unit-testable with fakes (see tests/test_power_fsm.py) on any
+platform.
 
 Descent is time-driven (on_tick(), evaluated at 1 Hz by the caller); ascent is event-driven
 (on_activity() jumps straight to ACTIVE from any state). Entry actions run only on an actual state
 change, never per tick.
+
+DOZE vs DEEP (real-hardware feedback: "la veille profonde éteint juste la Pi5, ce n'est pas
+vraiment une veille"): the idle timer (`t_deep_s`) now descends to DOZE -- a *resident* low-power
+state (backlight off, amp off, plus whatever `doze_fn` does: CPU governor, etc.) that wakes
+instantly on the next activity. `systemctl halt` (DEEP) is reserved for the deliberate PUT_AWAY
+action ("put away for storage"). This Pi 5 kernel exposes no real suspend state (`/sys/power/state`
+is empty), so DOZE is the deepest resumable state available.
 """
 import time
 
-ACTIVE, DIM, DARK, DEEP = "ACTIVE", "DIM", "DARK", "DEEP"
+ACTIVE, DIM, DARK, DOZE, DEEP = "ACTIVE", "DIM", "DARK", "DOZE", "DEEP"
 
 # Ordinal "how asleep" ranking used by on_tick()'s descent-only rule (Sec4 "lower than" ordering) --
-# ACTIVE(0) < DIM(1) < DARK(2) < DEEP(3).
-_ORDER = {ACTIVE: 0, DIM: 1, DARK: 2, DEEP: 3}
+# ACTIVE(0) < DIM(1) < DARK(2) < DOZE(3) < DEEP(4).
+_ORDER = {ACTIVE: 0, DIM: 1, DARK: 2, DOZE: 3, DEEP: 4}
 
 
 class PowerFSM:
     def __init__(self, cfg, backlight, amp, broadcast_fn, halt_fn, now_fn=time.monotonic,
-                 reload_fn=None):
+                 reload_fn=None, doze_fn=None, resume_fn=None):
         """cfg: the full merged config dict from chatterbox/power/config.py (load_config() /
         merge_config()) -- cfg["power"] drives the timers (t_dim_s, t_dark_s, t_deep_s,
         deep_manual_only), cfg["display"] the brightness levels. Kept as one dict (not split
@@ -31,9 +40,14 @@ class PowerFSM:
         amp: object with set(bool)/check_watchdog(now) (chatterbox/power/amp.py:Amp).
         broadcast_fn: callable(dict) -- sent to all connected powerd clients on every state change.
         halt_fn: callable() -- invoked once, after the DEEP broadcast, to flush/close the socket
-        and `systemctl halt` (daemon.py's job, not this module's).
+        and `systemctl halt` (daemon.py's job, not this module's). DEEP is only entered by the
+        PUT_AWAY command, never by the idle timer.
         reload_fn: optional callable() for the RELOAD command (daemon.py wires this to re-read
         user_prefs.yaml and call self.set_config() with the result); a no-op if not given.
+        doze_fn: optional callable() run on entering DOZE, after backlight/amp off, for extra
+        system-level power-down that doesn't belong in this hardware-free module (daemon.py wires
+        it to the CPU-governor swap). resume_fn: its counterpart, run when leaving DOZE back to
+        ACTIVE. Both default to no-ops.
         """
         self.cfg = cfg
         self.backlight = backlight
@@ -42,6 +56,8 @@ class PowerFSM:
         self.halt_fn = halt_fn
         self.now_fn = now_fn
         self.reload_fn = reload_fn
+        self.doze_fn = doze_fn or (lambda: None)
+        self.resume_fn = resume_fn or (lambda: None)
 
         self.state = ACTIVE
         self.last_activity = now_fn()
@@ -93,7 +109,8 @@ class PowerFSM:
 
     def on_tick(self):
         """Called at 1 Hz. DEEP is terminal -- once there, ticking is a no-op (the process is
-        about to halt anyway)."""
+        about to halt anyway). DOZE is NOT terminal (it's resident, wakeable) -- ticking continues
+        there, it just has nowhere deeper to go on the timer."""
         if self.state == DEEP:
             return
 
@@ -104,9 +121,11 @@ class PowerFSM:
             target = DIM
         if power_cfg.get("t_dark_s") and idle >= power_cfg["t_dark_s"]:
             target = DARK
+        # The idle timer descends to DOZE, never DEEP -- DEEP (`systemctl halt`) is a deliberate
+        # PUT_AWAY-only action. `deep_manual_only`/`t_deep_s: 0` still disable this last step.
         if (not power_cfg.get("deep_manual_only") and power_cfg.get("t_deep_s")
                 and idle >= power_cfg["t_deep_s"]):
-            target = DEEP
+            target = DOZE
 
         if target != self.state and _ORDER[target] > _ORDER[self.state]:
             self._transition_to(target)
@@ -114,16 +133,19 @@ class PowerFSM:
         self.amp.check_watchdog(self.now_fn())
 
     def _transition_to(self, new_state):
+        was_dozing = self.state == DOZE
         self._entry_actions(new_state)
         self.state = new_state
         self.broadcast_fn({"type": "state", "value": new_state})
+        if was_dozing and new_state == ACTIVE:
+            self.resume_fn()
         if new_state == DEEP:
             self.halt_fn()
 
     def _entry_actions(self, state):
         # ACTIVE entry deliberately does not touch the amp -- the amp is driven only by
-        # AMP_ON/AMP_OFF plus the DARK/DEEP force-off below (playback only happens in ACTIVE, so
-        # the amp is never asked on outside ACTIVE -- see spec Sec4 notes).
+        # AMP_ON/AMP_OFF plus the DARK/DOZE/DEEP force-off below (playback only happens in ACTIVE,
+        # so the amp is never asked on outside ACTIVE -- see spec Sec4 notes).
         if state == ACTIVE:
             self.backlight.on()
             self.backlight.brightness(self.cfg["display"]["brightness_active"])
@@ -133,6 +155,13 @@ class PowerFSM:
         elif state == DARK:
             self.backlight.off()
             self.amp.set(False)
+        elif state == DOZE:
+            # Resident low-power state (not a halt): screen + amp off like DARK, plus doze_fn for
+            # extra system-level power-down (CPU governor, ...). resume_fn (in _transition_to)
+            # undoes it on the way back to ACTIVE.
+            self.backlight.off()
+            self.amp.set(False)
+            self.doze_fn()
         elif state == DEEP:
             self.backlight.off()
             self.amp.set(False)

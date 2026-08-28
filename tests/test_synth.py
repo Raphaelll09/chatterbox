@@ -24,6 +24,13 @@ def test_synthesize_returns_none_for_whitespace_only():
     assert synthesize("    ", 0, 0, _MINIMAL_TTS_CONFIG) is None
 
 
+def test_phon_input_does_not_resurrect_empty_input():
+    # phon_input wraps the line in {braces} for FastSpeech2; the empty-input guard must still win
+    # so "" / "   " return None instead of running the pipeline on "{}." .
+    assert synthesize("", 0, 0, _MINIMAL_TTS_CONFIG, phon_input=True) is None
+    assert synthesize("   ", 0, 0, _MINIMAL_TTS_CONFIG, phon_input=True) is None
+
+
 def test_audio_result_field_shape():
     result = AudioResult(
         audio_duration_s=1.0,

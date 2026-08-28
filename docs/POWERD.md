@@ -1,7 +1,11 @@
 # chatterbox-powerd
 
-The kiosk power-state daemon: ACTIVE → DIM → DARK → DEEP, backlight, amplifier SD line, physical
-switch/touch activity detection, halt-on-DEEP. Full design: `chatterbox-powerd_spec_v0.1.md`
+The kiosk power-state daemon: ACTIVE → DIM → DARK → DOZE, backlight, amplifier SD line, physical
+switch/touch activity detection. The idle timer descends to **DOZE** — a resident low-power state
+(screen + amp off, CPU governor `powersave`) that wakes instantly on the next touch/keypress.
+**DEEP** (`systemctl halt`, a full power-off with `POWER_OFF_ON_HALT=1`) is reached only by the
+explicit `put_away` command — this Pi 5 kernel exposes no real suspend state, so DOZE is the
+deepest resumable one. Full design: `chatterbox-powerd_spec_v0.1.md`
 (repo root). Code: `chatterbox/power/`. Optional — `do_tts.py`/the GUI work exactly as before if
 powerd isn't running; see "Integration points" below.
 
@@ -32,8 +36,8 @@ or send `{"type":"reload"}` over the socket).
 
 | Section | Field | Default | Meaning |
 |---|---|---|---|
-| `power` | `t_dim_s` / `t_dark_s` / `t_deep_s` | 30 / 180 / 1200 | Idle seconds before DIM/DARK/DEEP. `t_deep_s: 0` or `null` disables the DEEP timer backstop. |
-| `power` | `deep_manual_only` | `false` | If `true`, only the `put_away` command reaches DEEP — the timer never does. |
+| `power` | `t_dim_s` / `t_dark_s` / `t_deep_s` | 30 / 180 / 1200 | Idle seconds before DIM / DARK / **DOZE**. `t_deep_s: 0` or `null` disables the last (DOZE) step, leaving DARK as the deepest idle state. |
+| `power` | `deep_manual_only` | `false` | If `true`, the idle timer stops at DARK — nothing reaches DOZE automatically. `put_away` still halts (DEEP). |
 | `display` | `backlight` | `auto` | `auto` = first node under `/sys/class/backlight`, or an explicit node name. |
 | `display` | `brightness_active` / `brightness_dim` | 255 / 60 | Clamped to `[1, max_brightness]` (sysfs-read at startup) — never 0, which is "dimmest", not "off". |
 | `amp` | `sd_pin` | 23 | BCM pin for the amp SD line — **confirm against your wiring.** |
@@ -55,10 +59,11 @@ a totally unparseable file falls back to all defaults. Safe to hand-edit and rel
   (`chatterbox/power/client.py`'s shared `get_client()`). If powerd isn't reachable, the amp
   request returns `False` immediately and this reduces to exactly the old, no-powerd behavior —
   no added latency, no exception.
-- **`chatterbox/gui/app.py`**: sends `activity` (throttled to ~1/s) on any click/keypress, has a
-  "Ranger" (put away) button sending `put_away`, and polls a queue fed by powerd-forwarded switch
-  presses (`handle_power_input()` — currently just logs; the actual switch-press→GUI-action
-  dispatcher is a separately specced component, not yet implemented).
+- **`chatterbox/gui/app.py`**: sends `activity` (throttled to ~1/s) on any click/keypress and
+  polls a queue fed by powerd-forwarded switch presses (`_handle_power_input()`, which routes them
+  through the GUI dispatcher). `send_put_away()` is still available for a switch to trigger, but
+  the on-screen "☾" button was removed 2026-08-28 (the idle timer now goes to the resident DOZE
+  state, not a halt — a GUI full-power-off control was an accidental-tap footgun).
 
 Both integration points use the **same** `PowerdClient` singleton
 (`chatterbox.power.client.get_client()`), since playback and the GUI run in the same process
@@ -91,9 +96,12 @@ Linux to actually execute it.
 §10 test plan, reproduced here for reference):
 - Backlight: confirm the resolved sysfs node; measure ON/DIM/OFF power.
 - Amp: confirm SD polarity; verify OFF at boot; watchdog forces OFF after `on_watchdog_s`;
-  DARK/DEEP force OFF; tune `settle_ms`/`preroll_ms`/`tail_ms` for an inaudible pop.
-- DEEP: measure halted power (~0.47 W expected) and wake→interactive boot time; set `t_deep_s`
-  from the real number.
+  DARK/DOZE/DEEP force OFF; tune `settle_ms`/`preroll_ms`/`tail_ms` for an inaudible pop.
+- DOZE: confirm the CPU governor actually drops to `powersave` on entry and restores on wake
+  (`cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`); measure resident DOZE power and
+  the touch→interactive wake latency; set `t_deep_s` from those.
+- DEEP (`put_away` only): measure halted power (~0.005 W with `POWER_OFF_ON_HALT=1`) and the
+  cold-boot→interactive time.
 - Reliability: kill the GUI mid-synthesis (powerd unaffected); kill playback with amp on (watchdog
   recovers); kill powerd (systemd restarts within `RestartSec`).
 - Physical switches / touchscreen / keyboard activity detection end-to-end.
