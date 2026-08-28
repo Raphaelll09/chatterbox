@@ -7,7 +7,7 @@ and AudioResult's shape.
 """
 from dataclasses import fields
 
-from chatterbox.synth import AudioResult, synthesize
+from chatterbox.synth import AudioResult, synthesize, _wrap_phoneme_runs
 
 _MINIMAL_TTS_CONFIG = {
     "GUI_config": {"online_phon_input": False},
@@ -25,10 +25,20 @@ def test_synthesize_returns_none_for_whitespace_only():
 
 
 def test_phon_input_does_not_resurrect_empty_input():
-    # phon_input wraps the line in {braces} for FastSpeech2; the empty-input guard must still win
+    # phon_input wraps phone runs in {braces} for FastSpeech2; the empty-input guard must still win
     # so "" / "   " return None instead of running the pipeline on "{}." .
     assert synthesize("", 0, 0, _MINIMAL_TTS_CONFIG, phon_input=True) is None
     assert synthesize("   ", 0, 0, _MINIMAL_TTS_CONFIG, phon_input=True) is None
+
+
+def test_wrap_phoneme_runs_keeps_punctuation_outside_braces():
+    assert _wrap_phoneme_runs("b o~ z^ u r") == "{b o~ z^ u r}"
+    assert _wrap_phoneme_runs("s a l y ?") == "{s a l y} ?"          # question mark drives intonation
+    assert _wrap_phoneme_runs("s a l , t o~") == "{s a l} , {t o~}"  # comma splits into two groups
+    assert _wrap_phoneme_runs("b o~ z^ u r !") == "{b o~ z^ u r} !"
+    assert _wrap_phoneme_runs("a  b   c") == "{a b c}"               # inner whitespace collapsed
+    assert _wrap_phoneme_runs("?") == "?"                            # nothing to wrap
+    assert _wrap_phoneme_runs("") == ""
 
 
 def test_audio_result_field_shape():

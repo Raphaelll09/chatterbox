@@ -8,48 +8,44 @@ Created on Thu Jul 21 14:29:50 2022
 import chatterbox.gui.app as app
 import chatterbox.gui.input as ginput
 
+# A 2-tuple key ("LABEL", "phon") inserts "phon " into the text (chatterbox/gui/app.py's
+# _keyboard_emit); a 3-tuple ("LABEL", "func_name", [args]) calls keyboards.<func_name>.
+#
+# Right column, rows 1-4: was the ":D / :p / :( / :O" GST mood shortcuts (play_and_clear_with_style,
+# removed 2026-08-28 -- real-hardware feedback). Now punctuation: "?" "!" "." ";" insert the mark
+# literally. In Phonemes mode synth.py wraps only the phone runs in {}, so these land OUTSIDE the
+# braces and drive intonation (FastSpeech2 _punctuation includes all of them) instead of being fed
+# to the phone-symbol lookup. The "," key changed from "}, {" (a manual brace break-out) to a
+# plain "," for the same reason -- the wrap is smart about punctuation now.
 keys = {
     "Emmanuelle": [
         [
             ("F", "f"), ("S", "s"), ("CH", "s^"), ("U", "y"), ("OU", "u"), ("▶", "play_and_clear", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard"]), ("C", "clear", ["ent_text_input", "entry_text_keyboard"])
         ],
         [
-            ("V", "v"), ("Z", "z"), ("J", "z^"), ("I", "i"), ("O", "o"), ("/", "suppr", ["ent_text_input", "entry_text_keyboard"]), (":D", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 3])
+            ("V", "v"), ("Z", "z"), ("J", "z^"), ("I", "i"), ("O", "o"), ("/", "suppr", ["ent_text_input", "entry_text_keyboard"]), ("?", "?")
         ],
         [
-            ("P", "p"), ("T", "t"), ("K", "k"), ("Y", "j"), ("EU", "x^"), ("ON", "o~"), (":p", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 4])
+            ("P", "p"), ("T", "t"), ("K", "k"), ("Y", "j"), ("EU", "x^"), ("ON", "o~"), ("!", "!")
         ],
         [
-            ("B", "b"), ("D", "d"), ("G", "g"), ("R", "r"), ("É", "e"), ("IN", "e~"), (":(", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 1])
+            ("B", "b"), ("D", "d"), ("G", "g"), ("R", "r"), ("É", "e"), ("IN", "e~"), (".", ".")
         ],
         [
-            ("M", "m"), ("N", "n"), ("L", "l"), (",", "}, {"), ("A", "a"), ("AN", "a~"), (":O", "play_and_clear_with_style", ["TTS_CONFIG", "ent_text_input", "entry_text_keyboard", "gst_token_selection", 5])
+            ("M", "m"), ("N", "n"), ("L", "l"), (",", ","), ("A", "a"), ("AN", "a~"), (";", ";")
         ],
     ]
 }
 
 def play_and_clear(args):
-    # Name kept for the keys["Emmanuelle"] table and tests/test_gui_keyboards.py, but this no
-    # longer clears the chatbox (real-hardware feedback: clearing on ▶ wiped the phrase so the
-    # user couldn't replay it, and behaved differently from the "Synthèse" button and the Texte
-    # keyboard's own ▶ -- neither of which clear). Explicit clearing stays on the "C" key
-    # (clear()) and the "/" key (suppr()). args[1:] (ent_text_input, entry_text_keyboard) are now
-    # unused; left in the table's arg lists so play_and_clear_with_style()'s args[0:3] slicing
-    # doesn't need reshaping.
+    # Name kept for the keys["Emmanuelle"] table, but this no longer clears the chatbox
+    # (real-hardware feedback 2026-08-28: clearing on ▶ wiped the phrase so the user couldn't
+    # replay it, and behaved differently from the "Synthèse" button and the Texte keyboard's own
+    # ▶ -- neither of which clear). Explicit clearing stays on the "C" key (clear()) and the "/"
+    # key (suppr()). args is ignored -- kept in the table entry so create_keyboard()'s special-key
+    # path still has something to resolve.
     app.dispatch(ginput.Action.SPEAK)
 
-def play_and_clear_with_style(args):
-    # args[3] (gst_token_selection) is None when the active backend declares no "style" control
-    # at all (app.py:116's compat default -- e.g. the Piper backend, docs/research/CHANGELOG.md) --
-    # these mood-shortcut keys are FS2/GST-specific by design (CLAUDE.md "Interchangeable
-    # backends"), so no-op the style part instead of crashing on None.set(...).
-    if args[3] is None:
-        play_and_clear(args[0:3])
-        return
-    args[3].set(args[4])
-    play_and_clear(args[0:3])
-    args[3].set(8)
-    
 def clear(args):
     args[0].delete(0, 'end')
     args[1]['state'] = 'normal'

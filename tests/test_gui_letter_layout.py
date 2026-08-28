@@ -20,8 +20,18 @@ def test_layouts_have_unique_letters_and_punctuation():
     for code, rows in app._LETTER_LAYOUTS.items():
         keys = [key for row in rows for key in row]
         assert len(keys) == len(set(keys)), "duplicate key in {} layout".format(code)
-        for punct in (",", ".", "'"):
+        # "." was dropped 2026-08-28 (real-hardware feedback) in favour of "?" and "!".
+        for punct in (",", "'", "?", "!"):
             assert punct in keys, "{} layout is missing {!r}".format(code, punct)
+        assert "." not in keys, "{} layout should no longer carry '.'".format(code)
+
+
+def test_layouts_are_ten_wide():
+    # The control row (_create_letter_keyboard) spans 10 columns; a letter row wider than that
+    # would push a key past the space/backspace/clear/play buttons below it.
+    for code, rows in app._LETTER_LAYOUTS.items():
+        for i, row in enumerate(rows):
+            assert len(row) <= 10, "{} layout row {} has {} keys".format(code, i, len(row))
 
 
 def test_azerty_and_qwerty_are_different_orderings():

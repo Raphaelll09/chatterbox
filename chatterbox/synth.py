@@ -14,6 +14,7 @@ research/... 's tests and the manual real-weights smoke test in docs/GUI.md for 
 this was verified against real models.
 """
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -55,6 +56,22 @@ def butter_lowpass_filter(data, cutoff, fs, order):
     return filtfilt(b, a, data)
 
 
+# Punctuation the phoneme keyboard (chatterbox/gui/keyboards.py) can emit -- kept OUTSIDE the {}
+# braces by _wrap_phoneme_runs() so FastSpeech2 reads it as intonation, not as phone symbols.
+_PHON_PUNCT = "!?,.;:"
+
+
+def _wrap_phoneme_runs(text):
+    """Wrap each maximal run of non-punctuation, whitespace-separated tokens in {curly braces}
+    (FastSpeech2's ARPAbet trigger, assets/models/FastSpeech2/text/__init__.py), collapsing inner
+    runs of whitespace, and leave `_PHON_PUNCT` characters untouched between the wrapped groups.
+    "b o~ z^ u r" -> "{b o~ z^ u r}";  "s a l y ?" -> "{s a l y} ?";
+    "s a l , t o~" -> "{s a l} , {t o~}"."""
+    tok = "[^\\s" + re.escape(_PHON_PUNCT) + "]+"
+    return re.sub(tok + r"(?:\s+" + tok + ")*",
+                  lambda m: "{{{}}}".format(" ".join(m.group(0).split())), text)
+
+
 def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
                sentence_id=None, complexity_tag=None, phon_input=False):
     """Text -> mel (FastSpeech2) -> wav (HiFi-GAN) -> denoise/postprocess/visual-smoothing ->
@@ -66,21 +83,21 @@ def synthesize(text, tts_idx, voc_idx, tts_config, gui_control=None,
     before starting any worker thread) rather than reading the state globals in here, so a model
     switch mid-synthesis on another thread can't change which model an in-flight call uses.
 
-    phon_input wraps the whole line in {curly braces} so FastSpeech2 reads it as phonemes rather
-    than orthographic text (assets/models/FastSpeech2/text/__init__.py only treats a run as
-    phonemes inside braces). The GUI sets it per synthesis when its on-screen keyboard is in
-    "Phonèmes" mode (chatterbox/gui/app.py:on_speak()); GUI_config.online_phon_input is the older
-    config-wide equivalent, still honoured for a phoneme-only detached keyboard. Without either,
-    the phoneme keyboard's raw codes ("s^ y u") are spoken letter by letter.
+    phon_input runs _wrap_phoneme_runs() on the text so FastSpeech2 reads the phone-token runs as
+    phonemes rather than orthographic text (it only treats a run as phonemes inside {curly
+    braces}). The GUI sets it per synthesis when its on-screen keyboard is in "Phonèmes" mode
+    (chatterbox/gui/app.py:on_speak()); GUI_config.online_phon_input is the older config-wide
+    equivalent, still honoured for a phoneme-only detached keyboard. Without either, the phoneme
+    keyboard's raw codes ("s^ y u") are spoken letter by letter.
     """
     text = text.strip(' ')
     if not text:
         return None
 
-    # Done after the empty-input guard above so "" / "   " still returns None rather than becoming
-    # "{}." and running the full pipeline on nothing.
+    # Phoneme wrapping for FastSpeech2 (see _wrap_phoneme_runs above). Done after the empty-input
+    # guard so "" / "   " still returns None rather than "{}.".
     if phon_input or tts_config["GUI_config"]["online_phon_input"]:
-        text = "{{{}}}.".format(text)
+        text = _wrap_phoneme_runs(text)
 
     _punctuation = list("[]§«»¬~!'(),.:;?#")
     if text[0] not in _punctuation:

@@ -96,6 +96,41 @@ diagnosed as a GST model/checkpoint limitation and deferred).
     directly, not the removed widget; `test_gui_input.py`'s `put_away_fn` routing tests still apply
     (the dispatcher path stays).
 
+### Round 2 of interface feedback (same day)
+
+- What:
+  - **Keyboard punctuation.** Phoneme keyboard: the four GST mood-shortcut keys (`:D :p :( :O`,
+    `play_and_clear_with_style`) are gone -- right column rows 1-4 are now `?` `!` `.` `;`, which
+    insert the mark literally. `play_and_clear_with_style()` and `tests/test_gui_keyboards.py`
+    deleted; `gst_token_selection` kept as a now-unread alias (removing it would ripple through
+    `gui_generic_controls()` + backend/docs comments). The `,` key changed from `"}, {"` (a manual
+    brace break-out) to a plain `","`. Letter keyboard (`_LETTER_ROWS_*` in `app.py`): `.` dropped
+    (rarely typed on an AAC device; `synth.py` adds a default final `.` anyway), `?` and `!` added
+    in its slot + the row's spare column, both layouts kept at exactly 10 wide (QWERTY moves `'`
+    up to row 1's gap).
+  - **`synth.py` phoneme wrap is now punctuation-aware.** New `_wrap_phoneme_runs()` wraps each
+    maximal run of phone tokens in `{}` and leaves `! ? , . ; :` outside, so a phoneme sentence
+    ending in `?`/`!` gets the right intonation (FS2's `_punctuation` includes all of them).
+    Verified on the Pi with the real model: `"s a l y ?"` -> `.{s a l y}?`, 0 symbol warnings.
+  - **"Recharger le modèle" (Tools menu).** Recovery for a wedged synthesis -- reloads the active
+    TTS (+ vocoder) weights from disk and force-clears `busy`; deliberately NOT behind
+    on_speak()'s `if busy: return` so it works when `busy` is stuck. Its own `_reload_in_progress`
+    flag stops a double-tap stacking loads.
+  - **`_pump()` hardened.** Each `ui_queue` closure now runs in its own try/except -- a raising
+    one (real-hardware report: a zero-length wav -> `ZeroDivisionError` in `update_audio_infos()`,
+    on the Tk thread) used to kill the pump loop, which is *why* the buttons stayed greyed out
+    (`_done`/`_fail` never ran). `update_audio_infos()` also guards the "% of audio" divisions
+    against a 0 duration.
+- Files: `chatterbox/synth.py`, `chatterbox/gui/{app,i18n,keyboards}.py`; `tests/test_synth.py`,
+  `tests/test_gui_letter_layout.py`, `tests/test_gui_keyboards.py` (deleted); docs
+  (`README.md`, `docs/GUI.md`).
+- Verify: `.venv/Scripts/python.exe -m pytest tests/` (338 passed / 1 skipped) + `check_layers.py`.
+  Phoneme punctuation confirmed live on the Pi with the real FS2 model. The reload button and the
+  `_pump` hardening need a real wedged-synthesis repro on the device to exercise fully.
+- Notes/gotchas: `_reload_current_model()`/`_reload_model_work()`/`_finish_reload()` are nested in
+  `_run_gui_session()` (they need its `device`); the Tools menu wires them by forward-ref lambda,
+  same as `_select_tts_model` and friends.
+
 ---
 
 ## 2026-08-20 — Revert: Piper English priming+crop fix made the artifact worse, not better
